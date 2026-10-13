@@ -50,13 +50,15 @@ The catalogue instructs the agent, and the tool's prompt guidelines repeat it:
 
 ### Pinned answers
 
-pi 1.0.4 has no per-tool pin API, so the finished consult is mirrored into a
-widget pinned above the editor (`pin.enabled`, on by default): a header with
-the consult id and per-consultant status, the first lines of each answer, and a
-pointer to the full text in the tool row and the artifact directory. It is
-restored on session start and after `/tree` navigation; `/consult-pin off`
-hides it. The full answer still renders expanded in the consult's own tool
-window.
+pi 1.0.4 has no per-tool pin API, so while a `consult` runs its live output
+is mirrored into a widget pinned above the editor (`pin.enabled` sets the
+initial state): the consult id and targets, then a tail of the same progress
+snapshot the tool window streams - activity lines and partial answers. The
+widget **clears itself when the consult completes** (including interrupts
+and failures); the finished answer stays in the expanded tool row and the
+artifact directory. `/consult-pin` is a pure toggle: it flips whether consult
+results pin at all for the rest of the session, taking effect on the active
+consult immediately.
 
 ### When the agent stops
 
@@ -79,7 +81,7 @@ follow-up can resume with `continue`.
 ## Install
 
 ```bash
-pi install git:github.com/ederevx/pi-consult@v0.5.0
+pi install git:github.com/ederevx/pi-consult@v0.6.0
 ```
 
 The package has no runtime dependencies; it uses the host-provided
@@ -115,8 +117,8 @@ Missing or malformed values fall back to the defaults.
 - `isolation: "clean"` runs the consultant without the user's own hooks and
   instructions (`claude --safe-mode --restricted`, `codex --ignore-user-config
   --ignore-rules`). `"inherit"` keeps them.
-- `pin.enabled` (default on) keeps the latest consult answer pinned above the
-  editor.
+- `pin.enabled` (default on) is the session's initial pinning state;
+  `/consult-pin` flips it live.
 - `gate.allow`/`gate.block` shape **pre-acknowledgement** classification only.
   The allow list exempts other extensions' onboarding tools (`pre_memory`,
   `pre_daemon`, ...); it can never exempt pi's built-in mutations. `gate.block`
@@ -162,7 +164,7 @@ spawned; a suspected secret is refused, never sent.
 ## Commands
 
 - `/consult-status` — show acknowledgement state and consultation history.
-- `/consult-pin [on|off]` — show or hide the pinned answer.
+- `/consult-pin` — toggle whether live consult results pin above the editor.
 - `/consult-settings` — view or change settings. Run it with no argument to
   pick a setting interactively, or use `/consult-settings key=value`,
   `/consult-settings list`, or `/consult-settings reset`. Settings are written
