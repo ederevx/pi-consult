@@ -14,6 +14,7 @@ import type { ConsultContract } from "./consult-contract.ts";
 import type { ConsultRunner } from "./consult-runner.ts";
 import type { ProcessRunner } from "./process-runner.ts";
 import type { BranchEntry, ReceiptLedger } from "./receipt-ledger.ts";
+import { TASK_ENTRY_TYPE } from "./receipt-ledger.ts";
 
 export class SessionLifecycle {
 	private readonly ledger: ReceiptLedger;
@@ -57,6 +58,12 @@ export class SessionLifecycle {
 					{ deliverAs: "steer" },
 				);
 			}
+		});
+		// A task boundary is written when the agent settles, so steering messages
+		// that arrive during a run stay in the same task.
+		pi.on("agent_settled", async (_event, ctx: ExtensionContext) => {
+			if (this.ledger.rebuild(this.branch(ctx)).taskId === null) return;
+			pi.appendEntry(TASK_ENTRY_TYPE, {});
 		});
 		pi.on("session_shutdown", async () => {
 			this.runner.cancelAll();

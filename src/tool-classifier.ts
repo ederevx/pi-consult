@@ -16,7 +16,7 @@ export class ToolClassifier {
 	/** pi's built-in mutation and process tools. */
 	private static readonly MUTATION_TOOLS = ["edit", "write", "bash", "powershell"];
 	/** pi-consult's own tools, which must always be reachable. */
-	private static readonly CONSULT_TOOLS = ["pre_consult", "consult"];
+	private static readonly CONSULT_TOOLS = ["pre_consult", "consult", "consult_waive"];
 
 	private readonly allowed: Set<string>;
 	private readonly blocked: Set<string>;

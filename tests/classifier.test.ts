@@ -14,7 +14,16 @@ function gate(overrides: Partial<GateSettings> = {}): GateSettings {
 
 test("classifier: reads and pi-consult tools are never gated", () => {
 	const classifier = new ToolClassifier(gate());
-	for (const name of ["read", "grep", "find", "ls", "pre_consult", "consult", "pre_memory"]) {
+	for (const name of [
+		"read",
+		"grep",
+		"find",
+		"ls",
+		"pre_consult",
+		"consult",
+		"consult_waive",
+		"pre_memory",
+	]) {
 		assertEq(classifier.isGated(name), false, name);
 	}
 });

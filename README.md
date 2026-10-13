@@ -13,13 +13,18 @@ pi edits and runs commands.
   the acknowledgement that briefs, and any files a consultant reads, leave the
   machine, and that no secrets may be included.
 - **`consult`** — sends a self-contained brief to `claude`, `codex`, or both
-  concurrently and returns their answers plus a continuation id.
+  concurrently and returns their answers plus a continuation id. The agent
+  chooses which consultant(s) and how many consults to run; repeat or continue
+  as useful.
 - **The gate** — a `tool_call` handler that blocks implementation work (`edit`,
   `write`, `bash`, `powershell`, and any tool without a read-only annotation)
   until the session is acknowledged **and** a consultant has answered for the
   current task. Reads (`read`, `grep`, `find`, `ls`) and the pi-consult tools are
-  never blocked. Each new user prompt starts a new task, so the next task needs
-  its own consult. `/consult-waive` releases one task as a user override.
+  never blocked. A task is the run that follows a settled run, so steering
+  messages that arrive while the agent is working stay in the same task and do
+  not force another consult. `/consult-waive` releases one task as a user
+  override, and the agent can ask with `consult_waive` (10-second answer
+  window; no answer means the consult stays required).
 
 While a `consult` runs, each consultant's live activity and streamed answer
 appear in the tool window. A queued user message or Escape interrupts the
@@ -32,7 +37,7 @@ resume, and branch navigation are handled without extra bookkeeping.
 ## Install
 
 ```bash
-pi install git:github.com/ederevx/pi-consult@v0.2.0
+pi install git:github.com/ederevx/pi-consult@v0.3.0
 ```
 
 The package has no runtime dependencies; it uses the host-provided

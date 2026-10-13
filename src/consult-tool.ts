@@ -84,15 +84,17 @@ export class ConsultTool {
 			label: "consult",
 			description:
 				"Send a self-contained implementation brief to an external consultant " +
-				"(claude, codex, or both) and return its answer. The consultants advise " +
-				"only; pi executes every change. Use `files` to point a consultant at " +
-				"paths it should read itself instead of pasting contents. Pass the " +
-				"returned consult id as `continue` to keep talking to the same " +
-				"consultant session. Never include secrets in a brief.",
+				"(claude, codex, or both) and return its answer. You choose which " +
+				"consultant(s) and how many consults to run; the gate needs one " +
+				"successful consult per task, and you may repeat or continue as useful. " +
+				"The consultants advise only; pi executes every change. Use `files` to " +
+				"point a consultant at paths it should read itself instead of pasting " +
+				"contents. Pass the returned consult id as `continue` to keep talking to " +
+				"the same consultant session. Never include secrets in a brief.",
 			parameters: Type.Object({
 				target: Type.Union(
 					[Type.Literal("claude"), Type.Literal("codex"), Type.Literal("both")],
-					{ description: "Which consultant(s). 'both' runs them concurrently on the same brief." },
+					{ description: "Your choice of consultant(s). 'both' runs claude and codex concurrently on the same brief." },
 				),
 				brief: Type.String({
 					minLength: 1,
@@ -157,6 +159,9 @@ export class ConsultTool {
 		}
 		const targets = this.targets(params.target);
 		if (targets.length === 0) return this.failure(ctx, `unknown target: ${String(params.target)}`);
+		if (params.model && targets.length !== 1) {
+			return this.failure(ctx, "model override requires a single target.");
+		}
 		for (const name of targets) {
 			if (!this.deps.config.consultant(name).enabled) {
 				return this.failure(ctx, `consultant "${name}" is disabled in configuration.`);

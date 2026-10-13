@@ -31,8 +31,11 @@ export interface GateSnapshot {
 	waived: boolean;
 }
 
-/** The custom entry type written by `/consult-waive`. */
+/** The custom entry type written by `/consult-waive` and `consult_waive`. */
 export const WAIVE_ENTRY_TYPE = "pi-consult/waive";
+
+/** The custom entry type written when the agent settles, marking a task boundary. */
+export const TASK_ENTRY_TYPE = "pi-consult/task";
 
 export class ReceiptLedger {
 	private snapshot: GateSnapshot = {
@@ -49,9 +52,10 @@ export class ReceiptLedger {
 	}
 
 	/**
-	 * Rebuild the gate state from the whole active branch. The last user
-	 * message is the current task boundary; a consult counts only when its
-	 * successful result appears after that boundary.
+	 * Rebuild the gate state from the whole active branch. A task starts at the
+	 * settle marker written after each run; user messages that arrive during a
+	 * run (steering messages) do not start a new task. Before the first marker
+	 * on a branch, a user message is still a boundary (legacy behavior).
 	 */
 	rebuild(branch: readonly BranchEntry[]): GateSnapshot {
 		let taskId: string | null = null;
@@ -59,13 +63,23 @@ export class ReceiptLedger {
 		let acknowledged = false;
 		let consulted = false;
 		let waived = false;
+		let marked = false;
 		const consults: ConsultDetails[] = [];
 
 		for (let index = 0; index < branch.length; index += 1) {
 			const entry = branch[index];
+			if (entry.type === "custom" && entry.customType === TASK_ENTRY_TYPE) {
+				marked = true;
+				taskId = entry.id;
+				taskIndex = index;
+				consulted = false;
+				waived = false;
+				continue;
+			}
 			if (entry.type === "message" && entry.message) {
 				const message = entry.message;
 				if (message.role === "user") {
+					if (marked) continue;
 					taskId = entry.id;
 					taskIndex = index;
 					consulted = false;
