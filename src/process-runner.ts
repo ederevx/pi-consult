@@ -25,6 +25,8 @@ export interface ProcessSpec {
 	signal?: AbortSignal;
 	maxStdoutBytes?: number;
 	maxStderrBytes?: number;
+	/** Keep the full stdout in memory. Off when only streamed lines are needed. */
+	retainStdout?: boolean;
 	onStdoutLine?: (line: string) => void;
 }
 
@@ -66,6 +68,7 @@ export class ProcessRunner {
 			const stderrDecoder = new StringDecoder("utf-8");
 			const maxStdout = spec.maxStdoutBytes ?? DEFAULT_MAX_STDOUT_BYTES;
 			const maxStderr = spec.maxStderrBytes ?? DEFAULT_MAX_STDERR_BYTES;
+			const retain = spec.retainStdout !== false;
 			let stdoutBytes = 0;
 			let stderrBytes = 0;
 			let stdoutOverflow = false;
@@ -92,8 +95,8 @@ export class ProcessRunner {
 				if (child) this.children.delete(child);
 				if (spec.signal) spec.signal.removeEventListener("abort", onAbort);
 				const stdoutTail = stdoutDecoder.end();
-				if (stdoutTail && !stdoutOverflow) {
-					stdoutChunks.push(stdoutTail);
+				if (stdoutTail) {
+					if (retain && !stdoutOverflow) stdoutChunks.push(stdoutTail);
 					lineBuffer += stdoutTail;
 				}
 				if (lineBuffer) emitLine(lineBuffer);
@@ -102,7 +105,7 @@ export class ProcessRunner {
 				resolve({
 					exitCode: spawnError ? null : exitCode,
 					killSignal,
-					stdout: stdoutChunks.join(""),
+					stdout: retain ? stdoutChunks.join("") : "",
 					stderr: stderrChunks.join(""),
 					timedOut,
 					aborted,
@@ -176,7 +179,7 @@ export class ProcessRunner {
 
 			child.stdout?.on("data", (chunk: Buffer) => {
 				stdoutBytes += chunk.length;
-				if (stdoutBytes > maxStdout) {
+				if (retain && stdoutBytes > maxStdout) {
 					if (!stdoutOverflow) {
 						stdoutOverflow = true;
 						lineBuffer = "";
@@ -185,7 +188,7 @@ export class ProcessRunner {
 					return;
 				}
 				const text = stdoutDecoder.write(chunk);
-				stdoutChunks.push(text);
+				if (retain) stdoutChunks.push(text);
 				lineBuffer += text;
 				let index = lineBuffer.indexOf("\n");
 				while (index >= 0) {

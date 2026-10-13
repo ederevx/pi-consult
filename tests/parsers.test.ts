@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import { ClaudeStreamParser } from "../src/consultants/claude-stream-parser.ts";
 import { CodexEventParser } from "../src/consultants/codex-event-parser.ts";
-import { assertEq, assert, test } from "./harness.ts";
+import { assertEq, assert, assertIncludes, test } from "./harness.ts";
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "fixtures");
 
@@ -73,7 +73,7 @@ test("codex parser: reads thread, last agent message, usage, and file changes", 
 	parser.push('{"type":"item.completed","item":{"type":"agent_message","text":"first"}}');
 	parser.push('{"type":"item.completed","item":{"type":"command_execution","command":"rg x"}}');
 	parser.push('{"type":"item.completed","item":{"type":"agent_message","text":"FINAL"}}');
-	parser.push('{"type":"item.completed","item":{"type":"file_change","path":"a.txt"}}');
+	parser.push('{"type":"item.completed","item":{"type":"file_change","changes":[{"path":"a.txt","kind":"update"}]}}');
 	parser.push(
 		'{"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":2,"output_tokens":3}}',
 	);
@@ -81,7 +81,7 @@ test("codex parser: reads thread, last agent message, usage, and file changes", 
 	assertEq(parsed.threadId, "tid-1");
 	assertEq(parsed.answer, "FINAL");
 	assertEq(parsed.sawTurnCompleted, true);
-	assertEq(parsed.fileChanges[0], "a.txt");
+	assertEq(parsed.fileChanges[0], "update a.txt");
 	assertEq(parsed.usage?.inputTokens, 1);
 });
 
@@ -137,6 +137,45 @@ test("claude parser: input tokens include cache reads and writes", () => {
 	const parsed = parser.finish();
 	assertEq(parsed.usage?.inputTokens, 18);
 	assertEq(parsed.usage?.cachedInputTokens, 5);
+});
+
+test("claude parser: streams text deltas and de-duplicates tool use", () => {
+	const events: string[] = [];
+	const partials: string[] = [];
+	const parser = new ClaudeStreamParser(
+		(line) => events.push(line),
+		(text) => partials.push(text),
+	);
+	parser.push(
+		'{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Hel"}}}',
+	);
+	parser.push(
+		'{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"lo"}}}',
+	);
+	const tool = '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tu1","name":"Read","input":{"file_path":"src/x.ts"}}]}}';
+	parser.push(tool);
+	parser.push(tool);
+	const parsed = parser.finish();
+	assertEq(partials.join(""), "Hello");
+	assertEq(events.length, 1);
+	assertIncludes(events[0], "Read src/x.ts");
+	assertEq(parsed.answer, "Hello", "streamed text is the timeout fallback");
+	assertEq(parsed.partial, true);
+});
+
+test("codex parser: streams command starts and file changes", () => {
+	const events: string[] = [];
+	const parser = new CodexEventParser((line) => events.push(line));
+	parser.push(
+		'{"type":"item.started","item":{"type":"command_execution","command":"rg foo"}}',
+	);
+	parser.push(
+		'{"type":"item.completed","item":{"type":"file_change","changes":[{"path":"a.ts","kind":"update"}]}}',
+	);
+	const parsed = parser.finish();
+	assertEq(parsed.fileChanges[0], "update a.ts");
+	assert(events.some((line) => line.startsWith("$ rg foo")), "command streamed");
+	assert(events.some((line) => line.includes("file_change update a.ts")), "file change streamed");
 });
 
 test("codex parser: noise and truncated final lines do not crash", () => {

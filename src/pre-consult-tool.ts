@@ -9,7 +9,7 @@
 import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-import type { PreConsultDetails } from "./contracts.ts";
+import type { ConsultantAvailability, PreConsultDetails } from "./contracts.ts";
 import { ConsultContract } from "./consult-contract.ts";
 import type { ConsultRunner } from "./consult-runner.ts";
 
@@ -55,7 +55,7 @@ export class PreConsultTool {
 							"transcript receipt the gate reads.",
 					);
 				}
-				const availability = await this.runner.probeAll();
+				const availability = await this.probe();
 				const details: PreConsultDetails = {
 					schema: 1,
 					ack: {
@@ -63,11 +63,27 @@ export class PreConsultTool {
 						at: new Date().toISOString(),
 					},
 				};
-				return {
-					content: [{ type: "text", text: this.contract.catalogText(availability) }],
-					details,
-				};
+				let text: string;
+				try {
+					text = this.contract.catalogText(availability);
+				} catch (error) {
+					text = `pi-consult catalogue unavailable: ${error instanceof Error ? error.message : String(error)}`;
+				}
+				return { content: [{ type: "text", text }], details };
 			},
 		});
+	}
+
+	/** Probe availability without ever failing the acknowledgement. */
+	private async probe(): Promise<ConsultantAvailability[]> {
+		try {
+			return await this.runner.probeAll();
+		} catch (error) {
+			const reason = error instanceof Error ? error.message : String(error);
+			return [
+				{ name: "claude", available: false, error: `probe failed: ${reason}` },
+				{ name: "codex", available: false, error: `probe failed: ${reason}` },
+			];
+		}
 	}
 }

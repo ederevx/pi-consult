@@ -3,7 +3,9 @@
  *
  * Retains the thread id, the last agent message as the answer, terminal
  * turn status, usage, and any reported file change (a violation, since
- * consultants are read-only). Unknown events are noise.
+ * consultants are read-only). Command execution, agent messages, file
+ * changes, and failures are reported to the caller's live-output callback.
+ * Unknown events are noise.
  */
 
 import type { ConsultantUsage } from "../contracts.ts";
@@ -20,6 +22,7 @@ export interface CodexParseResult {
 }
 
 export class CodexEventParser {
+	private readonly onEvent?: (line: string) => void;
 	private threadId?: string;
 	private answer = "";
 	private failed?: string;
@@ -27,6 +30,10 @@ export class CodexEventParser {
 	private fileChanges: string[] = [];
 	private sawTurnCompleted = false;
 	private noiseLines = 0;
+
+	constructor(onEvent?: (line: string) => void) {
+		this.onEvent = onEvent;
+	}
 
 	/** Feed one line of stdout. */
 	push(line: string): void {
@@ -49,6 +56,9 @@ export class CodexEventParser {
 			case "thread.started":
 				if (typeof event.thread_id === "string") this.threadId = event.thread_id;
 				break;
+			case "item.started":
+				this.handleStarted(event.item);
+				break;
 			case "item.completed":
 				this.handleItem(event.item);
 				break;
@@ -59,9 +69,11 @@ export class CodexEventParser {
 				break;
 			case "turn.failed":
 				this.failed = this.errorMessage(event.error) ?? "turn failed";
+				this.onEvent?.(`failed: ${this.failed}`);
 				break;
 			case "error":
 				this.failed = this.errorMessage(event.error) ?? this.errorMessage(event) ?? "error";
+				this.onEvent?.(`failed: ${this.failed}`);
 				break;
 			default:
 				break;
@@ -81,15 +93,33 @@ export class CodexEventParser {
 		};
 	}
 
+	private handleStarted(raw: unknown): void {
+		const item = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+		if (item.type !== "command_execution") return;
+		const command = typeof item.command === "string" ? item.command : "";
+		if (command) this.onEvent?.(`$ ${command.slice(0, 160)}`);
+	}
+
 	private handleItem(raw: unknown): void {
 		const item = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
 		if (item.type === "agent_message" && typeof item.text === "string") {
 			this.answer = item.text;
+			const first = item.text.split("\n").find((line) => line.trim());
+			if (first) this.onEvent?.(first.trim().slice(0, 160));
+			return;
+		}
+		if (item.type === "command_execution" && typeof item.exit_code === "number" && item.exit_code !== 0) {
+			this.onEvent?.(`exit ${item.exit_code}`);
 			return;
 		}
 		if (item.type === "file_change") {
-			const path = typeof item.path === "string" ? item.path : JSON.stringify(item.changes ?? item);
-			this.fileChanges.push(path);
+			const changes = Array.isArray(item.changes) ? (item.changes as Record<string, unknown>[]) : [];
+			const labels = changes.map(
+				(change) => `${String(change.kind ?? "change")} ${String(change.path ?? "?")}`,
+			);
+			const entries = labels.length > 0 ? labels : [JSON.stringify(item)];
+			for (const entry of entries) this.fileChanges.push(entry);
+			this.onEvent?.(`file_change ${entries.join(", ")}`);
 		}
 	}
 

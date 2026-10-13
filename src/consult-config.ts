@@ -73,7 +73,7 @@ export class ConsultConfig {
 
 	private constructor(raw: Record<string, unknown>) {
 		this.enabled = ConsultConfig.bool(raw.enabled, true);
-		this.confirmFirstConsult = ConsultConfig.bool(raw.confirmFirstConsult, true);
+		this.confirmFirstConsult = ConsultConfig.bool(raw.confirmFirstConsult, false);
 		this.retentionDays = ConsultConfig.positiveNumber(raw.retentionDays, 30);
 		this.maxConcurrent = ConsultConfig.positiveNumber(raw.maxConcurrent, 2);
 		const artifactDir = ConsultConfig.str(raw.artifactDir);
@@ -110,7 +110,7 @@ export class ConsultConfig {
 
 	/** Load the configuration, falling back to defaults on any failure. */
 	static load(file?: string): ConsultConfig {
-		const path = file ?? process.env.PI_CONSULT_CONFIG ?? ConsultConfig.defaultPath();
+		const path = ConsultConfig.path(file);
 		let raw: Record<string, unknown> = {};
 		try {
 			const parsed = JSON.parse(readFileSync(path, "utf8"));
@@ -124,6 +124,11 @@ export class ConsultConfig {
 	/** The default configuration path under the pi agent directory. */
 	static defaultPath(): string {
 		return join(ConsultConfig.agentDir(), "pi-consult.json");
+	}
+
+	/** The resolved configuration file, honoring an explicit path then PI_CONSULT_CONFIG. */
+	static path(file?: string): string {
+		return file ?? process.env.PI_CONSULT_CONFIG ?? ConsultConfig.defaultPath();
 	}
 
 	/** The pi agent configuration directory. */

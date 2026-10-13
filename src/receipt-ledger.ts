@@ -72,16 +72,22 @@ export class ReceiptLedger {
 					waived = false;
 					continue;
 				}
-				if (message.role !== "toolResult" || message.isError) continue;
+				if (message.role !== "toolResult") continue;
 				const details = message.details as Record<string, unknown> | undefined;
 				if (!details || details.schema !== 1) continue;
-				if (message.toolName === "pre_consult") {
+				if (message.toolName === "pre_consult" && !message.isError) {
 					const ack = details.ack as Record<string, unknown> | undefined;
 					if (ack?.contractVersion === this.contractVersion) acknowledged = true;
 				}
-				if (message.toolName === "consult" && Array.isArray(details.runs)) {
+				if (
+					message.toolName === "consult" &&
+					typeof details.consultId === "string" &&
+					details.consultId !== "-" &&
+					Array.isArray(details.runs) &&
+					details.runs.length > 0
+				) {
 					consults.push(details as unknown as ConsultDetails);
-					if (details.ok === true && index > taskIndex) consulted = true;
+					if (!message.isError && details.ok === true && index > taskIndex) consulted = true;
 				}
 				continue;
 			}

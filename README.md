@@ -21,13 +21,18 @@ pi edits and runs commands.
   never blocked. Each new user prompt starts a new task, so the next task needs
   its own consult. `/consult-waive` releases one task as a user override.
 
+While a `consult` runs, each consultant's live activity and streamed answer
+appear in the tool window. A queued user message or Escape interrupts the
+consultants, returns their partial answers, and keeps their session ids so a
+follow-up can resume with `continue`.
+
 Gate state is derived from the active session branch, so compaction, reload,
 resume, and branch navigation are handled without extra bookkeeping.
 
 ## Install
 
 ```bash
-pi install git:github.com/ederevx/pi-consult@v0.1.1
+pi install git:github.com/ederevx/pi-consult@v0.2.0
 ```
 
 The package has no runtime dependencies; it uses the host-provided
@@ -43,7 +48,7 @@ Missing or malformed values fall back to the defaults.
 ```json
 {
   "enabled": true,
-  "confirmFirstConsult": true,
+  "confirmFirstConsult": false,
   "artifactDir": "~/.pi/agent/pi-consult",
   "retentionDays": 30,
   "maxConcurrent": 2,
@@ -54,8 +59,10 @@ Missing or malformed values fall back to the defaults.
 }
 ```
 
-- `confirmFirstConsult` shows a UI confirmation before the first brief of a
-  session; non-interactive modes skip it.
+- `confirmFirstConsult` is off by default, so briefs are granted without a
+  prompt. When on, it shows a UI confirmation before the first brief of a
+  session; with approval on and no interactive UI, `consult` refuses instead
+  of sending silently.
 - `isolation: "clean"` runs the consultant without the user's own hooks and
   instructions (`claude --safe-mode --restricted`, `codex --ignore-user-config
   --ignore-rules`). `"inherit"` keeps them.
@@ -101,6 +108,11 @@ spawned; a suspected secret is refused, never sent.
 
 - `/consult-status` — show the gate state.
 - `/consult-waive` — release the current task (user override).
+- `/consult-settings` — view or change settings. Run it with no argument to
+  pick a setting interactively, or use `/consult-settings key=value`,
+  `/consult-settings list`, or `/consult-settings reset`. Settings are written
+  to `~/.pi/agent/pi-consult.json` (patched, so unknown keys survive) and take
+  effect on `/reload`.
 
 ## Development
 

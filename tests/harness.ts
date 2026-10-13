@@ -192,4 +192,10 @@ export class FakeContext {
 		this.branch.length = 0;
 		this.branch.push(...branch);
 	}
+
+	hasPendingMessages(): boolean {
+		return this.pending;
+	}
+
+	pending = false;
 }

@@ -7,7 +7,7 @@ import { assert, assertEq, scratchDir, test } from "./harness.ts";
 test("config: defaults when the file is missing", () => {
 	const config = ConsultConfig.load(join(scratchDir(), "does-not-exist.json"));
 	assertEq(config.enabled, true, "enabled");
-	assertEq(config.confirmFirstConsult, true, "confirmFirstConsult");
+	assertEq(config.confirmFirstConsult, false, "confirmFirstConsult");
 	assertEq(config.maxConcurrent, 2, "maxConcurrent");
 	assertEq(config.claude.command, "claude", "claude command");
 	assertEq(config.codex.command, "codex", "codex command");

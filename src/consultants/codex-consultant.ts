@@ -108,7 +108,7 @@ export class CodexConsultant implements Consultant {
 	}
 
 	async consult(request: ConsultRequest, signal?: AbortSignal): Promise<ConsultantResult> {
-		const parser = new CodexEventParser();
+		const parser = new CodexEventParser((line) => request.onProgress?.(`codex: ${line}`));
 		const outcome = await this.runner.run({
 			command: this.settings.command,
 			args: this.buildArgs(request),
@@ -117,12 +117,10 @@ export class CodexConsultant implements Consultant {
 			stdin: request.brief,
 			timeoutMs: request.timeoutMs,
 			signal,
+			retainStdout: false,
 			onStdoutLine: (line) => parser.push(line),
 		});
-		const parsed = parser.finish();
-		const result = this.toResult(request, parsed, outcome);
-		request.onProgress?.(`codex: ${result.status} (${Math.round(result.durationMs / 1000)}s)`);
-		return result;
+		return this.toResult(request, parser.finish(), outcome);
 	}
 
 	private toResult(

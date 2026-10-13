@@ -72,6 +72,7 @@ export class ClaudeConsultant implements Consultant {
 	/** Claude's argv; public so tests can assert the isolation flags. */
 	buildArgs(request: ConsultRequest, sessionId: string): string[] {
 		const args = ["-p", "--output-format", "stream-json", "--verbose"];
+		args.push("--include-partial-messages");
 		if (this.settings.isolation === "clean") args.push("--safe-mode", "--restricted");
 		args.push("--permission-mode", "dontAsk", "--permission-prompts", "none");
 		args.push("--tools", ClaudeConsultant.READ_TOOLS);
@@ -88,7 +89,10 @@ export class ClaudeConsultant implements Consultant {
 
 	async consult(request: ConsultRequest, signal?: AbortSignal): Promise<ConsultantResult> {
 		const sessionId = request.resumeSessionId ?? randomUUID();
-		const parser = new ClaudeStreamParser();
+		const parser = new ClaudeStreamParser(
+			(line) => request.onProgress?.(`claude: ${line}`),
+			(text) => request.onPartial?.(text),
+		);
 		const outcome = await this.runner.run({
 			command: this.settings.command,
 			args: this.buildArgs(request, sessionId),
@@ -97,11 +101,10 @@ export class ClaudeConsultant implements Consultant {
 			stdin: request.brief,
 			timeoutMs: request.timeoutMs,
 			signal,
+			retainStdout: false,
 			onStdoutLine: (line) => parser.push(line),
 		});
-		const result = this.toResult(request, sessionId, parser.finish(), outcome);
-		request.onProgress?.(`claude: ${result.status} (${Math.round(result.durationMs / 1000)}s)`);
-		return result;
+		return this.toResult(request, sessionId, parser.finish(), outcome);
 	}
 
 	private toResult(

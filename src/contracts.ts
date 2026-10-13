@@ -54,6 +54,8 @@ export interface ConsultDetails {
 	cwd: string;
 	briefPath: string;
 	continuedFrom?: string;
+	/** Why the run ended early, when the user interrupted it. */
+	interrupted?: "escape" | "steer";
 	runs: ConsultRun[];
 }
 
@@ -86,7 +88,10 @@ export interface ConsultRequest {
 	systemPrompt?: string;
 	/** Where the CLI's own "last message" file should be written, when it supports one. */
 	lastMessagePath: string;
+	/** A completed activity line, already prefixed with the consultant name. */
 	onProgress?: (line: string) => void;
+	/** A chunk of streamed answer text. */
+	onPartial?: (text: string) => void;
 }
 
 /** One consultant's parsed answer, before it is stored or formatted. */

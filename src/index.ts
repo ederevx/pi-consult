@@ -16,6 +16,7 @@ import { ConsultConfig } from "./consult-config.ts";
 import { ConsultContract } from "./consult-contract.ts";
 import { ConsultIndex } from "./consult-index.ts";
 import { ConsultRunner } from "./consult-runner.ts";
+import { ConsultSettings } from "./consult-settings.ts";
 import { ConsultTool } from "./consult-tool.ts";
 import { ClaudeConsultant } from "./consultants/claude-consultant.ts";
 import { CodexConsultant } from "./consultants/codex-consultant.ts";
@@ -31,6 +32,7 @@ export class ConsultExtension {
 	/** Construct every owner once and register every handler. */
 	register(pi: ExtensionAPI): void {
 		const config = ConsultConfig.load();
+		new ConsultSettings(ConsultConfig.path()).register(pi);
 		if (!config.enabled) return;
 		const contract = new ConsultContract();
 		const ledger = new ReceiptLedger(ConsultContract.VERSION);
