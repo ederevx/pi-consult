@@ -175,16 +175,35 @@ export class FakePi {
 	}
 }
 
+/** pi's terminal/UI modes; the widget owner only places in "tui" and "rpc". */
+export type FakeMode = "tui" | "rpc" | "json" | "print";
+
 /** A minimal stand-in for pi's ExtensionContext. */
 export class FakeContext {
 	readonly cwd: string;
 	readonly hasUI: boolean;
+	/** Set per test; defaults to "print" so UI-dependent paths stay off by default. */
+	mode: FakeMode = "print";
+	readonly widgetCalls: Array<{ key: string; content: string[] | undefined; options?: unknown }> = [];
+	readonly statusCalls: Array<{ key: string; text: string | undefined }> = [];
+	readonly notifyCalls: Array<{ message: string; type?: string }> = [];
+	/** Session-wide entries for getEntries(); falls back to the branch when unset. */
+	sessionEntries: BranchEntry[] | null = null;
 	readonly ui = {
 		confirm: async (): Promise<boolean> => this.confirmAnswer,
-		notify: (): void => undefined,
+		notify: (message: string, type?: string): void => {
+			this.notifyCalls.push({ message, type });
+		},
+		setStatus: (key: string, text: string | undefined): void => {
+			this.statusCalls.push({ key, text });
+		},
+		setWidget: (key: string, content: unknown, options?: unknown): void => {
+			this.widgetCalls.push({ key, content: content as string[] | undefined, options });
+		},
 	};
 	readonly sessionManager: {
 		getBranch: () => BranchEntry[];
+		getEntries: () => BranchEntry[];
 		getSessionId: () => string;
 	};
 	confirmAnswer = true;
@@ -199,6 +218,7 @@ export class FakeContext {
 		this.hasUI = hasUI;
 		this.sessionManager = {
 			getBranch: () => this.branch,
+			getEntries: () => this.sessionEntries ?? this.branch,
 			getSessionId: () => sessionId,
 		};
 	}

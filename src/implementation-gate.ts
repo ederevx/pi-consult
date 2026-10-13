@@ -1,10 +1,11 @@
 /**
- * pi-consult — the implementation gate.
+ * pi-consult — the acknowledgement gate.
  *
- * A single `tool_call` handler: classify the tool, rebuild the ledger from
- * the active branch, and deny implementation work while the agent still
- * owes an acknowledgement or a consult. A thrown handler blocks the tool,
- * so the gate fails closed.
+ * A single `tool_call` handler: deny implementation work until the session
+ * has acknowledged the current contract with `pre_consult`. Nothing else is
+ * gated — no consult receipt, no effort allowance, no waiver — so whether a
+ * task consults is the agent's stated judgment. A thrown handler blocks the
+ * tool, so the gate fails closed.
  */
 
 import type {
@@ -46,15 +47,20 @@ export class ImplementationGate {
 		event: ToolCallEvent,
 		ctx: ExtensionContext,
 	): ToolCallEventResult | undefined {
+		const snapshot = this.ledger.rebuild(this.entries(ctx), this.branch(ctx));
+		// The post-acknowledgement pass comes first: after one acknowledgement
+		// nothing is gated, whatever configuration says.
+		if (snapshot.acknowledged) return undefined;
 		const name = String(event.toolName ?? "");
 		const annotations = pi
 			.getAllTools()
 			.find((tool) => tool.name === name)?.annotations;
 		if (!this.classifier.isGated(name, annotations)) return undefined;
-		const snapshot = this.ledger.rebuild(this.branch(ctx));
-		const kind = this.ledger.denialKind(String(event.toolCallId ?? ""));
-		if (kind === null) return undefined;
-		return { block: true, reason: this.contract.gateDenial(kind, name, snapshot) };
+		return { block: true, reason: this.contract.gateDenial(name) };
+	}
+
+	private entries(ctx: ExtensionContext): BranchEntry[] {
+		return ctx.sessionManager.getEntries() as unknown as BranchEntry[];
 	}
 
 	private branch(ctx: ExtensionContext): BranchEntry[] {

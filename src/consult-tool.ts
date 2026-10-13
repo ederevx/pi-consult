@@ -33,6 +33,7 @@ import type { BriefComposer } from "./brief-composer.ts";
 import type { ConsultConfig } from "./consult-config.ts";
 import type { ConsultIndex } from "./consult-index.ts";
 import { ConsultProgressFeed } from "./consult-progress.ts";
+import type { ConsultPin } from "./consult-pin.ts";
 import type { ConsultRunner } from "./consult-runner.ts";
 import { ConsultResultView } from "./consult-result-view.ts";
 import type { BranchEntry, ReceiptLedger } from "./receipt-ledger.ts";
@@ -59,6 +60,8 @@ export interface ConsultToolDeps {
 	screen: SecretScreen;
 	composer: BriefComposer;
 	formatter: AnswerFormatter;
+	/** Pins the finished answer above the editor; absent means no pinning. */
+	pin?: ConsultPin;
 }
 
 /** A resolved continuation request. */
@@ -87,10 +90,10 @@ export class ConsultTool {
 			description:
 				"Send a self-contained implementation brief to an external consultant " +
 				"(claude, codex, or both) and return its answer. You choose which " +
-				"consultant(s) and how many consults to run; the gate needs one " +
-				"successful consult per task unless the task is declared below the consult " +
-				"threshold with consult_effort, and you may repeat or continue as useful. " + +
-				"The consultants advise only; pi executes every change. Use `files` to " +
+				"consultant(s) and how many consults to run; consult as often as useful. " +
+				"The answer is the plan of record: verify its claims rather than repeating " +
+				"its investigation, and carry every doubt back with continue. The " +
+				"consultants advise only; pi executes every change. Use `files` to " +
 				"point a consultant at paths it should read itself instead of pasting " +
 				"contents. Pass the returned consult id as `continue` to keep talking to " +
 				"the same consultant session. Never include secrets in a brief.",
@@ -201,13 +204,27 @@ export class ConsultTool {
 			);
 		}
 
-		this.deps.ledger.rebuild(this.branch(ctx));
+		this.deps.ledger.rebuild(this.entries(ctx), this.branch(ctx));
 		const continuation = this.resolveContinuation(params.continue);
 		if (params.continue && !continuation) {
 			return this.failure(ctx, `unknown consult id: ${params.continue}`);
 		}
+		if (continuation) {
+			// A target without a saved session would silently start fresh while
+			// the result still reports continuedFrom; refuse instead.
+			for (const name of targets) {
+				if (!continuation.resumeFor.has(name)) {
+					return this.failure(
+						ctx,
+						`consult ${continuation.consultId} has no saved ${name} session to ` +
+							"continue; omit continue to consult fresh.",
+					);
+				}
+			}
+		}
 
 		const consultId = this.deps.index.nextId();
+		this.deps.pin?.running(ctx, consultId, targets);
 		const sessionId = this.sessionId(ctx);
 		let paths: ConsultPaths;
 		try {
@@ -310,6 +327,7 @@ export class ConsultTool {
 			interrupted,
 			runs,
 		};
+		this.deps.pin?.show(ctx, details, answers);
 		const formatted = this.deps.formatter.format(details, answers);
 		const text = interrupted
 			? `pi-consult: consult ${consultId} was interrupted by the user (${interrupted}); ` +
@@ -414,6 +432,10 @@ export class ConsultTool {
 		} catch {
 			return false;
 		}
+	}
+
+	private entries(ctx: ExtensionToolContext): BranchEntry[] {
+		return ctx.sessionManager.getEntries() as unknown as BranchEntry[];
 	}
 
 	private branch(ctx: ExtensionToolContext): BranchEntry[] {

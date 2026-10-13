@@ -4,6 +4,8 @@
  * Owns loading and validating `~/.pi/agent/pi-consult.json` (overridable
  * with `PI_CONSULT_CONFIG`) against built-in defaults. Missing or malformed
  * configuration falls back to the defaults; no other module reads the file.
+ * Legacy keys (gate.allowBashBeforeConsult, gate.consultEffort) are ignored:
+ * their mechanisms no longer exist.
  */
 
 import { readFileSync } from "node:fs";
@@ -11,7 +13,6 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import type { ConsultantName } from "./contracts.ts";
-import { EffortPolicy, type ConsultThreshold } from "./effort-policy.ts";
 
 /** How isolated a consultant CLI run is from the user's own agent setup. */
 export type Isolation = "clean" | "inherit";
@@ -29,18 +30,19 @@ export interface ConsultantSettings {
 	isolation: Isolation;
 }
 
-/** Which tools the acknowledgement gate covers. */
+/** Which tools the acknowledgement gate covers, before acknowledgement only. */
 export interface GateSettings {
 	/** Tool names always allowed, including other extensions' onboarding tools. */
 	allow: string[];
-	/** Tool names always blocked before a consult, whatever their annotations. */
+	/** Tool names always blocked before the acknowledgement, whatever their annotations. */
 	block: string[];
-	/** Permit `bash` (and `powershell`) before a consult. Off by default. */
-	allowBashBeforeConsult: boolean;
 	/** Trust a tool's self-declared readOnlyHint. Off by default. */
 	trustReadOnlyHint: boolean;
-	/** Lowest task effort that requires a consult; "always" needs one for every task. */
-	consultEffort: ConsultThreshold;
+}
+
+/** The pinned latest-consult widget above the editor. */
+export interface PinSettings {
+	enabled: boolean;
 }
 
 /** How much consultant text reaches the model, in bytes and lines. */
@@ -71,6 +73,7 @@ export class ConsultConfig {
 	readonly maxConcurrent: number;
 	readonly output: OutputSettings;
 	readonly gate: GateSettings;
+	readonly pin: PinSettings;
 	readonly claude: ConsultantSettings;
 	readonly codex: ConsultantSettings;
 
@@ -97,10 +100,10 @@ export class ConsultConfig {
 		this.gate = {
 			allow: allow.length > 0 ? allow : [...ConsultConfig.DEFAULT_GATE_ALLOW],
 			block,
-			allowBashBeforeConsult: ConsultConfig.bool(gate.allowBashBeforeConsult, false),
 			trustReadOnlyHint: ConsultConfig.bool(gate.trustReadOnlyHint, false),
-			consultEffort: EffortPolicy.parseThreshold(gate.consultEffort),
 		};
+
+		this.pin = { enabled: ConsultConfig.bool(ConsultConfig.record(raw.pin).enabled, true) };
 
 		this.claude = ConsultConfig.consultantSettings(
 			"claude",

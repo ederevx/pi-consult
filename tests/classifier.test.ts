@@ -6,25 +6,14 @@ function gate(overrides: Partial<GateSettings> = {}): GateSettings {
 	return {
 		allow: ["pre_memory"],
 		block: [],
-		allowBashBeforeConsult: false,
 		trustReadOnlyHint: false,
-		consultEffort: "medium",
 		...overrides,
 	};
 }
 
-test("classifier: reads and pi-consult tools are never gated", () => {
+test("classifier: reads, pi-consult tools, and allow-listed tools are never gated", () => {
 	const classifier = new ToolClassifier(gate());
-	for (const name of [
-		"read",
-		"grep",
-		"find",
-		"ls",
-		"pre_consult",
-		"consult",
-		"consult_waive",
-		"pre_memory",
-	]) {
+	for (const name of ["read", "grep", "find", "ls", "pre_consult", "consult", "pre_memory"]) {
 		assertEq(classifier.isGated(name), false, name);
 	}
 });
@@ -48,12 +37,25 @@ test("classifier: a read-only hint is honored only when the operator opts in", (
 	assertEq(classifier.isGated("mcp__x__do"), true, "still needs the hint");
 });
 
-test("classifier: explicit allow and block beat the defaults", () => {
-	const allowed = new ToolClassifier(gate({ allow: ["pre_memory", "bash"] }));
-	assertEq(allowed.isGated("bash"), false, "allow wins");
-	const blocked = new ToolClassifier(gate({ block: ["mcp__x__read"], trustReadOnlyHint: true }));
-	assertEq(blocked.isGated("read"), false, "built-in reads stay allowed");
-	assertEq(blocked.isGated("mcp__x__read", { readOnlyHint: true }), true, "block wins over hint");
+test("classifier: the allow list cannot exempt built-in mutations", () => {
+	const classifier = new ToolClassifier(gate({ allow: ["pre_memory", "bash"] }));
+	assertEq(classifier.isGated("pre_memory"), false, "custom tool exempt");
+	assertEq(classifier.isGated("bash"), true, "bash still gated");
+	assertEq(classifier.isGated("edit"), true, "edit gated");
+});
+
+test("classifier: an allow-listed tool with a hint passes through", () => {
+	const classifier = new ToolClassifier(gate({ allow: ["pre_memory"] }));
+	assertEq(classifier.isGated("pre_memory", { readOnlyHint: true }), false);
+});
+
+test("classifier: explicit block beats the read/allow defaults", () => {
+	const classifier = new ToolClassifier(
+		gate({ block: ["mcp__x__read"], trustReadOnlyHint: true }),
+	);
+	assertEq(classifier.isGated("read"), false, "built-in reads stay allowed");
+	assertEq(classifier.isGated("mcp__x__read", { readOnlyHint: true }), true, "block wins over hint");
+	assertEq(classifier.isGated("mcp__x__read"), true, "block wins over the default deny too");
 });
 
 test("classifier: block beats allow when both name the same tool", () => {
@@ -63,9 +65,7 @@ test("classifier: block beats allow when both name the same tool", () => {
 	assertEq(classifier.isGated("mcp__x__read", { readOnlyHint: true }), true);
 });
 
-test("classifier: allowBashBeforeConsult releases only bash", () => {
-	const classifier = new ToolClassifier(gate({ allowBashBeforeConsult: true }));
-	assertEq(classifier.isGated("bash"), false, "bash released");
-	assertEq(classifier.isGated("powershell"), true, "powershell still gated");
-	assertEq(classifier.isGated("edit"), true, "edit still gated");
+test("classifier: an empty name is gated", () => {
+	const classifier = new ToolClassifier(gate());
+	assertEq(classifier.isGated(""), true);
 });

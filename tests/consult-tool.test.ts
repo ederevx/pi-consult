@@ -19,6 +19,7 @@ import {
 	assert,
 	assertEq,
 	assertIncludes,
+	assertNotIncludes,
 	scratchDir,
 	test,
 	toolEntry,
@@ -290,4 +291,60 @@ test("consult tool: a file larger than the screening limit is refused", async ()
 	);
 	assertEq(result.isError, true);
 	assertIncludes(result.content[0].text, "screening limit");
+});
+
+test("consult tool: the description carries no NaN concatenation artifact", async () => {
+	const config = configFile(fakeClaude(), fakeCodex());
+	const { tool } = buildTool(config);
+	let description = "";
+	const pi = {
+		registerTool: (definition: { description?: string }) => {
+			description = String(definition.description ?? "");
+		},
+	} as never;
+	tool.register(pi);
+	assertNotIncludes(description, "NaN", "the description must not contain NaN");
+	assertIncludes(description, "plan of record", "verify-not-repeat guidance is in the description");
+});
+
+test("consult tool: continue is refused when the target has no saved session", async () => {
+	const config = configFile(fakeClaude(), fakeCodex());
+	const { tool } = buildTool(config);
+	const record = join(scratchDir(), `claude-nosession-${Date.now()}.json`);
+	process.env.CLAUDE_FAKE_RECORD = record;
+	try {
+		const prior = {
+			schema: 1,
+			consultId: "c-nosession",
+			ok: true,
+			cwd: scratchDir(),
+			briefPath: "/b",
+			runs: [
+				{
+					consultant: "claude" as const,
+					status: "ok" as const,
+					answerBytes: 1,
+					truncated: false,
+					partial: false,
+					durationMs: 1,
+					exitCode: 0,
+					warnings: [],
+				},
+			],
+		};
+		const branch = [userEntry("u1"), toolEntry("t1", "consult", prior)];
+		const ctx = new FakeContext(branch, "sess-int", scratchDir(), false) as never;
+		const result = await tool.execute(
+			"call-nosession",
+			{ target: "claude", brief: "Continue.", continue: "c-nosession", contains_no_secrets: true },
+			undefined,
+			undefined,
+			ctx,
+		);
+		assertEq(result.isError, true);
+		assertIncludes(result.content[0].text, "no saved claude session");
+		assert(!existsSync(record), "nothing was spawned");
+	} finally {
+		delete process.env.CLAUDE_FAKE_RECORD;
+	}
 });
