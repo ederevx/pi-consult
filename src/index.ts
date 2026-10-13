@@ -14,6 +14,7 @@ import { BriefComposer } from "./brief-composer.ts";
 import { ConsultCommands } from "./consult-commands.ts";
 import { ConsultConfig } from "./consult-config.ts";
 import { ConsultContract } from "./consult-contract.ts";
+import { ConsultEffortTool } from "./consult-effort-tool.ts";
 import { ConsultIndex } from "./consult-index.ts";
 import { ConsultRunner } from "./consult-runner.ts";
 import { ConsultSettings } from "./consult-settings.ts";
@@ -21,6 +22,7 @@ import { ConsultTool } from "./consult-tool.ts";
 import { ConsultWaiveTool } from "./consult-waive-tool.ts";
 import { ClaudeConsultant } from "./consultants/claude-consultant.ts";
 import { CodexConsultant } from "./consultants/codex-consultant.ts";
+import { EffortPolicy } from "./effort-policy.ts";
 import { ImplementationGate } from "./implementation-gate.ts";
 import { PreConsultTool } from "./pre-consult-tool.ts";
 import { ProcessRunner } from "./process-runner.ts";
@@ -35,8 +37,14 @@ export class ConsultExtension {
 		const config = ConsultConfig.load();
 		new ConsultSettings(ConsultConfig.path()).register(pi);
 		if (!config.enabled) return;
-		const contract = new ConsultContract();
-		const ledger = new ReceiptLedger(ConsultContract.VERSION);
+		const policy = new EffortPolicy(config.gate.consultEffort);
+		const classifier = new ToolClassifier(config.gate);
+		const contract = new ConsultContract(policy.threshold);
+		const ledger = new ReceiptLedger(
+			ConsultContract.VERSION,
+			policy,
+			(name) => classifier.countsAsWork(name),
+		);
 		const processes = new ProcessRunner();
 		const runner = new ConsultRunner(
 			[
@@ -50,6 +58,9 @@ export class ConsultExtension {
 
 		new PreConsultTool(contract, runner).register(pi);
 		new ConsultWaiveTool(pi, ledger).register();
+		if (policy.threshold !== "always") {
+			new ConsultEffortTool(pi, ledger, policy).register();
+		}
 		new ConsultTool({
 			config,
 			ledger,
@@ -60,7 +71,7 @@ export class ConsultExtension {
 			composer: new BriefComposer(),
 			formatter: new AnswerFormatter(config.output),
 		}).register(pi);
-		new ImplementationGate(ledger, new ToolClassifier(config.gate), contract).register(pi);
+		new ImplementationGate(ledger, classifier, contract).register(pi);
 		new SessionLifecycle(ledger, runner, processes, artifacts, contract, config).register(pi);
 		new ConsultCommands(pi, ledger, index, contract).register();
 	}

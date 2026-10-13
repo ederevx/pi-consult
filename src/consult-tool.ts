@@ -34,6 +34,7 @@ import type { ConsultConfig } from "./consult-config.ts";
 import type { ConsultIndex } from "./consult-index.ts";
 import { ConsultProgressFeed } from "./consult-progress.ts";
 import type { ConsultRunner } from "./consult-runner.ts";
+import { ConsultResultView } from "./consult-result-view.ts";
 import type { BranchEntry, ReceiptLedger } from "./receipt-ledger.ts";
 import type { SecretScreen } from "./secret-screen.ts";
 
@@ -72,6 +73,7 @@ export class ConsultTool {
 	private static readonly MAX_SCREEN_BYTES = 512 * 1024;
 	private readonly deps: ConsultToolDeps;
 	private readonly confirmedSessions = new Set<string>();
+	private readonly resultView = new ConsultResultView();
 
 	constructor(deps: ConsultToolDeps) {
 		this.deps = deps;
@@ -86,7 +88,8 @@ export class ConsultTool {
 				"Send a self-contained implementation brief to an external consultant " +
 				"(claude, codex, or both) and return its answer. You choose which " +
 				"consultant(s) and how many consults to run; the gate needs one " +
-				"successful consult per task, and you may repeat or continue as useful. " +
+				"successful consult per task unless the task is declared below the consult " +
+				"threshold with consult_effort, and you may repeat or continue as useful. " + +
 				"The consultants advise only; pi executes every change. Use `files` to " +
 				"point a consultant at paths it should read itself instead of pasting " +
 				"contents. Pass the returned consult id as `continue` to keep talking to " +
@@ -137,6 +140,8 @@ export class ConsultTool {
 				ctx: ExtensionToolContext,
 			): Promise<AgentToolResult<ConsultDetails>> =>
 				this.execute(toolCallId, params, signal, onUpdate, ctx),
+			renderResult: (result, options, theme, context) =>
+				this.resultView.render(result, options, theme, context),
 		});
 	}
 

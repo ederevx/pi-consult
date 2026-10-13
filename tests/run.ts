@@ -27,6 +27,7 @@ try {
 
 import "./config.test.ts";
 import "./ledger.test.ts";
+import "./effort.test.ts";
 import "./classifier.test.ts";
 import "./secret-screen.test.ts";
 import "./formatter.test.ts";
@@ -41,6 +42,7 @@ import "./runner.test.ts";
 import "./waive.test.ts";
 import "./artifact-store.test.ts";
 import "./gate.test.ts";
+import "./result-view.test.ts";
 
 await registry.runAll();
 cleanupScratch();

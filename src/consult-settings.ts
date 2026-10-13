@@ -45,6 +45,7 @@ export class ConsultSettings {
 		{ key: "codex.isolation", path: ["codex", "isolation"], kind: "enum", values: ["clean", "inherit"], description: "Run codex without (clean) or with (inherit) your own agent setup" },
 		{ key: "gate.allowBashBeforeConsult", path: ["gate", "allowBashBeforeConsult"], kind: "boolean", values: ["off", "on"], description: "Permit bash before a consult" },
 		{ key: "gate.trustReadOnlyHint", path: ["gate", "trustReadOnlyHint"], kind: "boolean", values: ["off", "on"], description: "Trust a tool's self-declared readOnlyHint" },
+		{ key: "gate.consultEffort", path: ["gate", "consultEffort"], kind: "enum", values: ["medium", "simple", "high", "always"], description: "Lowest task effort that requires a consult (always = every task)" },
 		{ key: "maxConcurrent", path: ["maxConcurrent"], kind: "number", description: "Concurrent consultant processes" },
 		{ key: "retentionDays", path: ["retentionDays"], kind: "number", description: "Days to keep consult artifacts" },
 		{ key: "claude.model", path: ["claude", "model"], kind: "string", description: "Default claude model" },

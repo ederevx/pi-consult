@@ -1,6 +1,6 @@
 {
   "name": "pi-consult",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
   "description": "Offload thinking work from the pi coding agent to external consultants (Claude Code, Codex) behind an acknowledgement-and-consult gate.",
   "license": "MIT",
@@ -33,10 +33,14 @@
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
     "typebox": "*"
   },
   "peerDependenciesMeta": {
     "@earendil-works/pi-coding-agent": {
+      "optional": true
+    },
+    "@earendil-works/pi-tui": {
       "optional": true
     },
     "typebox": {
