@@ -27,7 +27,7 @@ resume, and branch navigation are handled without extra bookkeeping.
 ## Install
 
 ```bash
-pi install git:github.com/ederevx/pi-consult@v0.1.0
+pi install git:github.com/ederevx/pi-consult@v0.1.1
 ```
 
 The package has no runtime dependencies; it uses the host-provided

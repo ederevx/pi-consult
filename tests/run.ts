@@ -34,6 +34,7 @@ import "./parsers.test.ts";
 import "./process-runner.test.ts";
 import "./consultants.test.ts";
 import "./consult-tool.test.ts";
+import "./pre-consult.test.ts";
 import "./artifact-store.test.ts";
 import "./gate.test.ts";
 

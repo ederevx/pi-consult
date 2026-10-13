@@ -37,7 +37,18 @@ export class AnswerFormatter {
 		const sections: string[] = [];
 		for (const run of details.runs) {
 			const answer = answers.get(run.consultant) ?? "";
-			sections.push(this.section(run.consultant, run.status, run.error, run.durationMs, answer, run.answerPath, perRun));
+			sections.push(
+				this.section(
+					run.consultant,
+					run.status,
+					run.error,
+					run.durationMs,
+					answer,
+					run.answerPath,
+					perRun,
+					run.warnings,
+				),
+			);
 		}
 		const rendered = [...header, "", ...sections].join("\n");
 		return this.truncate(rendered, this.output.totalBytes, Number.MAX_SAFE_INTEGER).text;
@@ -57,11 +68,15 @@ export class AnswerFormatter {
 		answer: string,
 		answerPath: string | undefined,
 		budget: number,
+		warnings: readonly string[],
 	): string {
 		const lines = [`=== ${name} ===`];
 		if (status !== "ok") {
 			const detail = error ? this.cutBytes(error, 2_000) : "";
 			lines.push(`STATUS: ${status}${detail ? ` - ${detail}` : ""}`);
+		}
+		for (const warning of warnings) {
+			lines.push(`WARNING: ${this.cutBytes(warning, 500)}`);
 		}
 		if (answer) {
 			const clipped = this.truncate(answer, budget, this.output.maxLines);
