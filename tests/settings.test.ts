@@ -27,6 +27,26 @@ test("settings: rejects unknown keys and invalid values", () => {
 	assertIncludes(String(store.apply("nope", "1")), "unknown setting");
 	assertIncludes(String(store.apply("claude.isolation", "bogus")), "expected one of");
 	assertIncludes(String(store.apply("maxConcurrent", "-2")), "positive number");
+	assertIncludes(
+		String(store.apply("gate.consultEffort", "medium")),
+		"unknown setting",
+		"the removed effort threshold is no longer configurable",
+	);
+	assertIncludes(
+		String(store.apply("gate.allowBashBeforeConsult", "on")),
+		"unknown setting",
+		"the removed bash key is no longer configurable",
+	);
+});
+
+test("settings: applies the pin toggle and preserves legacy keys on disk", () => {
+	const { store, file } = make("settings-pin");
+	writeFileSync(file, JSON.stringify({ gate: { consultEffort: "always", allow: ["x"] } }));
+	assertEq(store.apply("pin.enabled", "off"), undefined);
+	const raw = JSON.parse(readFileSync(file, "utf8"));
+	assertEq(raw.pin.enabled, false);
+	assertEq(raw.gate.consultEffort, "always", "unknown legacy key survives an unrelated edit");
+	assertEq(raw.gate.allow[0], "x", "unrelated gate key untouched");
 });
 
 test("settings: refuses to overwrite a malformed file", () => {

@@ -1,5 +1,5 @@
 import { ConsultContract } from "../src/consult-contract.ts";
-import { ReceiptLedger, TASK_ENTRY_TYPE, WAIVE_ENTRY_TYPE } from "../src/receipt-ledger.ts";
+import { ReceiptLedger } from "../src/receipt-ledger.ts";
 import { assertEq, customEntry, test, toolEntry, userEntry } from "./harness.ts";
 
 function ack(version = ConsultContract.VERSION): unknown {
@@ -28,128 +28,98 @@ function consult(ok = true): unknown {
 	};
 }
 
-test("ledger: empty branch owes pre_consult", () => {
+function rebuild(ledger: ReceiptLedger, session: unknown[], branch: unknown[]) {
+	return ledger.rebuild(
+		session as never,
+		branch as never,
+	);
+}
+
+test("ledger: without an acknowledgement the gate is closed", () => {
 	const ledger = new ReceiptLedger(ConsultContract.VERSION);
-	ledger.rebuild([]);
-	assertEq(ledger.missingStep(), "pre_consult");
+	rebuild(ledger, [], []);
+	assertEq(ledger.gateOpen(), false);
+	assertEq(ledger.current().acknowledged, false);
 });
 
-test("ledger: acknowledgement alone owes a consult", () => {
+test("ledger: a current-version acknowledgement opens the gate", () => {
 	const ledger = new ReceiptLedger(ConsultContract.VERSION);
-	ledger.rebuild([userEntry("u1"), toolEntry("t1", "pre_consult", ack())]);
-	assertEq(ledger.missingStep(), "consult");
-});
-
-test("ledger: acknowledgement plus a consult for the task opens the gate", () => {
-	const ledger = new ReceiptLedger(ConsultContract.VERSION);
-	ledger.rebuild([
+	rebuild(ledger, [userEntry("u1"), toolEntry("t1", "pre_consult", ack())], [
 		userEntry("u1"),
-		toolEntry("t1", "pre_consult", ack()),
-		toolEntry("t2", "consult", consult(true)),
 	]);
-	assertEq(ledger.missingStep(), null);
+	assertEq(ledger.gateOpen(), true);
 });
 
-test("ledger: a later user prompt starts a new task and closes the gate", () => {
+test("ledger: a stale contract version does not acknowledge", () => {
 	const ledger = new ReceiptLedger(ConsultContract.VERSION);
-	ledger.rebuild([
-		userEntry("u1"),
-		toolEntry("t1", "pre_consult", ack()),
-		toolEntry("t2", "consult", consult(true)),
-		userEntry("u2"),
-	]);
-	assertEq(ledger.current().taskId, "u2", "task boundary moved");
-	assertEq(ledger.missingStep(), "consult", "the previous consult no longer counts");
+	const entries = [userEntry("u1"), toolEntry("t1", "pre_consult", ack(0))];
+	rebuild(ledger, entries, entries);
+	assertEq(ledger.gateOpen(), false);
 });
 
-test("ledger: a failed consult does not open the gate", () => {
+test("ledger: a failed acknowledgement does not acknowledge", () => {
 	const ledger = new ReceiptLedger(ConsultContract.VERSION);
-	ledger.rebuild([
-		userEntry("u1"),
-		toolEntry("t1", "pre_consult", ack()),
-		toolEntry("t2", "consult", consult(false)),
-	]);
-	assertEq(ledger.missingStep(), "consult");
+	const entries = [toolEntry("t1", "pre_consult", ack(), true)];
+	rebuild(ledger, entries, entries);
+	assertEq(ledger.gateOpen(), false);
 });
 
-test("ledger: a stale contract version is not an acknowledgement", () => {
+test("ledger: the acknowledgement is session-wide, the history branch-scoped", () => {
 	const ledger = new ReceiptLedger(ConsultContract.VERSION);
-	ledger.rebuild([userEntry("u1"), toolEntry("t1", "pre_consult", ack(0))]);
-	assertEq(ledger.missingStep(), "pre_consult");
+	const session = [
+		toolEntry("a1", "pre_consult", ack()),
+		toolEntry("x1", "consult", consult()),
+	];
+	const branch = [toolEntry("a1", "pre_consult", ack())];
+	rebuild(ledger, session, branch);
+	assertEq(ledger.gateOpen(), true, "acknowledgement from anywhere in the session");
+	assertEq(ledger.history().length, 0, "a sibling branch's consult is not this branch's history");
 });
 
-test("ledger: a waiver after the task boundary opens the gate", () => {
+test("ledger: history exposes this branch's consults for continuation", () => {
 	const ledger = new ReceiptLedger(ConsultContract.VERSION);
-	ledger.rebuild([
-		userEntry("u1"),
-		toolEntry("t1", "pre_consult", ack()),
-		customEntry("c1", WAIVE_ENTRY_TYPE, { taskId: "u1" }),
-	]);
-	assertEq(ledger.missingStep(), null);
-});
-
-test("ledger: a waiver for another task does not open the gate", () => {
-	const ledger = new ReceiptLedger(ConsultContract.VERSION);
-	ledger.rebuild([
-		userEntry("u1"),
-		toolEntry("t1", "pre_consult", ack()),
-		userEntry("u2"),
-		customEntry("c1", WAIVE_ENTRY_TYPE, { taskId: "u1" }),
-	]);
-	assertEq(ledger.missingStep(), "consult");
-});
-
-test("ledger: a waiver releases the task even before acknowledgement", () => {
-	const ledger = new ReceiptLedger(ConsultContract.VERSION);
-	ledger.rebuild([userEntry("u1"), customEntry("c1", WAIVE_ENTRY_TYPE, { taskId: "u1" })]);
-	assertEq(ledger.missingStep(), null);
-});
-
-test("ledger: a settle marker starts a new task even after a successful consult", () => {
-	const ledger = new ReceiptLedger(ConsultContract.VERSION);
-	ledger.rebuild([
-		customEntry("m1", TASK_ENTRY_TYPE, {}),
-		userEntry("u1"),
-		toolEntry("t1", "pre_consult", ack()),
-		toolEntry("t2", "consult", consult(true)),
-		customEntry("m2", TASK_ENTRY_TYPE, {}),
-	]);
-	assertEq(ledger.current().taskId, "m2");
-	assertEq(ledger.missingStep(), "consult");
-});
-
-test("ledger: a steering message after a settle marker stays in the same task", () => {
-	const ledger = new ReceiptLedger(ConsultContract.VERSION);
-	ledger.rebuild([
-		customEntry("m1", TASK_ENTRY_TYPE, {}),
-		userEntry("u1"),
-		toolEntry("t1", "pre_consult", ack()),
-		toolEntry("t2", "consult", consult(true)),
-		userEntry("u2"),
-	]);
-	assertEq(ledger.current().taskId, "m1", "the marker remains the boundary");
-	assertEq(ledger.missingStep(), null, "the consult still counts through a steer");
-});
-
-test("ledger: history exposes consults for continuation", () => {
-	const ledger = new ReceiptLedger(ConsultContract.VERSION);
-	ledger.rebuild([
+	const entries = [
 		userEntry("u1"),
 		toolEntry("t1", "consult", consult(true)),
-		userEntry("u2"),
-	]);
-	assertEq(ledger.history().length, 1);
+		toolEntry("t2", "consult", consult(false)),
+	];
+	rebuild(ledger, entries, entries);
+	assertEq(ledger.history().length, 2, "failed consults stay in history");
 	assertEq(ledger.history()[0].consultId, "c-abc123");
 });
 
-test("ledger: an interrupted consult is kept for continuation but does not open the gate", () => {
+test("ledger: an interrupted consult is kept for continuation", () => {
 	const ledger = new ReceiptLedger(ConsultContract.VERSION);
-	ledger.rebuild([
-		userEntry("u1"),
-		toolEntry("t1", "pre_consult", ack()),
-		toolEntry("t2", "consult", consult(true), true),
-	]);
-	assertEq(ledger.missingStep(), "consult");
+	const entries = [toolEntry("t1", "consult", consult(true), true)];
+	rebuild(ledger, entries, entries);
 	assertEq(ledger.history().length, 1);
-	assertEq(ledger.history()[0].consultId, "c-abc123");
+});
+
+test("ledger: malformed consult receipts are ignored", () => {
+	const ledger = new ReceiptLedger(ConsultContract.VERSION);
+	const entries = [
+		toolEntry("t1", "consult", { schema: 1, consultId: "-", runs: [] }),
+		toolEntry("t2", "consult", { schema: 2, consultId: "c-x", runs: [{}] }),
+		toolEntry("t3", "read", { content: "not a receipt" }),
+	];
+	rebuild(ledger, entries, entries);
+	assertEq(ledger.history().length, 0);
+});
+
+test("ledger: legacy custom entries are inert", () => {
+	const ledger = new ReceiptLedger(ConsultContract.VERSION);
+	const entries = [
+		customEntry("c1", "pi-consult/waive", { taskId: "u1" }),
+		customEntry("m1", "pi-consult/task", {}),
+	];
+	rebuild(ledger, entries, entries);
+	assertEq(ledger.gateOpen(), false, "waivers and task markers no longer decide anything");
+});
+
+test("ledger: current() is a defensive copy", () => {
+	const ledger = new ReceiptLedger(ConsultContract.VERSION);
+	rebuild(ledger, [], []);
+	const snapshot = ledger.current();
+	snapshot.acknowledged = true;
+	assertEq(ledger.current().acknowledged, false, "the copy does not reach the ledger");
 });

@@ -2,27 +2,19 @@
  * pi-consult — the acknowledgement contract.
  *
  * One owner for every model-facing string: the catalogue returned by
- * `pre_consult`, the acknowledgement text the agent must accept, and the
- * gate's denial and post-compaction reminder text. The constructor carries
- * the configured consult threshold; the contract text itself stays free of
- * it, so the version pins fixed terms while the catalogue names the live
- * configuration.
+ * `pre_consult`, the acknowledgement text the agent must accept, the
+ * consultation workflow it commits to (judge, verify-only, doubts back to
+ * the consultant), and the gate's denial and post-compaction reminder text.
+ * The constructor takes no configuration: version 3 pins fixed terms, and
+ * nothing about live settings leaks into what is acknowledged.
  */
 
 import type { ConsultantAvailability, ConsultantName } from "./contracts.ts";
-import type { ConsultThreshold } from "./effort-policy.ts";
-import { EffortPolicy } from "./effort-policy.ts";
-import type { GateDenialKind, GateSnapshot } from "./receipt-ledger.ts";
+import type { GateSnapshot } from "./receipt-ledger.ts";
 
 export class ConsultContract {
 	/** Bump when the acknowledgement terms change; old receipts stop counting. */
-	static readonly VERSION = 2;
-
-	private readonly threshold: ConsultThreshold;
-
-	constructor(threshold: ConsultThreshold = EffortPolicy.DEFAULT_THRESHOLD) {
-		this.threshold = threshold;
-	}
+	static readonly VERSION = 3;
 
 	/** The acknowledgement text the agent accepts by calling `pre_consult`. */
 	contractText(): string {
@@ -42,26 +34,40 @@ export class ConsultContract {
 			"  tree, and pi executes every change itself.",
 			"- Each brief is persisted under the pi-consult artifact directory before it",
 			"  is sent, as the audit record of what left the machine.",
-			"- By calling pre_consult you acknowledge the above and commit to consulting",
-			"  a consultant on the implementation details of every task that meets or",
-			"  exceeds the consult threshold, and to declaring every task's effort",
-			"  honestly before your first implementation call.",
+			"- By calling pre_consult you acknowledge the terms above and the workflow",
+			"  below: judge each task, verify rather than repeat a consultant's work,",
+			"  and carry every doubt back to the consultant.",
 			"",
-			"Task effort, judged for the whole task before your first implementation",
-			"call, not for the next tool call:",
-			"- trivial - one local mechanical change with an established approach: a",
-			"  typo, a constant or config value, a one-line fix in a file you have read.",
-			"- simple - one small change in one place you have already inspected.",
-			"- medium - a change across several files or steps, or one that needs a",
-			"  design decision.",
-			"- high - architecture, cross-cutting refactors, security, concurrency, or",
-			"  anything you are unsure how to do.",
+			"Judge each task before you implement:",
+			"- For every task, decide whether it needs an external consultation and",
+			"  state that decision in your next visible reply, before your first",
+			"  implementation call, in one of these forms:",
+			"    Consultation decision: needed - <one-line reason>.",
+			"    Consultation decision: not needed - <one-line reason>.",
+			"- Base it on uncertainty, unfamiliar code, design choices, scope, and the",
+			"  consequence of a mistake. A small mechanical change with an established",
+			"  approach may not need a consultant; when an external investigation or",
+			"  design review would materially improve the work, consult. Follow an",
+			"  explicit user request to consult. Restate the decision if the task",
+			"  changes shape.",
+			"- The decision is yours and is never enforced: consulting stays your",
+			"  stated judgment, not a gate.",
 			"",
-			"When the effort gate is enabled, declare the level with consult_effort",
-			"before the first implementation call, as its own message. When in doubt",
-			"declare the higher level, declare again if the work grows, and note that a",
-			"lower declaration never replaces a higher one. Declarations are recorded in",
-			"the transcript and shown to the user.",
+			"Use consultant work without repeating it:",
+			"- Do not redo the investigation a consultant performed: no re-surveying",
+			"  the codebase, no re-deriving its design, no re-researching questions it",
+			"  answered. Its answer is the plan of record for the task.",
+			"- Verify its claims instead: read the files and lines it cites, confirm",
+			"  the names, signatures, and paths it uses exist, then implement and run",
+			"  the relevant tests. Keep checks proportional to what the change relies",
+			"  on.",
+			"- Carry every doubt back to the consultant: if a check fails, a claim",
+			"  looks wrong, or the answer leaves a gap, call consult with",
+			"  continue: <consult id> and say what you checked, what you found, and",
+			"  what you need. Do not silently research around it, and do not quietly",
+			"  substitute your own design.",
+			"- If you deviate from the recommendation, tell the user what you changed",
+			"  and why, citing the verification that justified it.",
 		].join("\n");
 	}
 
@@ -71,30 +77,28 @@ export class ConsultContract {
 		lines.push("pre_consult - pi-consult catalog (call again any time)");
 		lines.push("");
 		lines.push("Tools:");
-		lines.push("- pre_consult: this catalog and the acknowledgement contract; call once per session before implementing.");
-		lines.push("- consult: ask claude, codex, or both - your choice; consult as often as useful. Returns the answer and a continuation id.");
-		if (this.gateEnabled) {
-			lines.push("- consult_effort: declare how much work this task is; below the consult threshold it runs immediately, within a per-task allowance of implementation calls.");
-		}
-		lines.push("- consult_waive: ask the user to release the consult requirement for the current task (10 seconds; no answer means it stays required).");
+		lines.push(
+			"- pre_consult: this catalog and the acknowledgement contract; call once per session before implementing.",
+		);
+		lines.push(
+			"- consult: ask claude, codex, or both - your choice; consult as often as useful. Returns the answer and a continuation id.",
+		);
 		lines.push("");
 		lines.push(this.contractText());
 		lines.push("");
 		lines.push("Gate:");
 		lines.push(
-			"- Until pre_consult is acknowledged and either a consultant has answered for " +
-				"the current task or an exempt effort declaration holds, pi blocks " +
-				"implementation tools: edit, write, bash, powershell, and any tool outside " +
-				"the operator's allow list (a tool's own read-only annotation is not " +
-				"trusted by default). Reads (read, grep, find, ls) and the pi-consult " +
-				"tools stay available.",
+			`- Until pre_consult is acknowledged for contract v${ConsultContract.VERSION} in ` +
+				"this session, pi blocks implementation tools: edit, write, bash, " +
+				"powershell, and any tool outside the operator's allow list (a tool's own " +
+				"read-only annotation is not trusted by default). Reads (read, grep, " +
+				"find, ls) and the pi-consult tools stay available.",
 		);
 		lines.push(
-			this.gateEnabled
-				? `- The consult threshold is currently "${this.threshold}": a task declared below it runs immediately through consult_effort, within a per-task allowance of implementation calls. A task at or above it, or one whose allowance is spent, needs one consult.`
-				: "- The effort gate is off (gate.consultEffort = \"always\"): every task needs a consult.",
+			"- After that acknowledgement nothing is blocked: no consult receipt, no " +
+				"effort declaration, no waiver. Whether a task consults is your stated " +
+				"judgment. A failed or unavailable consultant does not close the gate.",
 		);
-		lines.push("- A task is the run that follows a settled run; steering messages you receive while working stay in the same task. The next settled run needs its own consult or declaration. Release one task with /consult-waive, or ask with consult_waive.");
 		lines.push("");
 		lines.push("Consultants:");
 		for (const item of availability) {
@@ -105,106 +109,56 @@ export class ConsultContract {
 		}
 		lines.push("");
 		lines.push("Continuations:");
-		lines.push("- consult returns a consult id (c-xxxxxx). Pass it as continue to keep talking to the same consultant session, which retains prior context.");
+		lines.push(
+			"- consult returns a consult id (c-xxxxxx). Pass it as continue to keep " +
+				"talking to the same consultant session, which retains prior context. " +
+				"Send verification doubts back this way instead of redoing the " +
+				"investigation.",
+		);
 		return lines.join("\n");
 	}
 
-	/** Why the gate is closed and what to do about it. */
-	gateDenial(kind: GateDenialKind, toolName: string, snapshot: GateSnapshot): string {
-		if (kind === "pre_consult") {
-			return (
-				`pi-consult: "${toolName}" is implementation work and is blocked until ` +
-				"you acknowledge the consultant contract. Call pre_consult first (it " +
-				"states that briefs and the files a consultant reads leave this machine), " +
-				"then declare the task's effort with consult_effort or call consult, then " +
-				"retry this call."
-			);
-		}
-		if (kind === "undeclared" && this.gateEnabled) {
-			return (
-				`pi-consult: "${toolName}" is implementation work and no consultant has ` +
-				`answered for the current task. If the whole task is below the consult ` +
-				`threshold (currently "${this.threshold}"), call consult_effort with its ` +
-				"level and a one-line reason as its own message, then retry this call. " +
-				"Otherwise call consult with your implementation question and read the " +
-				"answer. You can ask the user to release the task with consult_waive, or " +
-				"the user can run /consult-waive."
-			);
-		}
-		if (kind === "outside_window") {
-			return (
-				`pi-consult: "${toolName}" is implementation work and the ` +
-				`${snapshot.effort ?? "effort"} declaration only admits calls issued after ` +
-				"it returns. Issue this call in a new message and it will run; a call sent " +
-				"together with the declaration, or beyond the task's allowance, is not " +
-				"admitted."
-			);
-		}
-		if (kind === "exhausted") {
-			return (
-				`pi-consult: "${toolName}" is implementation work and the ` +
-				`${snapshot.effort} declaration's implementation allowance for this task is ` +
-				"used up, so the task is bigger than declared. Call consult with your " +
-				"implementation question, or declare a higher effort if that is the honest " +
-				"assessment; a higher declaration raises the allowance. You can ask the " +
-				"user to release the task with consult_waive."
-			);
-		}
+	/** Why the gate is closed and what to do about it; only pre-ack ever denies. */
+	gateDenial(toolName: string): string {
 		return (
-			`pi-consult: "${toolName}" is implementation work and no consultant has ` +
-			"answered for the current task yet. Call consult with your implementation " +
-			"question and read the answer, then retry this call. You can ask the user to " +
-			"release the task with consult_waive, or the user can run /consult-waive."
+			`pi-consult: "${toolName}" requires the session acknowledgement. ` +
+			"Call pre_consult with acknowledge: true, wait for it to return, then " +
+			"retry this call. No consultation receipt or effort declaration is " +
+			"required."
 		);
 	}
 
-	/** A short reminder injected after a compaction, when the gate is closed. */
+	/** A short reminder injected after a compaction. */
 	compactionReminder(snapshot: GateSnapshot): string {
-		if (snapshot.waived) return "";
 		if (!snapshot.acknowledged) {
 			return (
-				"pi-consult: this session was compacted. Call pre_consult before any " +
-				"implementation work; the consultant contract still applies."
-			);
-		}
-		if (snapshot.consulted || snapshot.budgetLeft > 0) return "";
-		if (this.gateEnabled && snapshot.effort === null) {
-			return (
-				"pi-consult: this session was compacted and the current task has neither " +
-				"a consultant answer nor an effort declaration. Declare its effort with " +
-				"consult_effort, or call consult before implementing."
-			);
-		}
-		if (snapshot.effort !== null && snapshot.exhausted) {
-			return (
-				`pi-consult: this session was compacted and the ${snapshot.effort} ` +
-				"declaration's allowance for the current task is spent. Call consult before " +
-				"implementing further, or declare a higher effort if the work grew."
+				"pi-consult: this session was compacted. Call pre_consult with " +
+				"acknowledge: true before any implementation work; the consultant " +
+				"contract still applies."
 			);
 		}
 		return (
-			"pi-consult: this session was compacted and no consultant has answered for " +
-			"the current task. Call consult before implementing, or ask with consult_waive."
+			"pi-consult: this session was compacted. Restate your consultation " +
+			"decision for the current task if it is no longer in view, and verify - " +
+			"do not redo - any consultant's work; send doubts back with the " +
+			"consultant's continue id."
 		);
 	}
 
 	/** A one-line status for the `/consult-status` command. */
-	statusText(snapshot: GateSnapshot, consults: readonly ConsultantName[]): string {
+	statusText(
+		snapshot: GateSnapshot,
+		consults: readonly ConsultantName[],
+		lastConsultId: string | null,
+	): string {
 		const parts = [
 			`acknowledged: ${snapshot.acknowledged ? "yes" : "no"}`,
-			`consulted this task: ${snapshot.consulted ? "yes" : "no"}`,
-			`waived: ${snapshot.waived ? "yes" : "no"}`,
-			`effort: ${snapshot.effort ?? "(none)"}`,
-			`effort budget left: ${snapshot.budgetLeft}`,
-			`threshold: ${this.threshold}`,
-			`task: ${snapshot.taskId ?? "(none)"}`,
+			`contract: v${ConsultContract.VERSION}`,
+			"consult requirement: none (judgment only)",
+			`consults on branch: ${lastConsultId === null ? 0 : consults.length}`,
+			`last consult: ${lastConsultId ?? "(none)"}`,
 		];
 		const available = consults.length > 0 ? consults.join(", ") : "(none)";
 		return `pi-consult status - ${parts.join(" | ")} | consultants used: ${available}`;
-	}
-
-	/** The effort gate is off when every task requires a consult. */
-	private get gateEnabled(): boolean {
-		return this.threshold !== "always";
 	}
 }

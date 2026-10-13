@@ -12,8 +12,8 @@ test("config: defaults when the file is missing", () => {
 	assertEq(config.claude.command, "claude", "claude command");
 	assertEq(config.codex.command, "codex", "codex command");
 	assertEq(config.claude.isolation, "clean", "claude isolation");
-	assertEq(config.gate.allowBashBeforeConsult, false, "bash gated by default");
 	assertEq(config.gate.trustReadOnlyHint, false, "read-only hints untrusted by default");
+	assertEq(config.pin.enabled, true, "pinning on by default");
 	assert(config.gate.allow.includes("pre_memory"), "onboarding tools allowed");
 	assertEq(config.output.totalBytes, ConsultConfig.DEFAULT_TOTAL_BYTES, "total budget");
 });
@@ -26,7 +26,8 @@ test("config: overrides and clamp to defaults on bad values", () => {
 			enabled: false,
 			confirmFirstConsult: false,
 			maxConcurrent: 4,
-			gate: { allowBashBeforeConsult: true, allow: ["foo", "bar"], block: ["baz"] },
+			gate: { allowBashBeforeConsult: true, consultEffort: "always", allow: ["foo", "bar"], block: ["baz"] },
+			pin: { enabled: false },
 			output: { totalBytes: 5000, answerBytes: "nope" },
 			claude: { command: "my-claude", model: "sonnet", timeoutMs: 1000, isolation: "inherit" },
 			codex: { timeoutMs: -1 },
@@ -36,7 +37,12 @@ test("config: overrides and clamp to defaults on bad values", () => {
 	assertEq(config.enabled, false, "enabled override");
 	assertEq(config.confirmFirstConsult, false, "confirm override");
 	assertEq(config.maxConcurrent, 4, "concurrency override");
-	assertEq(config.gate.allowBashBeforeConsult, true, "bash override");
+	assertEq(
+		"allowBashBeforeConsult" in config.gate,
+		false,
+		"legacy gate keys are dropped, not carried into the parsed settings",
+	);
+	assertEq(config.pin.enabled, false, "pin override");
 	assertEq(config.gate.allow.includes("foo"), true, "custom allow");
 	assertEq(config.gate.block[0], "baz", "custom block");
 	assertEq(config.output.totalBytes, 5000, "total override");

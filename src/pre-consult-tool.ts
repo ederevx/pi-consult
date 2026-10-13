@@ -1,9 +1,11 @@
 /**
  * pi-consult — the `pre_consult` tool.
  *
- * Its call is the acknowledgement: a successful result on the branch is
- * what the gate accepts. It also returns the catalogue of tools,
- * conventions, and consultant availability.
+ * Its call is the acknowledgement: a successful result on the session is
+ * what the gate accepts. It returns the catalogue of tools, the full
+ * consultation workflow the agent commits to (judge the task, verify rather
+ * than repeat, doubts back through continuation), and consultant
+ * availability.
  */
 
 import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -30,17 +32,23 @@ export class PreConsultTool {
 			description:
 				"Call once per session before any implementation work. Returns the " +
 				"pi-consult catalogue: the acknowledgement that briefs and the files a " +
-				"consultant reads leave this machine, how to consult an external " +
-				"consultant, and the acknowledgement gate's rules. Until this is " +
-				"acknowledged and either a consultant has answered for the current task " +
-				"or an effort declaration holds, implementation tools stay blocked.",
+				"consultant reads leave this machine, how to judge whether a task needs " +
+				"a consultant, how to verify a consultant's work without repeating its " +
+				"investigation, and the acknowledgement gate's rules. Until this " +
+				"succeeds for the current contract, implementation tools stay blocked; " +
+				"after it, pi-consult blocks nothing.",
+			promptGuidelines: [
+				'Before your first implementation call, state a visible consultation decision for the task: "Consultation decision: needed - <reason>." or "Consultation decision: not needed - <reason>".',
+				"Verify a consultant's claims without redoing its investigation; carry every doubt back through consult continuation.",
+			],
 			parameters: Type.Object({
 				acknowledge: Type.Literal(true, {
 					description:
 						"You acknowledge that consult briefs and the files a consultant " +
 						"reads leave this machine, that no secrets may be included, and " +
-						"that implementation details will be worked out with a consultant " +
-						"before you implement them.",
+						"that you will state a consultation decision per task, verify " +
+						"rather than repeat a consultant's investigation, and send doubts " +
+						"back through consult continuation.",
 				}),
 			}),
 			annotations: { readOnlyHint: true },
@@ -67,7 +75,12 @@ export class PreConsultTool {
 				try {
 					text = this.contract.catalogText(availability);
 				} catch (error) {
-					text = `pi-consult catalogue unavailable: ${error instanceof Error ? error.message : String(error)}`;
+					// Acknowledgement must survive a catalogue formatting failure: the
+					// fixed terms still have to reach the agent.
+					const reason = error instanceof Error ? error.message : String(error);
+					text =
+						`${this.contract.contractText()}\n\n` +
+						`consultant availability could not be determined: ${reason}`;
 				}
 				return { content: [{ type: "text", text }], details };
 			},
