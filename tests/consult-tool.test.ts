@@ -273,3 +273,21 @@ test("consult tool: a listed file whose contents hold a secret is refused", asyn
 	assertEq(result.isError, true);
 	assertIncludes(result.content[0].text, "secrets");
 });
+
+test("consult tool: a file larger than the screening limit is refused", async () => {
+	const config = configFile(fakeClaude(), fakeCodex());
+	const { tool } = buildTool(config);
+	const dir = join(scratchDir(), `file-big-${Date.now()}`);
+	mkdirSync(dir, { recursive: true });
+	writeFileSync(join(dir, "big.txt"), "a".repeat(600 * 1024));
+	const ctx = new FakeContext([], "sess-int", dir, false) as never;
+	const result = await tool.execute(
+		"call-8",
+		{ target: "claude", brief: "review big.txt", files: ["big.txt"], contains_no_secrets: true },
+		undefined,
+		undefined,
+		ctx,
+	);
+	assertEq(result.isError, true);
+	assertIncludes(result.content[0].text, "screening limit");
+});

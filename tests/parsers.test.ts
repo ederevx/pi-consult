@@ -117,6 +117,28 @@ test("codex parser: a recovered error does not fail a completed turn", () => {
 	assertEq(parsed.sawTurnCompleted, true);
 });
 
+test("claude parser: input tokens include cache reads and writes", () => {
+	const parser = new ClaudeStreamParser();
+	parser.push(
+		JSON.stringify({
+			type: "result",
+			subtype: "success",
+			is_error: false,
+			result: "ok",
+			session_id: "s",
+			usage: {
+				input_tokens: 10,
+				output_tokens: 2,
+				cache_read_input_tokens: 5,
+				cache_creation_input_tokens: 3,
+			},
+		}),
+	);
+	const parsed = parser.finish();
+	assertEq(parsed.usage?.inputTokens, 18);
+	assertEq(parsed.usage?.cachedInputTokens, 5);
+});
+
 test("codex parser: noise and truncated final lines do not crash", () => {
 	const parser = new CodexEventParser();
 	parser.push("progress: thinking");

@@ -97,3 +97,25 @@ test("formatter: the whole rendered output stays within the total budget", () =>
 	const text = formatter.format(many, new Map());
 	assert(Buffer.byteLength(text, "utf8") <= 2000, "bounded output");
 });
+
+test("formatter: surfaces run warnings", () => {
+	const formatter = new AnswerFormatter({ totalBytes: 4000, answerBytes: 2000, maxLines: 100 });
+	const warned: ConsultDetails = {
+		...details("/artifacts/c-abc123/codex.md"),
+		runs: [
+			{
+				consultant: "codex",
+				status: "ok",
+				answerPath: "/artifacts/c-abc123/codex.md",
+				answerBytes: 6,
+				truncated: false,
+				partial: false,
+				durationMs: 1,
+				exitCode: 0,
+				warnings: ["codex reported file changes: a.txt"],
+			},
+		],
+	};
+	const text = formatter.format(warned, new Map([["codex", "answer"]]));
+	assertIncludes(text, "WARNING: codex reported file changes: a.txt");
+});

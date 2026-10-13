@@ -10,7 +10,7 @@ import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-ag
 import { Type } from "typebox";
 
 import type { PreConsultDetails } from "./contracts.ts";
-import type { ConsultContract } from "./consult-contract.ts";
+import { ConsultContract } from "./consult-contract.ts";
 import type { ConsultRunner } from "./consult-runner.ts";
 
 export class PreConsultTool {

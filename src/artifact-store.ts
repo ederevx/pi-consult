@@ -8,7 +8,7 @@
  */
 
 import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 import type { ConsultantName } from "./contracts.ts";
 
@@ -90,8 +90,8 @@ export class ArtifactStore {
 	}
 
 	private owns(path: string): boolean {
-		const resolved = resolve(path);
-		return resolved === this.root || resolved.startsWith(`${this.root}/`);
+		const rel = relative(this.root, resolve(path));
+		return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 	}
 
 	private safe(value: string): string {

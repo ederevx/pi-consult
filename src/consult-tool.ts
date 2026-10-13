@@ -12,7 +12,7 @@ import type {
 	ExtensionAPI,
 	ExtensionToolContext,
 } from "@earendil-works/pi-coding-agent";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
 import { Type } from "typebox";
 
@@ -307,9 +307,16 @@ export class ConsultTool {
 		const hits: string[] = [];
 		for (const file of files) {
 			try {
-				const text = await readFile(resolve(cwd, file), "utf8");
-				const bounded = text.slice(0, ConsultTool.MAX_SCREEN_BYTES);
-				for (const hit of this.deps.screen.scan(bounded)) {
+				const absolute = resolve(cwd, file);
+				const info = await stat(absolute);
+				if (info.size > ConsultTool.MAX_SCREEN_BYTES) {
+					return (
+						`refusing to send: ${file} is larger than the ` +
+						`${ConsultTool.MAX_SCREEN_BYTES}-byte secret-screening limit`
+					);
+				}
+				const text = await readFile(absolute, "utf8");
+				for (const hit of this.deps.screen.scan(text)) {
 					hits.push(`${file}: ${hit.rule} (line ${hit.line})`);
 				}
 			} catch {
