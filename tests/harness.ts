@@ -116,6 +116,21 @@ export function toolEntry(
 	return { type: "message", id, message: { role: "toolResult", toolName, details, isError } };
 }
 
+/** Build an assistant-message branch entry issuing tool calls. */
+export function assistantEntry(
+	id: string,
+	calls: readonly { id: string; name: string }[],
+): BranchEntry {
+	return {
+		type: "message",
+		id,
+		message: {
+			role: "assistant",
+			content: calls.map((call) => ({ type: "toolCall", ...call, arguments: {} })),
+		},
+	};
+}
+
 /** Build a custom branch entry. */
 export function customEntry(id: string, customType: string, data?: unknown): BranchEntry {
 	return { type: "custom", id, customType, data };

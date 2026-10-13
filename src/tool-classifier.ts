@@ -16,7 +16,7 @@ export class ToolClassifier {
 	/** pi's built-in mutation and process tools. */
 	private static readonly MUTATION_TOOLS = ["edit", "write", "bash", "powershell"];
 	/** pi-consult's own tools, which must always be reachable. */
-	private static readonly CONSULT_TOOLS = ["pre_consult", "consult", "consult_waive"];
+	private static readonly CONSULT_TOOLS = ["pre_consult", "consult", "consult_effort", "consult_waive"];
 
 	private readonly allowed: Set<string>;
 	private readonly blocked: Set<string>;
@@ -44,5 +44,14 @@ export class ToolClassifier {
 		// A tool's self-declared read-only hint is a claim, not a verified fact:
 		// trust it only when the operator opts in.
 		return this.trustHints ? annotations?.readOnlyHint !== true : true;
+	}
+
+	/**
+	 * True when a call of this tool counts against the effort allowance. With
+	 * `trustReadOnlyHint` a tool the gate passes on its annotation still counts
+	 * here, because the ledger sees no annotations: over-counting fails closed.
+	 */
+	countsAsWork(name: string): boolean {
+		return !!name && this.isGated(name, undefined);
 	}
 }

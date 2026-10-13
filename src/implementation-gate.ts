@@ -51,10 +51,10 @@ export class ImplementationGate {
 			.getAllTools()
 			.find((tool) => tool.name === name)?.annotations;
 		if (!this.classifier.isGated(name, annotations)) return undefined;
-		this.ledger.rebuild(this.branch(ctx));
-		const missing = this.ledger.missingStep();
-		if (missing === null) return undefined;
-		return { block: true, reason: this.contract.gateDenial(missing, name) };
+		const snapshot = this.ledger.rebuild(this.branch(ctx));
+		const kind = this.ledger.denialKind(String(event.toolCallId ?? ""));
+		if (kind === null) return undefined;
+		return { block: true, reason: this.contract.gateDenial(kind, name, snapshot) };
 	}
 
 	private branch(ctx: ExtensionContext): BranchEntry[] {

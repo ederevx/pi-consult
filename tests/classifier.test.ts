@@ -8,6 +8,7 @@ function gate(overrides: Partial<GateSettings> = {}): GateSettings {
 		block: [],
 		allowBashBeforeConsult: false,
 		trustReadOnlyHint: false,
+		consultEffort: "medium",
 		...overrides,
 	};
 }

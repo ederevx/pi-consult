@@ -70,8 +70,8 @@ export class ConsultWaiveTool {
 			throw new Error("consult_waive must be called directly.");
 		}
 		const snapshot = this.ledger.rebuild(this.branch(ctx));
-		if (snapshot.waived || snapshot.consulted) {
-			return this.result(true, "open", "the consult requirement is already released for this task.");
+		if (this.ledger.missingStep() === null) {
+			return this.result(true, "open", "the gate is currently open for this task; no waiver is needed.");
 		}
 		if (snapshot.taskId === null) {
 			return this.result(false, "no_task", "there is no active task to waive.");

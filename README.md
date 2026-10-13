@@ -7,7 +7,7 @@ pi edits and runs commands.
 
 ## How it works
 
-`pi-consult` registers two tools and one gate:
+`pi-consult` registers four tools and one gate:
 
 - **`pre_consult`** — call once per session. Returns the catalogue and records
   the acknowledgement that briefs, and any files a consultant reads, leave the
@@ -15,16 +15,33 @@ pi edits and runs commands.
 - **`consult`** — sends a self-contained brief to `claude`, `codex`, or both
   concurrently and returns their answers plus a continuation id. The agent
   chooses which consultant(s) and how many consults to run; repeat or continue
-  as useful.
+  as useful. The answer renders expanded in the tool window regardless of the
+  global tool-expansion setting (a live stream tails until expanded); the
+  model-facing result text is unchanged.
+- **`consult_effort`** — declares how much work the current task is
+  (`trivial`, `simple`, `medium`, `high`). A level below the consult threshold
+  releases the gate for an allowance of implementation calls, so a simple
+  directive runs immediately; a level at or above the threshold still needs a
+  consult. Declarations are recorded in the transcript and shown to the user.
+- **`consult_waive`** — asks the user to release the consult requirement for
+  the current task (10-second answer window; no answer means it stays
+  required). `/consult-waive` does the same as a user override.
 - **The gate** — a `tool_call` handler that blocks implementation work (`edit`,
-  `write`, `bash`, `powershell`, and any tool without a read-only annotation)
-  until the session is acknowledged **and** a consultant has answered for the
-  current task. Reads (`read`, `grep`, `find`, `ls`) and the pi-consult tools are
-  never blocked. A task is the run that follows a settled run, so steering
-  messages that arrive while the agent is working stay in the same task and do
-  not force another consult. `/consult-waive` releases one task as a user
-  override, and the agent can ask with `consult_waive` (10-second answer
-  window; no answer means the consult stays required).
+  `write`, `bash`, `powershell`, and any tool outside the operator's allow list)
+  until the session is acknowledged **and** either a consultant has answered for
+  the current task or an exempt effort declaration holds. Reads (`read`, `grep`,
+  `find`, `ls`) and the pi-consult tools are never blocked. A task is the run
+  that follows a settled run, so steering messages that arrive while the agent
+  is working stay in the same task and do not force another consult.
+
+The allowance is granted per tool call, from the first declaration in the task:
+the first calls issued after the declaration run, so a parallel batch cannot
+outrun its own results. Raising the level raises the allowance cumulatively
+(3, 10, 20, and no allowance for `medium` and `high` at the default threshold);
+a lower declaration never replaces a higher one, and a new task starts over.
+`gate.consultEffort` sets the threshold — `medium` by default, `simple` or
+`high` to move it, and `always` to require a consult for every task (which also
+stops `consult_effort` from being registered).
 
 While a `consult` runs, each consultant's live activity and streamed answer
 appear in the tool window. A queued user message or Escape interrupts the
@@ -37,11 +54,12 @@ resume, and branch navigation are handled without extra bookkeeping.
 ## Install
 
 ```bash
-pi install git:github.com/ederevx/pi-consult@v0.3.0
+pi install git:github.com/ederevx/pi-consult@v0.4.0
 ```
 
 The package has no runtime dependencies; it uses the host-provided
-`@earendil-works/pi-coding-agent` and `typebox`. The `command` for each
+`@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`, and `typebox`. The
+`command` for each
 consultant is resolved through `PATH` with the project as working directory, so
 a project-planted `./claude` runs only if `.` is on `PATH`.
 
@@ -58,7 +76,7 @@ Missing or malformed values fall back to the defaults.
   "retentionDays": 30,
   "maxConcurrent": 2,
   "output": { "totalBytes": 24000, "answerBytes": 12000, "maxLines": 800 },
-  "gate": { "allow": ["pre_memory", "pre_daemon", "pre_cache", "pre_teams", "transcript_read"], "block": [], "allowBashBeforeConsult": false, "trustReadOnlyHint": false },
+  "gate": { "allow": ["pre_memory", "pre_daemon", "pre_cache", "pre_teams", "transcript_read"], "block": [], "allowBashBeforeConsult": false, "trustReadOnlyHint": false, "consultEffort": "medium" },
   "claude": { "enabled": true, "command": "claude", "isolation": "clean", "timeoutMs": 1200000 },
   "codex": { "enabled": true, "command": "codex", "isolation": "clean", "timeoutMs": 1200000 }
 }
@@ -76,6 +94,9 @@ Missing or malformed values fall back to the defaults.
 - `gate.trustReadOnlyHint` (default off) trusts a tool's self-declared
   read-only annotation. Off means any tool outside the built-in read tools,
   the consult tools, and `gate.allow` is gated before a consult.
+- `gate.consultEffort` is the lowest task effort that requires a consult.
+  `medium` (the default) lets `trivial` and `simple` tasks run as soon as they
+  are declared; `always` needs a consult for every task.
 - `gate.allow`/`gate.block` are operator overrides; `"block"` beats a read-only
   annotation.
 

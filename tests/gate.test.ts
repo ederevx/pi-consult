@@ -56,6 +56,7 @@ function setup(branch: BranchEntry[]) {
 			block: [],
 			allowBashBeforeConsult: false,
 			trustReadOnlyHint: false,
+			consultEffort: "medium",
 		}),
 		new ConsultContract(),
 	);

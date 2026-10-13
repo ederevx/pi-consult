@@ -11,6 +11,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import type { ConsultantName } from "./contracts.ts";
+import { EffortPolicy, type ConsultThreshold } from "./effort-policy.ts";
 
 /** How isolated a consultant CLI run is from the user's own agent setup. */
 export type Isolation = "clean" | "inherit";
@@ -38,6 +39,8 @@ export interface GateSettings {
 	allowBashBeforeConsult: boolean;
 	/** Trust a tool's self-declared readOnlyHint. Off by default. */
 	trustReadOnlyHint: boolean;
+	/** Lowest task effort that requires a consult; "always" needs one for every task. */
+	consultEffort: ConsultThreshold;
 }
 
 /** How much consultant text reaches the model, in bytes and lines. */
@@ -96,6 +99,7 @@ export class ConsultConfig {
 			block,
 			allowBashBeforeConsult: ConsultConfig.bool(gate.allowBashBeforeConsult, false),
 			trustReadOnlyHint: ConsultConfig.bool(gate.trustReadOnlyHint, false),
+			consultEffort: EffortPolicy.parseThreshold(gate.consultEffort),
 		};
 
 		this.claude = ConsultConfig.consultantSettings(

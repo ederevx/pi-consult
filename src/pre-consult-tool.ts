@@ -32,8 +32,8 @@ export class PreConsultTool {
 				"pi-consult catalogue: the acknowledgement that briefs and the files a " +
 				"consultant reads leave this machine, how to consult an external " +
 				"consultant, and the acknowledgement gate's rules. Until this is " +
-				"acknowledged and a consultant has answered for the current task, " +
-				"implementation tools stay blocked.",
+				"acknowledged and either a consultant has answered for the current task " +
+				"or an effort declaration holds, implementation tools stay blocked.",
 			parameters: Type.Object({
 				acknowledge: Type.Literal(true, {
 					description:
