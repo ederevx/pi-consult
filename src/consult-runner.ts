@@ -3,7 +3,8 @@
  *
  * Owns the set of adapters, one concurrency budget shared by every caller,
  * and batch cancellation. A run never rejects: a failed or cancelled
- * adapter becomes a result the caller can report.
+ * adapter becomes a result the caller can report. A cancelled run keeps
+ * the consultant session id it was given, so a continuation can resume it.
  */
 
 import type {
@@ -14,11 +15,16 @@ import type {
 	ConsultRequest,
 } from "./contracts.ts";
 
+interface Waiter {
+	run: () => void;
+	cancel: () => void;
+}
+
 export class ConsultRunner {
 	private readonly consultants = new Map<ConsultantName, Consultant>();
 	private readonly maxConcurrent: number;
 	private readonly batches = new Set<AbortController>();
-	private readonly waiters: Array<() => void> = [];
+	private readonly waiters: Waiter[] = [];
 	private running = 0;
 
 	constructor(consultants: readonly Consultant[], maxConcurrent: number) {
@@ -78,16 +84,18 @@ export class ConsultRunner {
 		request: ConsultRequest,
 		signal: AbortSignal,
 	): Promise<ConsultantResult> {
-		if (signal.aborted) return this.aborted(request.consultant);
-		await this.acquire();
+		if (signal.aborted) return this.aborted(request);
+		const acquired = await this.acquire(signal);
+		if (!acquired) return this.aborted(request);
 		try {
-			if (signal.aborted) return this.aborted(request.consultant);
+			if (signal.aborted) return this.aborted(request);
 			const consultant = this.consultants.get(request.consultant);
 			if (!consultant) return this.unavailable(request.consultant);
 			return await consultant.consult(request, signal);
 		} catch (error) {
 			return {
 				consultant: request.consultant,
+				sessionId: request.resumeSessionId,
 				status: "error",
 				answer: "",
 				partial: false,
@@ -101,28 +109,45 @@ export class ConsultRunner {
 		}
 	}
 
-	private acquire(): Promise<void> {
+	private acquire(signal: AbortSignal): Promise<boolean> {
 		if (this.running < this.maxConcurrent) {
 			this.running += 1;
-			return Promise.resolve();
+			return Promise.resolve(true);
 		}
-		return new Promise((resolve) => {
-			this.waiters.push(() => {
+		return new Promise<boolean>((resolve) => {
+			let settled = false;
+			let cancel = (): void => {};
+			const run = (): void => {
+				if (settled) return;
+				settled = true;
+				signal.removeEventListener("abort", cancel);
 				this.running += 1;
-				resolve();
-			});
+				resolve(true);
+			};
+			const entry: Waiter = { run, cancel: () => undefined };
+			cancel = (): void => {
+				if (settled) return;
+				settled = true;
+				const index = this.waiters.indexOf(entry);
+				if (index >= 0) this.waiters.splice(index, 1);
+				resolve(false);
+			};
+			entry.cancel = cancel;
+			this.waiters.push(entry);
+			signal.addEventListener("abort", cancel, { once: true });
 		});
 	}
 
 	private release(): void {
 		this.running -= 1;
 		const next = this.waiters.shift();
-		if (next) next();
+		if (next) next.run();
 	}
 
-	private aborted(name: ConsultantName): ConsultantResult {
+	private aborted(request: ConsultRequest): ConsultantResult {
 		return {
-			consultant: name,
+			consultant: request.consultant,
+			sessionId: request.resumeSessionId,
 			status: "aborted",
 			answer: "",
 			partial: false,

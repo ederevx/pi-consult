@@ -2,8 +2,11 @@
  * pi-consult — the `consult` tool.
  *
  * Orchestrates one consultation: validate the request, screen the brief,
- * persist it, run one or both consultants concurrently, persist their
- * answers, and return a bounded model-facing result with a continuation id.
+ * persist it, run one or both consultants concurrently while streaming
+ * their live output into the tool window, persist their answers, and return
+ * a bounded model-facing result with a continuation id. A queued user
+ * message or Escape aborts the consultants and returns whatever they
+ * produced, keeping their session ids for continuation.
  */
 
 import type {
@@ -22,12 +25,14 @@ import type {
 	ConsultRun,
 	ConsultTarget,
 	ConsultantName,
+	ConsultantResult,
 } from "./contracts.ts";
 import type { AnswerFormatter } from "./answer-formatter.ts";
 import type { ArtifactStore, ConsultPaths } from "./artifact-store.ts";
 import type { BriefComposer } from "./brief-composer.ts";
 import type { ConsultConfig } from "./consult-config.ts";
 import type { ConsultIndex } from "./consult-index.ts";
+import { ConsultProgressFeed } from "./consult-progress.ts";
 import type { ConsultRunner } from "./consult-runner.ts";
 import type { BranchEntry, ReceiptLedger } from "./receipt-ledger.ts";
 import type { SecretScreen } from "./secret-screen.ts";
@@ -176,8 +181,14 @@ export class ConsultTool {
 		const fileError = await this.validateFiles(params.files ?? [], ctx.cwd);
 		if (fileError) return this.failure(ctx, fileError);
 
-		if (!(await this.confirm(ctx, targets))) {
-			return this.failure(ctx, "the user declined to send this brief to an external consultant.");
+		if (!(await this.confirm(ctx, targets, signal ?? ctx.signal))) {
+			return this.failure(
+				ctx,
+				this.deps.config.confirmFirstConsult && !ctx.hasUI
+					? "brief approval is enabled but no interactive UI is available. Run pi " +
+						"interactively, or turn confirmFirstConsult off in /consult-settings."
+					: "the user declined to send this brief to an external consultant.",
+			);
 		}
 
 		this.deps.ledger.rebuild(this.branch(ctx));
@@ -196,10 +207,52 @@ export class ConsultTool {
 			return this.failure(ctx, `could not persist the brief: ${this.message(error)}`);
 		}
 
+		const feed = new ConsultProgressFeed(targets, (snapshot) => {
+			try {
+				onUpdate?.({
+					content: [{ type: "text", text: snapshot }],
+					details: undefined as unknown as ConsultDetails,
+				});
+			} catch {
+				// The host callback must never break the run.
+			}
+		});
 		const requests = targets.map((name) =>
-			this.request(name, params, composed, continuation, paths, ctx, targets.length, onUpdate),
+			this.request(name, params, composed, continuation, paths, ctx, targets.length, feed),
 		);
-		const results = await this.deps.runner.run(requests, signal ?? ctx.signal);
+
+		const parent = signal ?? ctx.signal;
+		const interrupt = new AbortController();
+		let interrupted: "escape" | "steer" | undefined;
+		const onParentAbort = (): void => {
+			interrupted ??= "escape";
+			interrupt.abort();
+		};
+		if (parent) {
+			if (parent.aborted) onParentAbort();
+			else parent.addEventListener("abort", onParentAbort, { once: true });
+		}
+		const poll = setInterval(() => {
+			if (interrupt.signal.aborted) return;
+			try {
+				if (ctx.hasPendingMessages()) {
+					interrupted ??= "steer";
+					interrupt.abort();
+				}
+			} catch {
+				// A queue read failure must not break the run.
+			}
+		}, 250);
+		poll.unref?.();
+
+		let results: ConsultantResult[] = [];
+		try {
+			results = await this.deps.runner.run(requests, interrupt.signal);
+		} finally {
+			clearInterval(poll);
+			parent?.removeEventListener("abort", onParentAbort);
+			feed.closeAndFlush();
+		}
 
 		const runs: ConsultRun[] = [];
 		const answers = new Map<ConsultantName, string>();
@@ -244,12 +297,18 @@ export class ConsultTool {
 			cwd: ctx.cwd,
 			briefPath: paths.brief,
 			continuedFrom: continuation?.consultId,
+			interrupted,
 			runs,
 		};
+		const formatted = this.deps.formatter.format(details, answers);
+		const text = interrupted
+			? `pi-consult: consult ${consultId} was interrupted by the user (${interrupted}); ` +
+				`partial answers below. Resume with continue: "${consultId}".\n\n${formatted}`
+			: formatted;
 		return {
-			content: [{ type: "text", text: this.deps.formatter.format(details, answers) }],
+			content: [{ type: "text", text }],
 			details,
-			isError: !details.ok,
+			isError: !details.ok && !interrupted,
 		};
 	}
 
@@ -261,7 +320,7 @@ export class ConsultTool {
 		paths: ConsultPaths,
 		ctx: ExtensionToolContext,
 		targetCount: number,
-		onUpdate: AgentToolUpdateCallback<ConsultDetails> | undefined,
+		feed: ConsultProgressFeed,
 	): ConsultRequest {
 		const settings = this.deps.config.consultant(name);
 		const resume = continuation?.resumeFor.get(name);
@@ -275,12 +334,8 @@ export class ConsultTool {
 			systemPrompt: this.deps.composer.systemPrompt(),
 			timeoutMs: params.timeout_s ? params.timeout_s * 1000 : settings.timeoutMs,
 			lastMessagePath: paths.lastMessage(name),
-			onProgress: (line: string) => {
-				onUpdate?.({
-					content: [{ type: "text", text: line }],
-					details: undefined as unknown as ConsultDetails,
-				});
-			},
+			onProgress: (line: string) => feed.event(name, line),
+			onPartial: (text: string) => feed.partial(name, text),
 		};
 	}
 
@@ -331,8 +386,10 @@ export class ConsultTool {
 	private async confirm(
 		ctx: ExtensionToolContext,
 		targets: readonly ConsultantName[],
+		signal: AbortSignal | undefined,
 	): Promise<boolean> {
-		if (!this.deps.config.confirmFirstConsult || !ctx.hasUI) return true;
+		if (!this.deps.config.confirmFirstConsult) return true;
+		if (!ctx.hasUI) return false;
 		const sessionId = this.sessionId(ctx);
 		if (this.confirmedSessions.has(sessionId)) return true;
 		try {
@@ -340,6 +397,7 @@ export class ConsultTool {
 				"Send this brief to an external consultant?",
 				`Targets: ${targets.join(", ")}. The brief and any files a consultant ` +
 					"reads leave this machine.",
+				{ signal },
 			);
 			if (ok) this.confirmedSessions.add(sessionId);
 			return ok;

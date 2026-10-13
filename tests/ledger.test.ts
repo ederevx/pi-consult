@@ -115,3 +115,15 @@ test("ledger: history exposes consults for continuation", () => {
 	assertEq(ledger.history().length, 1);
 	assertEq(ledger.history()[0].consultId, "c-abc123");
 });
+
+test("ledger: an interrupted consult is kept for continuation but does not open the gate", () => {
+	const ledger = new ReceiptLedger(ConsultContract.VERSION);
+	ledger.rebuild([
+		userEntry("u1"),
+		toolEntry("t1", "pre_consult", ack()),
+		toolEntry("t2", "consult", consult(true), true),
+	]);
+	assertEq(ledger.missingStep(), "consult");
+	assertEq(ledger.history().length, 1);
+	assertEq(ledger.history()[0].consultId, "c-abc123");
+});

@@ -1,10 +1,13 @@
 /**
  * pi-consult — Claude Code `--output-format stream-json` parser.
  *
- * Consumes one JSON line per call and retains only the last result line and
- * the most recent assistant text (so a timed-out run still yields partial
- * output). Malformed or unknown lines are counted as noise, never as an
- * answer.
+ * Consumes one JSON line per call. Retains the last result line, the most
+ * recent completed assistant text, and streamed text deltas (so a
+ * timed-out or interrupted run still yields partial output). Malformed or
+ * unknown lines are counted as noise, never as an answer. Streamed text and
+ * tool use are reported to the caller's live-output callbacks; completed
+ * assistant text is never re-emitted, so the live transcript does not
+ * duplicate itself.
  */
 
 import type { ConsultantUsage } from "../contracts.ts";
@@ -23,15 +26,24 @@ export interface ClaudeParseResult {
 }
 
 export class ClaudeStreamParser {
+	private readonly onEvent?: (line: string) => void;
+	private readonly onPartial?: (text: string) => void;
+	private readonly seenToolUses = new Set<string>();
 	private sessionId?: string;
 	private resultText?: string;
 	private lastAssistantText = "";
+	private streamedText = "";
 	private sawResult = false;
 	private isError = false;
 	private subtype?: string;
 	private usage?: ConsultantUsage;
 	private permissionDenials: string[] = [];
 	private noiseLines = 0;
+
+	constructor(onEvent?: (line: string) => void, onPartial?: (text: string) => void) {
+		this.onEvent = onEvent;
+		this.onPartial = onPartial;
+	}
 
 	/** Feed one line of stdout. */
 	push(line: string): void {
@@ -57,9 +69,14 @@ export class ClaudeStreamParser {
 			}
 			return;
 		}
+		if (type === "stream_event") {
+			this.handleStreamEvent(event);
+			return;
+		}
 		if (type === "assistant") {
 			const text = this.assistantText(event);
 			if (text) this.lastAssistantText = text;
+			if (!event.parent_tool_use_id) this.reportToolUses(event);
 			return;
 		}
 		if (type === "result") {
@@ -79,7 +96,7 @@ export class ClaudeStreamParser {
 
 	/** The finalized parse. */
 	finish(): ClaudeParseResult {
-		const answer = (this.resultText ?? this.lastAssistantText ?? "").trim();
+		const answer = (this.resultText || this.lastAssistantText || this.streamedText || "").trim();
 		return {
 			sessionId: this.sessionId,
 			answer,
@@ -91,6 +108,39 @@ export class ClaudeStreamParser {
 			sawResult: this.sawResult,
 			noiseLines: this.noiseLines,
 		};
+	}
+
+	private handleStreamEvent(event: Record<string, unknown>): void {
+		if (event.parent_tool_use_id) return;
+		const inner = event.event as Record<string, unknown> | undefined;
+		if (!inner) return;
+		if (inner.type === "message_start") {
+			this.streamedText = "";
+			return;
+		}
+		if (inner.type !== "content_block_delta") return;
+		const delta = inner.delta as Record<string, unknown> | undefined;
+		if (delta?.type !== "text_delta" || typeof delta.text !== "string") return;
+		this.streamedText += delta.text;
+		this.onPartial?.(delta.text);
+	}
+
+	private reportToolUses(event: Record<string, unknown>): void {
+		const message = event.message as Record<string, unknown> | undefined;
+		const content = message?.content;
+		if (!Array.isArray(content)) return;
+		for (const block of content) {
+			const item = block as Record<string, unknown>;
+			if (item?.type !== "tool_use" || typeof item.id !== "string") continue;
+			if (this.seenToolUses.has(item.id)) continue;
+			this.seenToolUses.add(item.id);
+			const input = (item.input ?? {}) as Record<string, unknown>;
+			const argument = [input.file_path, input.pattern, input.path].find(
+				(value) => typeof value === "string",
+			) as string | undefined;
+			const name = typeof item.name === "string" ? item.name : "tool";
+			this.onEvent?.(`${name}${argument ? ` ${argument.slice(0, 120)}` : ""}`);
+		}
 	}
 
 	private assistantText(event: Record<string, unknown>): string {
