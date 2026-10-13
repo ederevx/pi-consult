@@ -66,16 +66,7 @@ export class ConsultExtension {
 		}).register(pi);
 		new ImplementationGate(ledger, classifier, contract).register(pi);
 		new AgentAvailability(new FailureClassifier(), () => index.latest()?.consultId ?? null).register(pi);
-		new SessionLifecycle(
-			ledger,
-			runner,
-			processes,
-			artifacts,
-			contract,
-			config,
-			pin,
-			index,
-		).register(pi);
+		new SessionLifecycle(ledger, runner, processes, artifacts, contract, config).register(pi);
 		new ConsultCommands(pi, ledger, index, contract, pin).register();
 	}
 }

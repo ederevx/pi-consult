@@ -54,31 +54,19 @@ export class ConsultCommands {
 			},
 		});
 		this.pi.registerCommand("consult-pin", {
-			description: "Show or hide the pinned latest consult answer above the editor.",
-			handler: async (args: string, ctx: ExtensionCommandContext) => {
+			description: "Toggle pinning of live consult results above the editor.",
+			handler: async (_args: string, ctx: ExtensionCommandContext) => {
 				const pin = this.pin;
 				if (!pin) {
 					ctx.ui.notify("pi-consult: pinning is unavailable in this session.", "warning");
 					return;
 				}
-				const trimmed = args.trim();
-				if (trimmed === "off") {
-					pin.setHidden(ctx, true);
-					ctx.ui.notify(
-						"pi-consult: pinned answer hidden (pin.enabled = off hides it permanently).",
-						"info",
-					);
-					return;
-				}
-				if (trimmed && trimmed !== "on") {
-					ctx.ui.notify("usage: /consult-pin [on | off]", "info");
-					return;
-				}
-				pin.setHidden(ctx, false);
+				const on = pin.toggle(ctx);
 				ctx.ui.notify(
-					pin.hasContent
-						? "pi-consult: pinned answer shown."
-						: "pi-consult: no consult is pinned in this session yet.",
+					on
+						? "pi-consult: consult results pin above the editor while a consult " +
+							"runs; the widget clears when the consult completes."
+						: "pi-consult: consult results will not pin.",
 					"info",
 				);
 			},

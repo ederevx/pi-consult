@@ -231,10 +231,13 @@ export class ConsultTool {
 			paths = await this.deps.artifacts.prepare(sessionId, consultId);
 			await this.deps.artifacts.write(paths.brief, composed);
 		} catch (error) {
+			this.deps.pin?.complete(ctx);
 			return this.failure(ctx, `could not persist the brief: ${this.message(error)}`);
 		}
 
 		const feed = new ConsultProgressFeed(targets, (snapshot) => {
+			// Mirror the live progress into the pinned widget; it self-guards.
+			this.deps.pin?.update(ctx, snapshot);
 			try {
 				onUpdate?.({
 					content: [{ type: "text", text: snapshot }],
@@ -280,6 +283,8 @@ export class ConsultTool {
 			parent?.removeEventListener("abort", onParentAbort);
 			feed.closeAndFlush();
 		}
+		// The pinned widget lives only while the consult runs.
+		this.deps.pin?.complete(ctx);
 
 		const runs: ConsultRun[] = [];
 		const answers = new Map<ConsultantName, string>();
@@ -327,7 +332,6 @@ export class ConsultTool {
 			interrupted,
 			runs,
 		};
-		this.deps.pin?.show(ctx, details, answers);
 		const formatted = this.deps.formatter.format(details, answers);
 		const text = interrupted
 			? `pi-consult: consult ${consultId} was interrupted by the user (${interrupted}); ` +

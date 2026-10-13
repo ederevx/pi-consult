@@ -1,16 +1,15 @@
 /**
- * pi-consult — the pinned answer widget.
+ * pi-consult — the live consult widget.
  *
- * Keeps the latest consult answer visible above the editor: pi 1.0.4 has no
- * per-tool pin API, so one keyed widget is the whole pin surface. It renders
- * only when enabled, not hidden, a UI is present, and the mode can show
- * widgets (tui/rpc; an unreported mode counts as terminal), and every UI call
- * is guarded so a widget failure can never break a consult. The host caps
- * string widgets at 10 lines, so the layout bounds itself to 10 lines for any
- * input.
+ * While a `consult` runs, the pin shows a one-line header plus the tail of
+ * the live progress snapshot above the editor; when the consult completes it
+ * clears itself. The session flag starts from config `pin.enabled` and the
+ * `/consult-pin` command flips it: turning it off erases the widget, turning
+ * it on re-places the tracked content. pi 1.0.4 has no per-tool pin API, so
+ * one keyed widget is the whole pin surface. The host caps string widgets at
+ * 10 lines, so every layout bounds itself to 10 lines, and all UI calls are
+ * guarded so a widget failure can never break a consult.
  */
-
-import type { ConsultDetails, ConsultantName } from "./contracts.ts";
 
 /**
  * The slice of pi's contexts the pin uses. Both the tool's ExtensionContext
@@ -31,60 +30,60 @@ export class ConsultPin {
 
 	/** The widget may never grow past the host's 10-line cap. */
 	private static readonly MAX_LINES = 10;
-	/** Answer lines budgeted per layout, leaving room for header and footer. */
-	private static readonly ANSWER_BUDGET = 8;
-	/** Pointer shown whenever the layout had to cut answer lines. */
-	private static readonly FOOTER = "full answer: consult row and artifact";
+	/** Footer shown whenever the tail had to cut snapshot lines. */
+	private static readonly FOOTER = "... live in the consult row";
 
-	private readonly settings: { enabled: boolean };
-	private hiddenState = false;
-	/** Last built lines, kept so unhiding can re-place them. */
-	private lastLines: readonly string[] = [];
+	/** The session-wide pin flag; starts at config pin.enabled. */
+	private flag: boolean;
+	/** Header of the active consult; undefined outside a running consult. */
+	private header: string | undefined;
+	/** Last built lines, kept so a toggle-on can re-place them. */
+	private content: string[] = [];
 
 	constructor(settings: { enabled: boolean }) {
-		this.settings = settings;
+		this.flag = settings.enabled;
 	}
 
 	get enabled(): boolean {
-		return this.settings.enabled;
+		return this.flag;
 	}
 
-	get hidden(): boolean {
-		return this.hiddenState;
-	}
-
-	/** Place the one-line "consult running" progress widget. */
+	/** Open the live widget with its one-line header. */
 	running(ctx: PinContext, consultId: string, targets: readonly string[]): void {
-		this.place(ctx, [`pi-consult: consult ${consultId} running (${targets.join(", ")})`]);
+		this.header = `pi-consult: consult ${consultId} running (${targets.join(", ")})`;
+		this.content = [this.header];
+		this.place(ctx, this.content);
 	}
 
-	/** Store and place the latest consult answer. */
-	show(
-		ctx: PinContext,
-		details: ConsultDetails,
-		answers: ReadonlyMap<ConsultantName, string>,
-	): void {
-		this.lastLines = this.lines(details, answers);
-		this.place(ctx, this.lastLines);
+	/** Rebuild the widget from the tail of the latest progress snapshot. */
+	update(ctx: PinContext, snapshot: string): void {
+		const header = this.header;
+		if (header === undefined) return;
+		this.content = this.lines(header, snapshot);
+		this.place(ctx, this.content);
 	}
 
-	/** Remove the widget; the last built lines survive for a later unhide. */
-	clear(ctx: PinContext): void {
+	/** Clear the widget and close the consult; the session flag survives. */
+	complete(ctx: PinContext): void {
 		this.erase(ctx);
+		this.header = undefined;
+		this.content = [];
 	}
 
-	/** Hiding erases the widget; unhiding re-places the last built lines. */
-	setHidden(ctx: PinContext, hidden: boolean): void {
-		this.hiddenState = hidden;
-		if (hidden) {
+	/** Flip the pin flag: re-place stored content on, erase when off. */
+	toggle(ctx: PinContext): boolean {
+		this.flag = !this.flag;
+		if (this.flag) {
+			if (this.content.length > 0) this.place(ctx, this.content);
+		} else {
 			this.erase(ctx);
-			return;
 		}
-		if (this.lastLines.length > 0) this.place(ctx, this.lastLines);
+		return this.flag;
 	}
 
+	/** Place unless the flag is off, there is no UI, or the mode hides widgets. */
 	private place(ctx: PinContext, lines: readonly string[]): void {
-		if (!this.settings.enabled || this.hiddenState || !ctx.hasUI) return;
+		if (!this.flag || !ctx.hasUI) return;
 		if (ctx.mode === "json" || ctx.mode === "print") return;
 		try {
 			ctx.ui.setWidget(ConsultPin.WIDGET_KEY, [...lines], { placement: "aboveEditor" });
@@ -93,6 +92,7 @@ export class ConsultPin {
 		}
 	}
 
+	/** Clear whatever was placed, regardless of flag, mode, or UI presence. */
 	private erase(ctx: PinContext): void {
 		try {
 			ctx.ui.setWidget(ConsultPin.WIDGET_KEY, undefined, { placement: "aboveEditor" });
@@ -101,49 +101,12 @@ export class ConsultPin {
 		}
 	}
 
-	/** Build the widget lines: header, per-run answers, footer when cut. */
-	private lines(
-		details: ConsultDetails,
-		answers: ReadonlyMap<ConsultantName, string>,
-	): string[] {
-		const body: string[] = [];
-		let truncated = false;
-		const budget = Math.max(
-			1,
-			Math.floor(ConsultPin.ANSWER_BUDGET / details.runs.length),
-		);
-		for (const run of details.runs) {
-			if (details.runs.length > 1) body.push(`- ${run.consultant}:`);
-			const text = answers.get(run.consultant) ?? "";
-			if (text.length === 0) {
-				body.push(run.error ?? "(no answer)");
-				continue;
-			}
-			// Consultants answer up front, so the first lines carry the verdict.
-			const source = text.split("\n");
-			body.push(...source.slice(0, budget));
-			if (source.length > budget) truncated = true;
-		}
-		// The per-run budget bounds answer lines but not the label lines, so
-		// clamp the body as well; the footer stays whenever anything was cut.
-		if (body.length > ConsultPin.MAX_LINES - 1) {
-			body.length = ConsultPin.MAX_LINES - 1;
-			truncated = true;
-		}
-		if (truncated && body.length > ConsultPin.MAX_LINES - 2) {
-			body.length = ConsultPin.MAX_LINES - 2;
-		}
-		const header = this.header(details);
-		return truncated ? [header, ...body, ConsultPin.FOOTER] : [header, ...body];
-	}
-
-	private header(details: ConsultDetails): string {
-		const runs = details.runs
-			.map((run) => `${run.consultant} ${run.status}`)
-			.join(", ");
-		const interrupted = details.interrupted
-			? ` (interrupted: ${details.interrupted})`
-			: "";
-		return `consult ${details.consultId} - ${runs}${interrupted}`;
+	/** Header plus the snapshot's tail, capped at 10 lines with a cut footer. */
+	private lines(header: string, snapshot: string): string[] {
+		const source = snapshot.split("\n");
+		const tail = source.slice(-(ConsultPin.MAX_LINES - 1));
+		if (source.length <= tail.length) return [header, ...tail];
+		// Lines were cut: leave room for the footer inside the 10-line cap.
+		return [header, ...tail.slice(-(ConsultPin.MAX_LINES - 2)), ConsultPin.FOOTER];
 	}
 }
