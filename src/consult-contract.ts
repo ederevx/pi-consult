@@ -43,13 +43,14 @@ export class ConsultContract {
 		lines.push("");
 		lines.push("Tools:");
 		lines.push("- pre_consult: this catalog and the acknowledgement contract; call once per session before implementing.");
-		lines.push("- consult: send a self-contained brief to claude, codex, or both; returns their answer and a continuation id.");
+		lines.push("- consult: ask claude, codex, or both - your choice; consult as often as useful. Returns the answer and a continuation id.");
+		lines.push("- consult_waive: ask the user to release the consult requirement for the current task (10 seconds; no answer means it stays required).");
 		lines.push("");
 		lines.push(this.contractText());
 		lines.push("");
 		lines.push("Gate:");
 		lines.push("- Until pre_consult is acknowledged and at least one consult has answered for the current task, pi blocks implementation tools: edit, write, bash, powershell, and any tool with no read-only annotation. Reads (read, grep, find, ls) and the pi-consult tools stay available.");
-		lines.push("- Each new user prompt starts a new task, so consult again for the next task. The user can release one task with /consult-waive.");
+		lines.push("- A task is the run that follows a settled run; steering messages you receive while working stay in the same task. The next settled run needs its own consult. Release one task with /consult-waive, or ask with consult_waive.");
 		lines.push("");
 		lines.push("Consultants:");
 		for (const item of availability) {
@@ -77,8 +78,8 @@ export class ConsultContract {
 		return (
 			`pi-consult: "${toolName}" is implementation work and no consultant has ` +
 			"answered for the current task yet. Call consult with your implementation " +
-			"question and read the answer, then retry this call. The user can release " +
-			"the current task with /consult-waive."
+			"question and read the answer, then retry this call. You can ask the user to " +
+			"release the task with consult_waive, or the user can run /consult-waive."
 		);
 	}
 
@@ -93,7 +94,8 @@ export class ConsultContract {
 		if (!snapshot.consulted && !snapshot.waived) {
 			return (
 				"pi-consult: this session was compacted and no consultant has answered " +
-				"for the current task. Call consult before implementing."
+				"for the current task. Call consult before implementing, or ask with " +
+				"consult_waive."
 			);
 		}
 		return "";

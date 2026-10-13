@@ -18,6 +18,7 @@ import { ConsultIndex } from "./consult-index.ts";
 import { ConsultRunner } from "./consult-runner.ts";
 import { ConsultSettings } from "./consult-settings.ts";
 import { ConsultTool } from "./consult-tool.ts";
+import { ConsultWaiveTool } from "./consult-waive-tool.ts";
 import { ClaudeConsultant } from "./consultants/claude-consultant.ts";
 import { CodexConsultant } from "./consultants/codex-consultant.ts";
 import { ImplementationGate } from "./implementation-gate.ts";
@@ -48,6 +49,7 @@ export class ConsultExtension {
 		const artifacts = new ArtifactStore(config.artifactDir);
 
 		new PreConsultTool(contract, runner).register(pi);
+		new ConsultWaiveTool(pi, ledger).register();
 		new ConsultTool({
 			config,
 			ledger,

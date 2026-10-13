@@ -1,5 +1,5 @@
 import { ConsultContract } from "../src/consult-contract.ts";
-import { ReceiptLedger, WAIVE_ENTRY_TYPE } from "../src/receipt-ledger.ts";
+import { ReceiptLedger, TASK_ENTRY_TYPE, WAIVE_ENTRY_TYPE } from "../src/receipt-ledger.ts";
 import { assertEq, customEntry, test, toolEntry, userEntry } from "./harness.ts";
 
 function ack(version = ConsultContract.VERSION): unknown {
@@ -103,6 +103,32 @@ test("ledger: a waiver releases the task even before acknowledgement", () => {
 	const ledger = new ReceiptLedger(ConsultContract.VERSION);
 	ledger.rebuild([userEntry("u1"), customEntry("c1", WAIVE_ENTRY_TYPE, { taskId: "u1" })]);
 	assertEq(ledger.missingStep(), null);
+});
+
+test("ledger: a settle marker starts a new task even after a successful consult", () => {
+	const ledger = new ReceiptLedger(ConsultContract.VERSION);
+	ledger.rebuild([
+		customEntry("m1", TASK_ENTRY_TYPE, {}),
+		userEntry("u1"),
+		toolEntry("t1", "pre_consult", ack()),
+		toolEntry("t2", "consult", consult(true)),
+		customEntry("m2", TASK_ENTRY_TYPE, {}),
+	]);
+	assertEq(ledger.current().taskId, "m2");
+	assertEq(ledger.missingStep(), "consult");
+});
+
+test("ledger: a steering message after a settle marker stays in the same task", () => {
+	const ledger = new ReceiptLedger(ConsultContract.VERSION);
+	ledger.rebuild([
+		customEntry("m1", TASK_ENTRY_TYPE, {}),
+		userEntry("u1"),
+		toolEntry("t1", "pre_consult", ack()),
+		toolEntry("t2", "consult", consult(true)),
+		userEntry("u2"),
+	]);
+	assertEq(ledger.current().taskId, "m1", "the marker remains the boundary");
+	assertEq(ledger.missingStep(), null, "the consult still counts through a steer");
 });
 
 test("ledger: history exposes consults for continuation", () => {

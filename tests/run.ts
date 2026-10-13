@@ -38,6 +38,7 @@ import "./pre-consult.test.ts";
 import "./consult-progress.test.ts";
 import "./settings.test.ts";
 import "./runner.test.ts";
+import "./waive.test.ts";
 import "./artifact-store.test.ts";
 import "./gate.test.ts";
 
