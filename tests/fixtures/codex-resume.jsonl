@@ -1,0 +1,3 @@
+{"type":"thread.started","thread_id":"01a1370b-b19f-7000-92b8-cd0a3d64193e"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"ZEBRA-77"}}
+{"type":"turn.completed","usage":{"input_tokens":34072,"cached_input_tokens":16896,"cache_write_input_tokens":0,"output_tokens":14,"reasoning_output_tokens":0}}

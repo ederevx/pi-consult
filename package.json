@@ -1,0 +1,49 @@
+{
+  "name": "pi-consult",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Offload thinking work from the pi coding agent to external consultants (Claude Code, Codex) behind an acknowledgement-and-consult gate.",
+  "license": "MIT",
+  "author": "Edrick Sinsuan <evcsinsuan@gmail.com>",
+  "homepage": "https://github.com/ederevx/pi-consult",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ederevx/pi-consult.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ederevx/pi-consult/issues"
+  },
+  "keywords": [
+    "pi-package",
+    "pi",
+    "consult",
+    "claude-code",
+    "codex",
+    "delegation"
+  ],
+  "files": [
+    "src/",
+    "README.md",
+    "LICENSE"
+  ],
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    },
+    "typebox": {
+      "optional": true
+    }
+  },
+  "scripts": {
+    "test": "node --experimental-strip-types --experimental-transform-types tests/run.ts"
+  }
+}

@@ -1,0 +1,18 @@
+# Node / pi extension scratch
+node_modules/
+node_modules
+*.tsbuildinfo
+
+# Editor / OS
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Local runtime state and test scratch
+*.log
+core
+
+# Python bytecode cache (lint self-test imports)
+__pycache__/
+*.pyc
