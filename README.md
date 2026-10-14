@@ -60,6 +60,19 @@ The catalogue instructs the agent, and the tool's prompt guidelines repeat it:
   a high-stakes design, comparing incompatible approaches), never as a
   default.
 
+### Live output
+
+Claude Code streams its answer token by token (`--output-format stream-json
+--include-partial-messages`), so its window grows while it writes. Codex's
+`exec --json` protocol reports an agent message once, complete — its event
+processor emits `item.updated` only for plan changes and renders agent
+messages on completion — so a Codex window shows the live activity Codex does
+report: commands as they start, MCP calls, searches, reasoning summaries,
+plan updates, file changes, non-fatal warnings, and a non-zero exit. Its
+answer text arrives as one event at the end. Token-level Codex streaming
+exists only on the experimental `codex app-server` JSON-RPC transport
+(`item/agentMessage/delta`), which this extension does not use.
+
 ### When the agent stops
 
 The extension watches the model's own results (`message_end`,
@@ -73,10 +86,12 @@ agent to re-read the files it was changing, not to redo a consultant's
 investigation, and to send doubts back with the continuation id. It never
 triggers a turn itself.
 
-While a `consult` runs, each consultant's live activity and streamed answer
-appear in the tool window. A queued user message or Escape interrupts the
-consultants, returns their partial answers, and keeps their session ids so a
-follow-up can resume with `continue`.
+While a `consult` runs, each consultant's live activity appears in the tool
+window (see Live output): Claude's answer streams as it is written, Codex's
+activity is reported as it happens and its answer arrives at the end. A queued
+user message or Escape interrupts the consultants, returns their partial
+answers, and keeps their session ids so a follow-up can resume with
+`continue`.
 
 ## Install
 

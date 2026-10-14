@@ -3,9 +3,12 @@
  *
  * Retains the thread id, the last agent message as the answer, terminal
  * turn status, usage, and any reported file change (a violation, since
- * consultants are read-only). Command execution, agent messages, file
- * changes, and failures are reported to the caller's live-output callback.
- * Unknown events are noise.
+ * consultants are read-only). Everything Codex reports while it runs - 
+ * commands, MCP calls, searches, reasoning summaries, plan updates, file
+ * changes, warnings, and failures - is reported to the caller's live-output
+ * callback. Codex's protocol carries an agent message only once, complete,
+ * so an answer arrives as one event and never as a stream. Unknown events
+ * are noise.
  */
 
 import type { ConsultantUsage } from "../contracts.ts";
@@ -22,7 +25,10 @@ export interface CodexParseResult {
 }
 
 export class CodexEventParser {
+	private static readonly MAX_LABEL = 160;
+
 	private readonly onEvent?: (line: string) => void;
+	private lastPlanLine = "";
 	private threadId?: string;
 	private answer = "";
 	private failed?: string;
@@ -59,6 +65,9 @@ export class CodexEventParser {
 			case "item.started":
 				this.handleStarted(event.item);
 				break;
+			case "item.updated":
+				this.handleUpdated(event.item);
+				break;
 			case "item.completed":
 				this.handleItem(event.item);
 				break;
@@ -94,33 +103,119 @@ export class CodexEventParser {
 	}
 
 	private handleStarted(raw: unknown): void {
-		const item = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
-		if (item.type !== "command_execution") return;
-		const command = typeof item.command === "string" ? item.command : "";
-		if (command) this.onEvent?.(`$ ${command.slice(0, 160)}`);
+		const item = this.item(raw);
+		switch (item.type) {
+			case "command_execution": {
+				const command = typeof item.command === "string" ? item.command : "";
+				if (command) this.onEvent?.(`$ ${this.clip(command)}`);
+				return;
+			}
+			case "mcp_tool_call":
+				this.onEvent?.(this.mcpLabel(item, "started"));
+				return;
+			case "todo_list":
+				this.reportPlan(item);
+				return;
+			default:
+				return;
+		}
+	}
+
+	private handleUpdated(raw: unknown): void {
+		const item = this.item(raw);
+		if (item.type === "todo_list") this.reportPlan(item);
 	}
 
 	private handleItem(raw: unknown): void {
-		const item = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
-		if (item.type === "agent_message" && typeof item.text === "string") {
-			this.answer = item.text;
-			const first = item.text.split("\n").find((line) => line.trim());
-			if (first) this.onEvent?.(first.trim().slice(0, 160));
-			return;
+		const item = this.item(raw);
+		switch (item.type) {
+			case "agent_message":
+				this.handleAgentMessage(item);
+				return;
+			case "command_execution":
+				this.handleCommandExit(item);
+				return;
+			case "file_change":
+				this.handleFileChange(item);
+				return;
+			case "mcp_tool_call":
+				this.onEvent?.(this.mcpLabel(item, this.statusLabel(item)));
+				return;
+			case "web_search":
+				this.reportFirstLine("search", item.query);
+				return;
+			case "reasoning":
+				this.reportFirstLine("thinking", item.text);
+				return;
+			case "todo_list":
+				this.reportPlan(item);
+				return;
+			case "error":
+				this.reportFirstLine("warning", item.message);
+				return;
+			default:
+				return;
 		}
-		if (item.type === "command_execution" && typeof item.exit_code === "number" && item.exit_code !== 0) {
+	}
+
+	private handleAgentMessage(item: Record<string, unknown>): void {
+		if (typeof item.text !== "string") return;
+		this.answer = item.text;
+		this.reportFirstLine("", item.text);
+	}
+
+	private handleCommandExit(item: Record<string, unknown>): void {
+		if (typeof item.exit_code === "number" && item.exit_code !== 0) {
 			this.onEvent?.(`exit ${item.exit_code}`);
-			return;
 		}
-		if (item.type === "file_change") {
-			const changes = Array.isArray(item.changes) ? (item.changes as Record<string, unknown>[]) : [];
-			const labels = changes.map(
-				(change) => `${String(change.kind ?? "change")} ${String(change.path ?? "?")}`,
-			);
-			const entries = labels.length > 0 ? labels : [JSON.stringify(item)];
-			for (const entry of entries) this.fileChanges.push(entry);
-			this.onEvent?.(`file_change ${entries.join(", ")}`);
-		}
+	}
+
+	private handleFileChange(item: Record<string, unknown>): void {
+		const changes = Array.isArray(item.changes) ? (item.changes as Record<string, unknown>[]) : [];
+		const labels = changes.map(
+			(change) => `${String(change.kind ?? "change")} ${String(change.path ?? "?")}`,
+		);
+		const entries = labels.length > 0 ? labels : [JSON.stringify(item)];
+		for (const entry of entries) this.fileChanges.push(entry);
+		this.onEvent?.(`file_change ${entries.join(", ")}`);
+	}
+
+	private reportPlan(item: Record<string, unknown>): void {
+		const items = Array.isArray(item.items) ? (item.items as Record<string, unknown>[]) : [];
+		const active = items.find(
+			(entry) => entry.completed !== true && typeof entry.text === "string",
+		);
+		if (!active) return;
+		const line = `plan: ${this.clip(String(active.text).trim())}`;
+		if (line === this.lastPlanLine) return;
+		this.lastPlanLine = line;
+		this.onEvent?.(line);
+	}
+
+	private reportFirstLine(prefix: string, value: unknown): void {
+		if (typeof value !== "string") return;
+		const first = value.split("\n").find((line) => line.trim());
+		if (!first) return;
+		const label = this.clip(first.trim());
+		this.onEvent?.(prefix ? `${prefix}: ${label}` : label);
+	}
+
+	private mcpLabel(item: Record<string, unknown>, status: string): string {
+		const server = typeof item.server === "string" ? item.server : "mcp";
+		const tool = typeof item.tool === "string" ? item.tool : "tool";
+		return `${server}/${tool} ${status}`;
+	}
+
+	private statusLabel(item: Record<string, unknown>): string {
+		return typeof item.status === "string" ? item.status : "completed";
+	}
+
+	private item(raw: unknown): Record<string, unknown> {
+		return (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+	}
+
+	private clip(text: string): string {
+		return text.slice(0, CodexEventParser.MAX_LABEL);
 	}
 
 	private normalizeUsage(raw: unknown): ConsultantUsage | undefined {
