@@ -1,17 +1,18 @@
 /**
  * pi-consult — configuration.
  *
- * Owns loading and validating `~/.pi/agent/pi-consult.json` (overridable
- * with `PI_CONSULT_CONFIG`) against built-in defaults. Missing or malformed
- * configuration falls back to the defaults; no other module reads the file.
- * Legacy keys (gate.allowBashBeforeConsult, gate.consultEffort) are ignored:
- * their mechanisms no longer exist.
+ * Owns validating the effective settings against built-in defaults. The
+ * values live in the `piConsult` namespace of pi's own `settings.json`, read
+ * through `ConsultSettingsStore`; this class touches no filesystem itself.
+ * Missing or malformed configuration falls back to the defaults. Legacy keys
+ * (gate.allowBashBeforeConsult, gate.consultEffort) are ignored: their
+ * mechanisms no longer exist.
  */
 
-import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+import { ConsultSettingsStore } from "./consult-settings-store.ts";
 import type { ConsultantName } from "./contracts.ts";
 
 /** How isolated a consultant CLI run is from the user's own agent setup. */
@@ -77,7 +78,7 @@ export class ConsultConfig {
 	readonly claude: ConsultantSettings;
 	readonly codex: ConsultantSettings;
 
-	private constructor(raw: Record<string, unknown>) {
+	private constructor(raw: Record<string, unknown>, agentDir: string) {
 		this.enabled = ConsultConfig.bool(raw.enabled, true);
 		this.confirmFirstConsult = ConsultConfig.bool(raw.confirmFirstConsult, false);
 		this.retentionDays = ConsultConfig.positiveNumber(raw.retentionDays, 30);
@@ -85,7 +86,7 @@ export class ConsultConfig {
 		const artifactDir = ConsultConfig.str(raw.artifactDir);
 		this.artifactDir = artifactDir
 			? ConsultConfig.expandHome(artifactDir)
-			: join(ConsultConfig.agentDir(), ConsultConfig.DEFAULT_ARTIFACT_DIR_NAME);
+			: join(agentDir, ConsultConfig.DEFAULT_ARTIFACT_DIR_NAME);
 
 		const output = ConsultConfig.record(raw.output);
 		this.output = {
@@ -115,34 +116,27 @@ export class ConsultConfig {
 		);
 	}
 
-	/** Load the configuration, falling back to defaults on any failure. */
-	static load(file?: string): ConsultConfig {
-		const path = ConsultConfig.path(file);
-		let raw: Record<string, unknown> = {};
-		try {
-			const parsed = JSON.parse(readFileSync(path, "utf8"));
-			raw = ConsultConfig.record(parsed);
-		} catch {
-			raw = {};
+	/**
+	 * Load the effective configuration from the `piConsult` namespace of pi's
+	 * `settings.json`, falling back to defaults on any read failure.
+	 */
+	static load(store: ConsultSettingsStore = new ConsultSettingsStore()): ConsultConfig {
+		return ConsultConfig.from(store.namespace(), store.agentDir());
+	}
+
+	/** Validate a parsed namespace object: the pure normalization boundary. */
+	static from(raw: unknown, agentDir: string): ConsultConfig {
+		return new ConsultConfig(ConsultConfig.record(raw), agentDir);
+	}
+
+	/** The effective value at a setting path, for the command's listing. */
+	value(path: readonly string[]): unknown {
+		let node: unknown = this;
+		for (const key of path) {
+			if (typeof node !== "object" || node === null) return undefined;
+			node = (node as Record<string, unknown>)[key];
 		}
-		return new ConsultConfig(raw);
-	}
-
-	/** The default configuration path under the pi agent directory. */
-	static defaultPath(): string {
-		return join(ConsultConfig.agentDir(), "pi-consult.json");
-	}
-
-	/** The resolved configuration file, honoring an explicit path then PI_CONSULT_CONFIG. */
-	static path(file?: string): string {
-		return file ?? process.env.PI_CONSULT_CONFIG ?? ConsultConfig.defaultPath();
-	}
-
-	/** The pi agent configuration directory. */
-	static agentDir(): string {
-		const override = process.env.PI_CODING_AGENT_DIR;
-		if (override && override.trim()) return override.trim();
-		return join(homedir(), ".pi", "agent");
+		return node;
 	}
 
 	/** The settings for one consultant. */
