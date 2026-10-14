@@ -12,9 +12,9 @@ the consultants advise, pi edits and runs commands.
 - **`pre_consult`** — call once per session. Returns the catalogue and records
   the acknowledgement that briefs, and any files a consultant reads, leave the
   machine, that no secrets may be included, and of the consultation workflow:
-  judge each task (leaning toward consulting for investigative work), verify
-  rather than repeat a consultant's investigation, and carry every doubt back
-  through continuation. Its `promptGuidelines` keep that
+  judge each task (leaning toward consulting for evaluation, audit, and
+  investigative work), verify rather than repeat a consultant's investigation,
+  and carry every doubt back through continuation. Its `promptGuidelines` keep that
   workflow in the system prompt after a compaction.
 - **`consult`** — sends a self-contained brief to `claude`, `codex`, or both
   concurrently and returns their answers plus a continuation id. The agent
@@ -41,11 +41,18 @@ The catalogue instructs the agent, and the tool's prompt guidelines repeat it:
   `Consultation decision: needed - <reason>.` or
   `Consultation decision: not needed - <reason>.` The judgment is never
   enforced; consulting stays the agent's stated decision.
-- Investigative tasks — research, root-cause diagnosis, comparing approaches,
-  audits, feasibility, design review, verifying behavior that cannot be
-  observed locally — lean toward consulting one consultant. `not needed` fits
-  when the question is a short lookup the code, documents, or evidence in view
-  already settle, and the decision line says so. This is guidance, not
+- Thinking work is offloaded: evaluation tasks (judging a diff, plan, design,
+  result, or set of options against criteria), audit tasks (checking every
+  member of a set for a property such as coverage, conformance, consistency,
+  or parity), and investigative tasks (research, root-cause diagnosis,
+  feasibility, behavior that cannot be observed locally) lean toward
+  consulting one consultant. Reasoning over evidence a consultant can read or
+  be handed is offloaded; work that needs local execution (builds, test runs,
+  devices, interactive sessions) the agent runs itself, then consults on the
+  interpretation. Evaluating a consultant's own answer is verification and
+  goes back through `continue`. `not needed` fits a short lookup the code,
+  documents, or evidence in view already settle, or a check a local command
+  decides outright, and the decision line says so. This is guidance, not
   enforcement.
 - The agent does **not** redo a consultant's investigation. It verifies the
   claims the change relies on — reading the cited files and lines, checking
@@ -96,7 +103,7 @@ answers, and keeps their session ids so a follow-up can resume with
 ## Install
 
 ```bash
-pi install git:github.com/ederevx/pi-consult@v0.9.0
+pi install git:github.com/ederevx/pi-consult@v0.10.0
 ```
 
 The package has no runtime dependencies; it uses the host-provided
