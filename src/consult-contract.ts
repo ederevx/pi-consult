@@ -81,7 +81,10 @@ export class ConsultContract {
 			"- pre_consult: this catalog and the acknowledgement contract; call once per session before implementing.",
 		);
 		lines.push(
-			"- consult: ask claude, codex, or both - your choice; consult as often as useful. Returns the answer and a continuation id.",
+			"- consult: ask claude, codex, or both; consult as often as useful, but " +
+				"prefer a single consultant for most tasks and use both only when the " +
+				"task demands two independent perspectives. Returns the answer and a " +
+				"continuation id.",
 		);
 		lines.push("");
 		lines.push(this.contractText());

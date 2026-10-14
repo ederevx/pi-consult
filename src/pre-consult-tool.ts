@@ -40,6 +40,7 @@ export class PreConsultTool {
 			promptGuidelines: [
 				'Before your first implementation call, state a visible consultation decision for the task: "Consultation decision: needed - <reason>." or "Consultation decision: not needed - <reason>".',
 				"Verify a consultant's claims without redoing its investigation; carry every doubt back through consult continuation.",
+				"Prefer a single consultant for most tasks; use target 'both' only when the task demands two independent perspectives.",
 			],
 			parameters: Type.Object({
 				acknowledge: Type.Literal(true, {
