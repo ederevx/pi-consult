@@ -88,7 +88,9 @@ export class ConsultTool {
 				"Send a self-contained implementation brief to an external consultant " +
 				"(claude, codex, or both) and return its answer. You choose which " +
 				"consultant(s) and how many consults to run; consult as often as useful. " +
-				"Prefer a single consultant for most tasks: use target 'both' only when " +
+				"Offload thinking work (evaluation, audit, investigation) rather than " +
+				"working it out alone. Prefer a single consultant for most tasks: use " +
+				"target 'both' only when " +
 				"the task demands two independent perspectives or cross-validation. " +
 				"The answer is the plan of record: verify its claims rather than repeating " +
 				"its investigation, and carry every doubt back with continue. The " +

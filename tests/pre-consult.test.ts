@@ -45,16 +45,21 @@ test("pre_consult: returns the current catalogue and a versioned receipt", async
 	assertNotIncludes(text, "consult threshold");
 	assertIncludes(text, "claude: unavailable");
 	assertIncludes(text, "prefer a single consultant", "the singular-consultant preference is in the catalogue");
-	assertIncludes(text, "Investigative tasks lean toward consulting");
-	assertIncludes(text, '"not needed" means a short', "the not-needed threshold for investigation is stated");
+	assertIncludes(text, "- Offload thinking work: evaluation, audit, and investigative");
+	assertIncludes(text, "Evaluation judges an artifact", "evaluation is defined");
+	assertIncludes(text, "An audit checks every member of a set", "audit is defined");
+	assertIncludes(text, "a consultant can\n  read or be handed", "the offload boundary names what a consultant can see");
+	assertIncludes(text, 'use its continue id, not a new consult', "evaluating a consultant's answer is verification");
+	assertIncludes(text, '"not needed" means a short', "the not-needed threshold is stated");
+	assertIncludes(text, "a check a local command\n  decides outright", "a local-command check is an accepted not-needed reason");
 	assertNotIncludes(text, "would materially improve the work", "the old optional-investigation wording is gone");
-	assertIncludes(text, "unless the task demands two independent", "the investigative default keeps the both-exception");
+	assertIncludes(text, "unless the task demands two independent", "the consulting default keeps the both-exception");
 	const base = text.indexOf("- Base it on uncertainty");
-	const investigative = text.indexOf("- Investigative tasks lean toward consulting");
+	const leaning = text.indexOf("- Offload thinking work: evaluation, audit");
 	const neverEnforced = text.indexOf("- The decision is yours and is never enforced");
 	assert(
-		base >= 0 && base < investigative && investigative < neverEnforced,
-		"the investigative default sits inside the never-enforced scope",
+		base >= 0 && base < leaning && leaning < neverEnforced,
+		"the consulting default sits inside the never-enforced scope",
 	);
 });
 
@@ -67,6 +72,8 @@ test("pre_consult: the tool carries workflow prompt guidelines", () => {
 	assertIncludes(guidelines.join("\n"), "single consultant", "the singular-consultant preference survives compaction");
 	assert(guidelines.length >= 4, "the investigative default is a guideline");
 	assertIncludes(guidelines.join("\n"), "investigative tasks", "the investigative default survives compaction");
+	assertIncludes(guidelines.join("\n"), "Offload thinking work", "the offload default survives compaction");
+	assertIncludes(guidelines.join("\n"), "audit tasks", "audit tasks survive compaction");
 	assertIncludes(guidelines.join("\n"), "short lookup");
 });
 

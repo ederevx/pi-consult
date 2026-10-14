@@ -309,6 +309,7 @@ test("consult tool: the description carries no NaN concatenation artifact", asyn
 	assertNotIncludes(description, "NaN", "the description must not contain NaN");
 	assertIncludes(description, "plan of record", "verify-not-repeat guidance is in the description");
 	assertIncludes(description, "Prefer a single consultant", "the singular-consultant preference is in the description");
+	assertIncludes(description, "Offload thinking work", "the offload default is in the description");
 });
 
 test("consult tool: continue is refused when the target has no saved session", async () => {

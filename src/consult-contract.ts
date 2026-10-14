@@ -5,7 +5,7 @@
  * `pre_consult`, the acknowledgement text the agent must accept, the
  * consultation workflow it commits to (judge, verify-only, doubts back to
  * the consultant), and the gate's denial and post-compaction reminder text.
- * The constructor takes no configuration: version 4 pins fixed terms, and
+ * The constructor takes no configuration: version 5 pins fixed terms, and
  * nothing about live settings leaks into what is acknowledged.
  */
 
@@ -14,7 +14,7 @@ import type { GateSnapshot } from "./receipt-ledger.ts";
 
 export class ConsultContract {
 	/** Bump when the acknowledgement terms change; old receipts stop counting. */
-	static readonly VERSION = 4;
+	static readonly VERSION = 5;
 
 	/** The acknowledgement text the agent accepts by calling `pre_consult`. */
 	contractText(): string {
@@ -35,9 +35,9 @@ export class ConsultContract {
 			"- Each brief is persisted under the pi-consult artifact directory before it",
 			"  is sent, as the audit record of what left the machine.",
 			"- By calling pre_consult you acknowledge the terms above and the workflow",
-			"  below: judge each task, leaning toward consulting for investigative work,",
-			"  verify rather than repeat a consultant's work, and carry every doubt back",
-			"  to the consultant.",
+			"  below: judge each task, leaning toward consulting for evaluation, audit,",
+			"  and investigative work, verify rather than repeat a consultant's work,",
+			"  and carry every doubt back to the consultant.",
 			"",
 			"Judge each task before you implement:",
 			"- For every task, decide whether it needs an external consultation and",
@@ -49,13 +49,21 @@ export class ConsultContract {
 			"  consequence of a mistake. A small mechanical change with an established",
 			"  approach may not need a consultant. Follow an explicit user request to",
 			"  consult. Restate the decision if the task changes shape.",
-			"- Investigative tasks lean toward consulting: research, root-cause",
-			"  diagnosis, comparing approaches, audits, feasibility, design review, and",
-			"  verifying behavior you cannot observe by reading or running it here.",
-			"  Brief one consultant unless the task demands two independent",
-			"  perspectives. For an investigative task, \"not needed\" means a short",
-			"  lookup that the code, documents, or evidence in front of you already",
-			"  settle; give that as the reason.",
+			"- Offload thinking work: evaluation, audit, and investigative tasks lean",
+			"  toward consulting. Evaluation judges an artifact (a diff, plan, design,",
+			"  result, or set of options) against criteria: correct, complete, best,",
+			"  worth shipping. An audit checks every member of a set for a property:",
+			"  coverage, conformance, consistency, parity. Investigation covers",
+			"  research, root-cause diagnosis, feasibility, and behavior you cannot",
+			"  observe here. If the work is reasoning over evidence a consultant can",
+			"  read or be handed, consult; if it needs local execution state (builds,",
+			"  test runs, devices, interactive sessions), run it yourself and consult",
+			"  on the interpretation. Evaluating a consultant's own answer is",
+			"  verification: use its continue id, not a new consult. Brief one",
+			"  consultant unless the task demands two independent perspectives. For",
+			"  these tasks, \"not needed\" means a short lookup that the code, documents,",
+			"  or evidence in front of you already settle, or a check a local command",
+			"  decides outright; give that as the reason.",
 			"- The decision is yours and is never enforced: consulting stays your",
 			"  stated judgment, not a gate.",
 			"",
