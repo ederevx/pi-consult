@@ -16,7 +16,6 @@ import { ConsultCommands } from "./consult-commands.ts";
 import { ConsultConfig } from "./consult-config.ts";
 import { ConsultContract } from "./consult-contract.ts";
 import { ConsultIndex } from "./consult-index.ts";
-import { ConsultPin } from "./consult-pin.ts";
 import { ConsultRunner } from "./consult-runner.ts";
 import { ConsultSettings } from "./consult-settings.ts";
 import { ConsultSettingsStore } from "./consult-settings-store.ts";
@@ -52,7 +51,6 @@ export class ConsultExtension {
 		);
 		const index = new ConsultIndex(ledger);
 		const artifacts = new ArtifactStore(config.artifactDir);
-		const pin = new ConsultPin(config.pin);
 
 		new PreConsultTool(contract, runner).register(pi);
 		new ConsultTool({
@@ -64,12 +62,11 @@ export class ConsultExtension {
 			screen: new SecretScreen(),
 			composer: new BriefComposer(),
 			formatter: new AnswerFormatter(config.output),
-			pin,
 		}).register(pi);
 		new ImplementationGate(ledger, classifier, contract).register(pi);
 		new AgentAvailability(new FailureClassifier(), () => index.latest()?.consultId ?? null).register(pi);
 		new SessionLifecycle(ledger, runner, processes, artifacts, contract, config).register(pi);
-		new ConsultCommands(pi, ledger, index, contract, pin).register();
+		new ConsultCommands(pi, ledger, index, contract).register();
 	}
 }
 

@@ -33,7 +33,6 @@ import type { BriefComposer } from "./brief-composer.ts";
 import type { ConsultConfig } from "./consult-config.ts";
 import type { ConsultIndex } from "./consult-index.ts";
 import { ConsultProgressFeed } from "./consult-progress.ts";
-import type { ConsultPin } from "./consult-pin.ts";
 import type { ConsultRunner } from "./consult-runner.ts";
 import { ConsultResultView } from "./consult-result-view.ts";
 import type { BranchEntry, ReceiptLedger } from "./receipt-ledger.ts";
@@ -60,8 +59,6 @@ export interface ConsultToolDeps {
 	screen: SecretScreen;
 	composer: BriefComposer;
 	formatter: AnswerFormatter;
-	/** Pins the finished answer above the editor; absent means no pinning. */
-	pin?: ConsultPin;
 }
 
 /** A resolved continuation request. */
@@ -226,20 +223,16 @@ export class ConsultTool {
 		}
 
 		const consultId = this.deps.index.nextId();
-		this.deps.pin?.running(ctx, consultId, targets);
 		const sessionId = this.sessionId(ctx);
 		let paths: ConsultPaths;
 		try {
 			paths = await this.deps.artifacts.prepare(sessionId, consultId);
 			await this.deps.artifacts.write(paths.brief, composed);
 		} catch (error) {
-			this.deps.pin?.complete(ctx);
 			return this.failure(ctx, `could not persist the brief: ${this.message(error)}`);
 		}
 
 		const feed = new ConsultProgressFeed(targets, (snapshot) => {
-			// Mirror the live progress into the pinned widget; it self-guards.
-			this.deps.pin?.update(ctx, snapshot);
 			try {
 				onUpdate?.({
 					content: [{ type: "text", text: snapshot }],
@@ -285,8 +278,6 @@ export class ConsultTool {
 			parent?.removeEventListener("abort", onParentAbort);
 			feed.closeAndFlush();
 		}
-		// The pinned widget lives only while the consult runs.
-		this.deps.pin?.complete(ctx);
 
 		const runs: ConsultRun[] = [];
 		const answers = new Map<ConsultantName, string>();

@@ -41,11 +41,6 @@ export interface GateSettings {
 	trustReadOnlyHint: boolean;
 }
 
-/** The pinned latest-consult widget above the editor. */
-export interface PinSettings {
-	enabled: boolean;
-}
-
 /** How much consultant text reaches the model, in bytes and lines. */
 export interface OutputSettings {
 	totalBytes: number;
@@ -74,7 +69,6 @@ export class ConsultConfig {
 	readonly maxConcurrent: number;
 	readonly output: OutputSettings;
 	readonly gate: GateSettings;
-	readonly pin: PinSettings;
 	readonly claude: ConsultantSettings;
 	readonly codex: ConsultantSettings;
 
@@ -103,8 +97,6 @@ export class ConsultConfig {
 			block,
 			trustReadOnlyHint: ConsultConfig.bool(gate.trustReadOnlyHint, false),
 		};
-
-		this.pin = { enabled: ConsultConfig.bool(ConsultConfig.record(raw.pin).enabled, true) };
 
 		this.claude = ConsultConfig.consultantSettings(
 			"claude",
