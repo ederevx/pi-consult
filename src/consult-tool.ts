@@ -91,6 +91,8 @@ export class ConsultTool {
 				"Send a self-contained implementation brief to an external consultant " +
 				"(claude, codex, or both) and return its answer. You choose which " +
 				"consultant(s) and how many consults to run; consult as often as useful. " +
+				"Prefer a single consultant for most tasks: use target 'both' only when " +
+				"the task demands two independent perspectives or cross-validation. " +
 				"The answer is the plan of record: verify its claims rather than repeating " +
 				"its investigation, and carry every doubt back with continue. The " +
 				"consultants advise only; pi executes every change. Use `files` to " +
@@ -100,7 +102,7 @@ export class ConsultTool {
 			parameters: Type.Object({
 				target: Type.Union(
 					[Type.Literal("claude"), Type.Literal("codex"), Type.Literal("both")],
-					{ description: "Your choice of consultant(s). 'both' runs claude and codex concurrently on the same brief." },
+					{ description: "Your choice of consultant(s); prefer a single one. 'both' runs claude and codex concurrently on the same brief - reserve it for tasks that demand two independent perspectives." },
 				),
 				brief: Type.String({
 					minLength: 1,

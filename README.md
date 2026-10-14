@@ -17,8 +17,9 @@ the consultants advise, pi edits and runs commands.
   workflow in the system prompt after a compaction.
 - **`consult`** — sends a self-contained brief to `claude`, `codex`, or both
   concurrently and returns their answers plus a continuation id. The agent
-  chooses which consultant(s) and how many consults to run; repeat or continue
-  as useful. The answer renders expanded in the tool window regardless of the
+  chooses which consultant(s) and how many consults to run — preferring a
+  single consultant, with `both` only when the task demands two independent
+  perspectives — and repeats or continues as useful. The answer renders expanded in the tool window regardless of the
   global tool-expansion setting (a live stream tails until expanded); the
   model-facing result text is unchanged.
 - **The gate** — a `tool_call` handler that blocks implementation work (`edit`,
@@ -47,6 +48,10 @@ The catalogue instructs the agent, and the tool's prompt guidelines repeat it:
   id, not to a silent parallel investigation. Deviations from the
   recommendation are reported to the user with the verification that justified
   them.
+- Most tasks consult **one** consultant; `target: "both"` is reserved for
+  tasks that genuinely demand two independent perspectives (cross-validating
+  a high-stakes design, comparing incompatible approaches), never as a
+  default.
 
 ### Pinned answers
 
@@ -142,7 +147,7 @@ Codex is surfaced as a warning.
 
 | Parameter | Meaning |
 |---|---|
-| `target` | `"claude"`, `"codex"`, or `"both"` |
+| `target` | `"claude"`, `"codex"`, or `"both"` — prefer a single consultant; `both` only when the task demands it |
 | `brief` | The self-contained question: goal, constraints, paths, what you want back |
 | `contains_no_secrets` | Required attestation; must be `true` |
 | `files` | Paths the consultant should read itself (up to 50) |

@@ -44,6 +44,7 @@ test("pre_consult: returns the v3 catalogue and a versioned receipt", async () =
 	assertNotIncludes(text, "consult_waive");
 	assertNotIncludes(text, "consult threshold");
 	assertIncludes(text, "claude: unavailable");
+	assertIncludes(text, "prefer a single consultant", "the singular-consultant preference is in the catalogue");
 });
 
 test("pre_consult: the tool carries workflow prompt guidelines", () => {
@@ -52,6 +53,7 @@ test("pre_consult: the tool carries workflow prompt guidelines", () => {
 	assert(guidelines.length >= 2, "both workflow rules survive compaction");
 	assertIncludes(guidelines.join("\n"), "Consultation decision");
 	assertIncludes(guidelines.join("\n"), "continuation");
+	assertIncludes(guidelines.join("\n"), "single consultant", "the singular-consultant preference survives compaction");
 });
 
 test("pre_consult: a probe failure still returns the full terms", async () => {
