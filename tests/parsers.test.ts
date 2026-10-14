@@ -107,6 +107,47 @@ test("claude parser: object-shaped permission denials use the tool name", () => 
 	assertEq(parser.finish().permissionDenials[0], "Bash");
 });
 
+test("codex parser: reasoning, search, mcp, plan, and warnings are live events", () => {
+	const events: string[] = [];
+	const parser = new CodexEventParser((line) => events.push(line));
+	parser.push(
+		'{"type":"item.started","item":{"type":"mcp_tool_call","server":"srv","tool":"read","status":"in_progress"}}',
+	);
+	parser.push(
+		'{"type":"item.completed","item":{"type":"mcp_tool_call","server":"srv","tool":"read","status":"completed"}}',
+	);
+	parser.push('{"type":"item.completed","item":{"type":"web_search","query":"stream-json"}}');
+	parser.push(
+		'{"type":"item.completed","item":{"type":"reasoning","text":"checking the parser\\nsecond line"}}',
+	);
+	parser.push(
+		'{"type":"item.started","item":{"type":"todo_list","items":[{"text":"read","completed":false}]}}',
+	);
+	parser.push(
+		'{"type":"item.updated","item":{"type":"todo_list","items":[{"text":"read","completed":true},{"text":"write","completed":false}]}}',
+	);
+	parser.push('{"type":"item.completed","item":{"type":"error","message":"non-fatal"}}');
+	const text = events.join("\n");
+	assertIncludes(text, "srv/read started");
+	assertIncludes(text, "srv/read completed");
+	assertIncludes(text, "search: stream-json");
+	assertIncludes(text, "thinking: checking the parser");
+	assertIncludes(text, "plan: read");
+	assertIncludes(text, "plan: write", "a plan update reports the newly active step");
+	assertIncludes(text, "warning: non-fatal");
+	assertEq(events.length, 7, "one live event per reported item");
+});
+
+test("codex parser: an unchanged plan step is reported once", () => {
+	const events: string[] = [];
+	const parser = new CodexEventParser((line) => events.push(line));
+	const plan =
+		'{"type":"item.updated","item":{"type":"todo_list","items":[{"text":"step","completed":false}]}}';
+	parser.push(plan);
+	parser.push(plan);
+	assertEq(events.length, 1);
+});
+
 test("codex parser: a recovered error does not fail a completed turn", () => {
 	const parser = new CodexEventParser();
 	parser.push('{"type":"error","message":"transient"}');
