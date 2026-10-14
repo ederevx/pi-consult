@@ -41,6 +41,7 @@ export class PreConsultTool {
 				'Before your first implementation call, state a visible consultation decision for the task: "Consultation decision: needed - <reason>." or "Consultation decision: not needed - <reason>".',
 				"Verify a consultant's claims without redoing its investigation; carry every doubt back through consult continuation.",
 				"Prefer a single consultant for most tasks; use target 'both' only when the task demands two independent perspectives.",
+				'For investigative tasks (research, root-cause diagnosis, comparing approaches, audits, feasibility, design review, verifying behavior you cannot observe here), lean toward consulting one consultant; "not needed" fits a short lookup already settled by the code or evidence in view, and the decision line gives that reason.',
 			],
 			parameters: Type.Object({
 				acknowledge: Type.Literal(true, {

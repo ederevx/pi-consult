@@ -25,7 +25,7 @@ function executor(definition: ToolDefinition) {
 	) => Promise<AgentToolResult<PreConsultDetails>>;
 }
 
-test("pre_consult: returns the v3 catalogue and a versioned receipt", async () => {
+test("pre_consult: returns the current catalogue and a versioned receipt", async () => {
 	// A stub runner keeps the probe away from the real CLIs.
 	const definition = register({
 		probeAll: async () => [{ name: "claude", available: false, error: "missing" }],
@@ -45,6 +45,17 @@ test("pre_consult: returns the v3 catalogue and a versioned receipt", async () =
 	assertNotIncludes(text, "consult threshold");
 	assertIncludes(text, "claude: unavailable");
 	assertIncludes(text, "prefer a single consultant", "the singular-consultant preference is in the catalogue");
+	assertIncludes(text, "Investigative tasks lean toward consulting");
+	assertIncludes(text, '"not needed" means a short', "the not-needed threshold for investigation is stated");
+	assertNotIncludes(text, "would materially improve the work", "the old optional-investigation wording is gone");
+	assertIncludes(text, "unless the task demands two independent", "the investigative default keeps the both-exception");
+	const base = text.indexOf("- Base it on uncertainty");
+	const investigative = text.indexOf("- Investigative tasks lean toward consulting");
+	const neverEnforced = text.indexOf("- The decision is yours and is never enforced");
+	assert(
+		base >= 0 && base < investigative && investigative < neverEnforced,
+		"the investigative default sits inside the never-enforced scope",
+	);
 });
 
 test("pre_consult: the tool carries workflow prompt guidelines", () => {
@@ -54,6 +65,9 @@ test("pre_consult: the tool carries workflow prompt guidelines", () => {
 	assertIncludes(guidelines.join("\n"), "Consultation decision");
 	assertIncludes(guidelines.join("\n"), "continuation");
 	assertIncludes(guidelines.join("\n"), "single consultant", "the singular-consultant preference survives compaction");
+	assert(guidelines.length >= 4, "the investigative default is a guideline");
+	assertIncludes(guidelines.join("\n"), "investigative tasks", "the investigative default survives compaction");
+	assertIncludes(guidelines.join("\n"), "short lookup");
 });
 
 test("pre_consult: a probe failure still returns the full terms", async () => {
