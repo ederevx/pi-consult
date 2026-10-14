@@ -37,11 +37,11 @@ import "./consult-tool.test.ts";
 import "./pre-consult.test.ts";
 import "./consult-progress.test.ts";
 import "./settings.test.ts";
+import "./settings-view.test.ts";
 import "./runner.test.ts";
 import "./artifact-store.test.ts";
 import "./gate.test.ts";
 import "./result-view.test.ts";
-import "./pin.test.ts";
 import "./availability.test.ts";
 
 await registry.runAll();

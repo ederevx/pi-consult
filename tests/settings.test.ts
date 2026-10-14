@@ -55,15 +55,15 @@ test("settings: rejects unknown keys and invalid values", () => {
 	);
 });
 
-test("settings: applies the pin toggle and preserves legacy keys on disk", () => {
-	const { store, file } = make("settings-pin");
+test("settings: one edit preserves unrelated and legacy keys on disk", () => {
+	const { store, file } = make("settings-preserve");
 	writeFileSync(
 		file,
 		JSON.stringify({ piConsult: { gate: { consultEffort: "always", allow: ["x"] } } }),
 	);
-	assertEq(store.apply("pin.enabled", "off"), undefined);
+	assertEq(store.apply("retentionDays", "7"), undefined);
 	const raw = JSON.parse(readFileSync(file, "utf8"));
-	assertEq(raw.piConsult.pin.enabled, false);
+	assertEq(raw.piConsult.retentionDays, 7);
 	assertEq(raw.piConsult.gate.consultEffort, "always", "unknown legacy key survives an unrelated edit");
 	assertEq(raw.piConsult.gate.allow[0], "x", "unrelated gate key untouched");
 });

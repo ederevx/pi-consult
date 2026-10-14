@@ -53,18 +53,6 @@ The catalogue instructs the agent, and the tool's prompt guidelines repeat it:
   a high-stakes design, comparing incompatible approaches), never as a
   default.
 
-### Pinned answers
-
-pi 1.0.4 has no per-tool pin API, so while a `consult` runs its live output
-is mirrored into a widget pinned above the editor (`pin.enabled` sets the
-initial state): the consult id and targets, then a tail of the same progress
-snapshot the tool window streams - activity lines and partial answers. The
-widget **clears itself when the consult completes** (including interrupts
-and failures); the finished answer stays in the expanded tool row and the
-artifact directory. `/consult-pin` is a pure toggle: it flips whether consult
-results pin at all for the rest of the session, taking effect on the active
-consult immediately.
-
 ### When the agent stops
 
 The extension watches the model's own results (`message_end`,
@@ -86,7 +74,7 @@ follow-up can resume with `continue`.
 ## Install
 
 ```bash
-pi install git:github.com/ederevx/pi-consult@v0.7.0
+pi install git:github.com/ederevx/pi-consult@v0.8.0
 ```
 
 The package has no runtime dependencies; it uses the host-provided
@@ -113,7 +101,6 @@ Missing or malformed values fall back to the defaults.
     "maxConcurrent": 2,
     "output": { "totalBytes": 24000, "answerBytes": 12000, "maxLines": 800 },
     "gate": { "allow": ["pre_memory", "pre_daemon", "pre_cache", "pre_teams", "transcript_read"], "block": [], "trustReadOnlyHint": false },
-    "pin": { "enabled": true },
     "claude": { "enabled": true, "command": "claude", "isolation": "clean", "timeoutMs": 1200000 },
     "codex": { "enabled": true, "command": "codex", "isolation": "clean", "timeoutMs": 1200000 }
   }
@@ -136,8 +123,6 @@ while a retired source is still present.
 - `isolation: "clean"` runs the consultant without the user's own hooks and
   instructions (`claude --safe-mode --restricted`, `codex --ignore-user-config
   --ignore-rules`). `"inherit"` keeps them.
-- `pin.enabled` (default on) is the session's initial pinning state;
-  `/consult-pin` flips it live.
 - `gate.allow`/`gate.block` shape **pre-acknowledgement** classification only.
   The allow list exempts other extensions' onboarding tools (`pre_memory`,
   `pre_daemon`, ...); it can never exempt pi's built-in mutations. `gate.block`
@@ -183,13 +168,18 @@ spawned; a suspected secret is refused, never sent.
 ## Commands
 
 - `/consult-status` — show acknowledgement state and consultation history.
-- `/consult-pin` — toggle whether live consult results pin above the editor.
-- `/consult-settings` — view or change settings. Run it with no argument to
-  pick a setting interactively, or use `/consult-settings key=value`,
-  `/consult-settings list`, or `/consult-settings reset`. Settings are written
-  to the `piConsult` object of pi's `~/.pi/agent/settings.json` (patched, so
-  every other key survives); `reset` removes only that object, and changes take
-  effect on `/reload`.
+- `/consult-settings` — open pi's settings dock: the same two-column
+  `SettingsList` as pi's own `/settings`, where flags and enums cycle in place,
+  every other value opens an editor seeded with the current one, and a trailing
+  **Restore defaults** row deletes the stored overrides after a confirmation.
+  Escape closes the dock, enter or space changes the selected row, and a
+  rejected value keeps its editor open with the error reported. The command
+  line stays available too: `/consult-settings key=value`,
+  `/consult-settings list`, and `/consult-settings reset` print or edit the
+  same catalog for scripted and headless sessions. Settings are written to the
+  `piConsult` object of pi's `~/.pi/agent/settings.json` (patched, so every
+  other key survives); `reset` removes only that object, and changes take effect
+  on `/reload`.
 
 ## Development
 

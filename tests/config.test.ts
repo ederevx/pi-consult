@@ -34,7 +34,6 @@ test("config: defaults when the settings file is missing", () => {
 	assertEq(config.codex.command, "codex", "codex command");
 	assertEq(config.claude.isolation, "clean", "claude isolation");
 	assertEq(config.gate.trustReadOnlyHint, false, "read-only hints untrusted by default");
-	assertEq(config.pin.enabled, true, "pinning on by default");
 	assert(config.gate.allow.includes("pre_memory"), "onboarding tools allowed");
 	assertEq(config.output.totalBytes, ConsultConfig.DEFAULT_TOTAL_BYTES, "total budget");
 });
@@ -48,7 +47,6 @@ test("config: reads the piConsult namespace and clamps bad values", () => {
 			confirmFirstConsult: false,
 			maxConcurrent: 4,
 			gate: { allowBashBeforeConsult: true, consultEffort: "always", allow: ["foo", "bar"], block: ["baz"] },
-			pin: { enabled: false },
 			output: { totalBytes: 5000, answerBytes: "nope" },
 			claude: { command: "my-claude", model: "sonnet", timeoutMs: 1000, isolation: "inherit" },
 			codex: { timeoutMs: -1 },
@@ -62,7 +60,6 @@ test("config: reads the piConsult namespace and clamps bad values", () => {
 		false,
 		"legacy gate keys are dropped, not carried into the parsed settings",
 	);
-	assertEq(config.pin.enabled, false, "pin override");
 	assertEq(config.gate.allow.includes("foo"), true, "custom allow");
 	assertEq(config.gate.block[0], "baz", "custom block");
 	assertEq(config.output.totalBytes, 5000, "total override");

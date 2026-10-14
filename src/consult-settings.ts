@@ -17,11 +17,15 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 
 import { ConsultConfig } from "./consult-config.ts";
+import { ConsultSettingsPresenter } from "./consult-settings-presenter.ts";
 import { ConsultSettingsStore } from "./consult-settings-store.ts";
 
 /** One configurable setting. */
-interface SettingSpec {
+export interface SettingSpec {
+	/** The flat key the command and the dock use, and the row id. */
 	key: string;
+	/** The dock's left-column label. */
+	label: string;
 	path: readonly string[];
 	kind: "boolean" | "enum" | "number" | "json" | "string";
 	values?: readonly string[];
@@ -30,23 +34,22 @@ interface SettingSpec {
 
 export class ConsultSettings {
 	private static readonly SPECS: readonly SettingSpec[] = [
-		{ key: "enabled", path: ["enabled"], kind: "boolean", values: ["on", "off"], description: "Enable pi-consult" },
-		{ key: "confirmFirstConsult", path: ["confirmFirstConsult"], kind: "boolean", values: ["off", "on"], description: "Ask before the first brief each session leaves this machine" },
-		{ key: "claude.enabled", path: ["claude", "enabled"], kind: "boolean", values: ["on", "off"], description: "Allow the claude consultant" },
-		{ key: "codex.enabled", path: ["codex", "enabled"], kind: "boolean", values: ["on", "off"], description: "Allow the codex consultant" },
-		{ key: "claude.isolation", path: ["claude", "isolation"], kind: "enum", values: ["clean", "inherit"], description: "Run claude without (clean) or with (inherit) your own agent setup" },
-		{ key: "codex.isolation", path: ["codex", "isolation"], kind: "enum", values: ["clean", "inherit"], description: "Run codex without (clean) or with (inherit) your own agent setup" },
-		{ key: "gate.trustReadOnlyHint", path: ["gate", "trustReadOnlyHint"], kind: "boolean", values: ["off", "on"], description: "Trust a tool's self-declared readOnlyHint" },
-		{ key: "pin.enabled", path: ["pin", "enabled"], kind: "boolean", values: ["on", "off"], description: "Keep the latest consult answer pinned above the editor" },
-		{ key: "maxConcurrent", path: ["maxConcurrent"], kind: "number", description: "Concurrent consultant processes" },
-		{ key: "retentionDays", path: ["retentionDays"], kind: "number", description: "Days to keep consult artifacts" },
-		{ key: "claude.model", path: ["claude", "model"], kind: "string", description: "Default claude model" },
-		{ key: "codex.model", path: ["codex", "model"], kind: "string", description: "Default codex model" },
-		{ key: "claude.timeoutMs", path: ["claude", "timeoutMs"], kind: "number", description: "claude timeout in milliseconds" },
-		{ key: "codex.timeoutMs", path: ["codex", "timeoutMs"], kind: "number", description: "codex timeout in milliseconds" },
-		{ key: "artifactDir", path: ["artifactDir"], kind: "string", description: "Consult artifact directory" },
-		{ key: "gate.allow", path: ["gate", "allow"], kind: "json", description: "Tool names always allowed (JSON array)" },
-		{ key: "gate.block", path: ["gate", "block"], kind: "json", description: "Tool names always blocked (JSON array)" },
+		{ key: "enabled", label: "Enabled", path: ["enabled"], kind: "boolean", values: ["off", "on"], description: "Enable pi-consult" },
+		{ key: "confirmFirstConsult", label: "Confirm first brief", path: ["confirmFirstConsult"], kind: "boolean", values: ["off", "on"], description: "Ask before the first brief each session leaves this machine" },
+		{ key: "maxConcurrent", label: "Concurrent consultants", path: ["maxConcurrent"], kind: "number", description: "Consultant processes allowed to run at once" },
+		{ key: "claude.enabled", label: "Claude enabled", path: ["claude", "enabled"], kind: "boolean", values: ["off", "on"], description: "Allow the claude consultant" },
+		{ key: "claude.model", label: "Claude model", path: ["claude", "model"], kind: "string", description: "Default claude model (empty for the CLI default)" },
+		{ key: "claude.isolation", label: "Claude isolation", path: ["claude", "isolation"], kind: "enum", values: ["clean", "inherit"], description: "Run claude without (clean) or with (inherit) your own agent setup" },
+		{ key: "claude.timeoutMs", label: "Claude timeout (ms)", path: ["claude", "timeoutMs"], kind: "number", description: "Per-consult timeout for claude" },
+		{ key: "codex.enabled", label: "Codex enabled", path: ["codex", "enabled"], kind: "boolean", values: ["off", "on"], description: "Allow the codex consultant" },
+		{ key: "codex.model", label: "Codex model", path: ["codex", "model"], kind: "string", description: "Default codex model (empty for the CLI default)" },
+		{ key: "codex.isolation", label: "Codex isolation", path: ["codex", "isolation"], kind: "enum", values: ["clean", "inherit"], description: "Run codex without (clean) or with (inherit) your own agent setup" },
+		{ key: "codex.timeoutMs", label: "Codex timeout (ms)", path: ["codex", "timeoutMs"], kind: "number", description: "Per-consult timeout for codex" },
+		{ key: "artifactDir", label: "Artifact directory", path: ["artifactDir"], kind: "string", description: "Where briefs and answers are written" },
+		{ key: "retentionDays", label: "Retention (days)", path: ["retentionDays"], kind: "number", description: "Days to keep consult artifacts" },
+		{ key: "gate.allow", label: "Gate allow", path: ["gate", "allow"], kind: "json", description: "Tool names always allowed before the acknowledgement (JSON array)" },
+		{ key: "gate.block", label: "Gate block", path: ["gate", "block"], kind: "json", description: "Tool names always blocked before the acknowledgement (JSON array)" },
+		{ key: "gate.trustReadOnlyHint", label: "Trust read-only hints", path: ["gate", "trustReadOnlyHint"], kind: "boolean", values: ["off", "on"], description: "Trust a tool's self-declared readOnlyHint" },
 	];
 
 	private readonly store: ConsultSettingsStore;
@@ -71,16 +74,17 @@ export class ConsultSettings {
 		});
 	}
 
+	/** Every configurable setting, in dock order. */
+	specs(): readonly SettingSpec[] {
+		return ConsultSettings.SPECS;
+	}
+
 	/** The current effective value of every setting, as display strings. */
 	current(): Map<string, string> {
 		const config = ConsultConfig.load(this.store);
 		const values = new Map<string, string>();
 		for (const spec of ConsultSettings.SPECS) {
-			const value = config.value(spec.path);
-			values.set(
-				spec.key,
-				typeof value === "boolean" ? (value ? "on" : "off") : value === undefined ? "" : String(value),
-			);
+			values.set(spec.key, ConsultSettings.display(config.value(spec.path)));
 		}
 		return values;
 	}
@@ -141,26 +145,21 @@ export class ConsultSettings {
 		await this.present(ctx);
 	}
 
+	/**
+	 * Open pi's settings dock; when no TUI can host it, list the settings
+	 * instead, so the command always answers.
+	 */
 	private async present(ctx: ExtensionCommandContext): Promise<void> {
-		const specs = ConsultSettings.SPECS.filter((spec) => spec.values !== undefined);
-		const current = this.current();
-		const options = specs.map(
-			(spec) => `${spec.key} = ${current.get(spec.key)}  -  ${spec.description}`,
-		);
-		const choice = await ctx.ui.select("pi-consult settings", options);
-		if (choice === undefined) return;
-		const spec = specs[options.indexOf(choice)];
-		if (!spec?.values) return;
-		const value = await ctx.ui.select(`${spec.key}: ${spec.description}`, [...spec.values]);
-		if (value === undefined) return;
-		const error = this.apply(spec.key, value);
-		this.notify(
-			ctx,
-			error ??
-				`pi-consult: ${spec.key} = ${value}. Saved in the ${ConsultSettingsStore.NAMESPACE} ` +
-					`namespace of ${this.store.path()}. Takes effect on /reload.`,
-			error ? "error" : "info",
-		);
+		const presented = await new ConsultSettingsPresenter(this).present(ctx);
+		if (!presented) this.notify(ctx, this.listing());
+	}
+
+	/** A stored value as the surface displays and seeds it. */
+	private static display(value: unknown): string {
+		if (typeof value === "boolean") return value ? "on" : "off";
+		if (value === undefined) return "";
+		if (typeof value === "object" && value !== null) return JSON.stringify(value);
+		return String(value);
 	}
 
 	/** Warn once per session when a retired configuration source is present. */
