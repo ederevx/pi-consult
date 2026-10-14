@@ -5,6 +5,7 @@ import { AnswerFormatter } from "../src/answer-formatter.ts";
 import { ArtifactStore } from "../src/artifact-store.ts";
 import { BriefComposer } from "../src/brief-composer.ts";
 import { ConsultConfig } from "../src/consult-config.ts";
+import { ConsultSettingsStore } from "../src/consult-settings-store.ts";
 import { ConsultContract } from "../src/consult-contract.ts";
 import { ConsultIndex } from "../src/consult-index.ts";
 import { ConsultRunner } from "../src/consult-runner.ts";
@@ -65,15 +66,17 @@ function configFile(claudeCommand: string, codexCommand: string): ConsultConfig 
 	writeFileSync(
 		path,
 		JSON.stringify({
-			confirmFirstConsult: false,
-			artifactDir: join(scratchDir(), "integration-artifacts"),
-			output: { totalBytes: 8000, answerBytes: 4000, maxLines: 100 },
-			claude: { command: claudeCommand },
-			codex: { command: codexCommand },
-			maxConcurrent: 2,
+			piConsult: {
+				confirmFirstConsult: false,
+				artifactDir: join(scratchDir(), "integration-artifacts"),
+				output: { totalBytes: 8000, answerBytes: 4000, maxLines: 100 },
+				claude: { command: claudeCommand },
+				codex: { command: codexCommand },
+				maxConcurrent: 2,
+			},
 		}),
 	);
-	return ConsultConfig.load(path);
+	return ConsultConfig.load(new ConsultSettingsStore(path));
 }
 
 function buildTool(config: ConsultConfig) {

@@ -86,7 +86,7 @@ follow-up can resume with `continue`.
 ## Install
 
 ```bash
-pi install git:github.com/ederevx/pi-consult@v0.6.0
+pi install git:github.com/ederevx/pi-consult@v0.7.0
 ```
 
 The package has no runtime dependencies; it uses the host-provided
@@ -97,23 +97,37 @@ a project-planted `./claude` runs only if `.` is on `PATH`.
 
 ## Configuration
 
-Optional, at `~/.pi/agent/pi-consult.json` (override with `PI_CONSULT_CONFIG`).
+pi-consult stores its settings in the `piConsult` object of pi's own
+`~/.pi/agent/settings.json`, the same convention as pi-teams (`piTeams`) and
+pi-daemon (`piDaemon`). The agent directory honors `PI_CODING_AGENT_DIR`.
 Missing or malformed values fall back to the defaults.
 
 ```json
 {
-  "enabled": true,
-  "confirmFirstConsult": false,
-  "artifactDir": "~/.pi/agent/pi-consult",
-  "retentionDays": 30,
-  "maxConcurrent": 2,
-  "output": { "totalBytes": 24000, "answerBytes": 12000, "maxLines": 800 },
-  "gate": { "allow": ["pre_memory", "pre_daemon", "pre_cache", "pre_teams", "transcript_read"], "block": [], "trustReadOnlyHint": false },
-  "pin": { "enabled": true },
-  "claude": { "enabled": true, "command": "claude", "isolation": "clean", "timeoutMs": 1200000 },
-  "codex": { "enabled": true, "command": "codex", "isolation": "clean", "timeoutMs": 1200000 }
+  "defaultModel": "openrouter/deepseek/deepseek-v4.1-flash",
+  "piConsult": {
+    "enabled": true,
+    "confirmFirstConsult": false,
+    "artifactDir": "~/.pi/agent/pi-consult",
+    "retentionDays": 30,
+    "maxConcurrent": 2,
+    "output": { "totalBytes": 24000, "answerBytes": 12000, "maxLines": 800 },
+    "gate": { "allow": ["pre_memory", "pre_daemon", "pre_cache", "pre_teams", "transcript_read"], "block": [], "trustReadOnlyHint": false },
+    "pin": { "enabled": true },
+    "claude": { "enabled": true, "command": "claude", "isolation": "clean", "timeoutMs": 1200000 },
+    "codex": { "enabled": true, "command": "codex", "isolation": "clean", "timeoutMs": 1200000 }
+  }
 }
 ```
+
+pi preserves top-level keys it does not know, so the namespace survives pi's
+own settings writes.
+
+**Migrating from v0.6 and earlier:** the retired `~/.pi/agent/pi-consult.json`
+file and `PI_CONSULT_CONFIG` are no longer read or written. Move the old
+object under `piConsult` without replacing pi's other settings, `/reload`, then
+remove the old file and unset the variable. pi-consult warns once per session
+while a retired source is still present.
 
 - `confirmFirstConsult` is off by default, so briefs are granted without a
   prompt. When on, it shows a UI confirmation before the first brief of a
@@ -173,7 +187,8 @@ spawned; a suspected secret is refused, never sent.
 - `/consult-settings` — view or change settings. Run it with no argument to
   pick a setting interactively, or use `/consult-settings key=value`,
   `/consult-settings list`, or `/consult-settings reset`. Settings are written
-  to `~/.pi/agent/pi-consult.json` (patched, so unknown keys survive) and take
+  to the `piConsult` object of pi's `~/.pi/agent/settings.json` (patched, so
+  every other key survives); `reset` removes only that object, and changes take
   effect on `/reload`.
 
 ## Development

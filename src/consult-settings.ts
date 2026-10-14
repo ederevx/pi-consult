@@ -1,30 +1,23 @@
 /**
  * pi-consult — the `/consult-settings` command.
  *
- * Owns the user-facing settings surface and the only writer of the raw
- * configuration file. It patches the existing JSON so unknown keys survive,
- * writes atomically through a same-directory rename, and refuses to
- * overwrite a file that is not valid JSON. It is registered even when the
- * extension is disabled, so it can turn the extension back on.
+ * Owns the user-facing settings surface: the catalog of configurable keys,
+ * their parsing, and their display. Persistence belongs to
+ * `ConsultSettingsStore`, which owns the `piConsult` namespace of pi's
+ * `settings.json`; this class never touches the file itself. It is
+ * registered even when the extension is disabled, so it can turn the
+ * extension back on, and it warns once per session when a retired
+ * `pi-consult.json` or `PI_CONSULT_CONFIG` is still around.
  */
 
-import {
-	chmodSync,
-	existsSync,
-	mkdirSync,
-	readFileSync,
-	realpathSync,
-	renameSync,
-	rmSync,
-	statSync,
-	writeFileSync,
-} from "node:fs";
-import { randomUUID } from "node:crypto";
-import { dirname } from "node:path";
-
-import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type {
+	ExtensionAPI,
+	ExtensionCommandContext,
+	ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 
 import { ConsultConfig } from "./consult-config.ts";
+import { ConsultSettingsStore } from "./consult-settings-store.ts";
 
 /** One configurable setting. */
 interface SettingSpec {
@@ -56,16 +49,22 @@ export class ConsultSettings {
 		{ key: "gate.block", path: ["gate", "block"], kind: "json", description: "Tool names always blocked (JSON array)" },
 	];
 
-	private readonly file: string;
+	private readonly store: ConsultSettingsStore;
+	private warned = false;
 
-	constructor(file: string = ConsultConfig.path()) {
-		this.file = file;
+	constructor(store: ConsultSettingsStore = new ConsultSettingsStore()) {
+		this.store = store;
 	}
 
-	/** Register the command with pi. */
+	/** Register the command and the legacy-configuration notice with pi. */
 	register(pi: ExtensionAPI): void {
+		pi.on("session_start", (_event, ctx: ExtensionContext) => {
+			this.warnLegacy(ctx);
+		});
 		pi.registerCommand("consult-settings", {
-			description: "View or change pi-consult settings (writes ~/.pi/agent/pi-consult.json).",
+			description:
+				"View or change pi-consult settings (writes the piConsult namespace " +
+				"of ~/.pi/agent/settings.json).",
 			handler: async (args: string, ctx: ExtensionCommandContext) => {
 				await this.handle(args, ctx);
 			},
@@ -74,16 +73,13 @@ export class ConsultSettings {
 
 	/** The current effective value of every setting, as display strings. */
 	current(): Map<string, string> {
-		const config = ConsultConfig.load(this.file) as unknown as Record<string, unknown>;
+		const config = ConsultConfig.load(this.store);
 		const values = new Map<string, string>();
 		for (const spec of ConsultSettings.SPECS) {
-			let node: unknown = config;
-			for (const part of spec.path) {
-				node = (node as Record<string, unknown>)?.[part];
-			}
+			const value = config.value(spec.path);
 			values.set(
 				spec.key,
-				typeof node === "boolean" ? (node ? "on" : "off") : node === undefined ? "" : String(node),
+				typeof value === "boolean" ? (value ? "on" : "off") : value === undefined ? "" : String(value),
 			);
 		}
 		return values;
@@ -95,18 +91,25 @@ export class ConsultSettings {
 		if (!spec) return `unknown setting: ${key}`;
 		const parsed = this.parse(spec, value);
 		if (parsed.error !== undefined) return parsed.error;
-		const loaded = this.readRaw();
-		if (loaded.error !== undefined) return loaded.error;
-		const raw = loaded.raw ?? {};
-		this.setPath(raw, spec.path, parsed.value);
-		return this.writeAtomic(raw);
+		return this.store.set(spec.path, parsed.value);
+	}
+
+	/** Remove the whole `piConsult` namespace. Returns an error, or undefined. */
+	reset(): string | undefined {
+		return this.store.reset();
 	}
 
 	private async handle(args: string, ctx: ExtensionCommandContext): Promise<void> {
 		const trimmed = args.trim();
 		if (trimmed === "reset") {
 			const error = this.reset();
-			this.notify(ctx, error ?? `pi-consult settings reset (${this.file}). Takes effect on /reload.`);
+			this.notify(
+				ctx,
+				error ??
+					`pi-consult: removed the ${ConsultSettingsStore.NAMESPACE} namespace from ` +
+						`${this.store.path()}. Defaults take effect on /reload.`,
+				error ? "error" : "info",
+			);
 			return;
 		}
 		if (trimmed === "list" || trimmed === "show") {
@@ -120,7 +123,10 @@ export class ConsultSettings {
 			const error = this.apply(key, value);
 			this.notify(
 				ctx,
-				error ?? `pi-consult: ${key} = ${value}. Takes effect on /reload (${this.file}).`,
+				error ??
+					`pi-consult: ${key} = ${value}. Saved in the ${ConsultSettingsStore.NAMESPACE} ` +
+						`namespace of ${this.store.path()}. Takes effect on /reload.`,
+				error ? "error" : "info",
 			);
 			return;
 		}
@@ -150,16 +156,29 @@ export class ConsultSettings {
 		const error = this.apply(spec.key, value);
 		this.notify(
 			ctx,
-			error ?? `pi-consult: ${spec.key} = ${value}. Takes effect on /reload (${this.file}).`,
+			error ??
+				`pi-consult: ${spec.key} = ${value}. Saved in the ${ConsultSettingsStore.NAMESPACE} ` +
+					`namespace of ${this.store.path()}. Takes effect on /reload.`,
+			error ? "error" : "info",
 		);
 	}
 
-	private reset(): string | undefined {
+	/** Warn once per session when a retired configuration source is present. */
+	private warnLegacy(ctx: ExtensionContext): void {
+		if (this.warned) return;
+		const legacy = this.store.legacySources();
+		if (!legacy.env && !(legacy.file && !this.store.hasNamespace())) return;
+		this.warned = true;
+		if (!ctx.hasUI) return;
+		const notice =
+			`pi-consult v0.7: legacy configuration is no longer loaded. Copy its settings ` +
+			`into the ${ConsultSettingsStore.NAMESPACE} object in ${this.store.path()}, then ` +
+			"/reload." +
+			(legacy.env ? " PI_CONSULT_CONFIG is no longer supported." : "");
 		try {
-			if (existsSync(this.file)) rmSync(this.file);
-			return undefined;
-		} catch (error) {
-			return this.message(error);
+			ctx.ui.notify(notice, "warning");
+		} catch {
+			// No notification surface; nothing else to do.
 		}
 	}
 
@@ -169,7 +188,8 @@ export class ConsultSettings {
 		for (const spec of ConsultSettings.SPECS) {
 			lines.push(`  ${spec.key} = ${current.get(spec.key) || "(unset)"}`);
 		}
-		lines.push(`file: ${this.file}`);
+		lines.push(`namespace: ${ConsultSettingsStore.NAMESPACE}`);
+		lines.push(`file: ${this.store.path()}`);
 		lines.push("change with /consult-settings <key>=<value>, or interactively with /consult-settings");
 		return lines.join("\n");
 	}
@@ -203,64 +223,11 @@ export class ConsultSettings {
 		return { value };
 	}
 
-	private readRaw(): { raw?: Record<string, unknown>; error?: string } {
-		if (!existsSync(this.file)) return { raw: {} };
+	private notify(ctx: ExtensionCommandContext, text: string, level: "info" | "error" = "info"): void {
 		try {
-			const parsed = JSON.parse(readFileSync(this.file, "utf8"));
-			if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-				return { error: `refusing to edit ${this.file}: its root is not a JSON object` };
-			}
-			return { raw: parsed as Record<string, unknown> };
-		} catch (error) {
-			return { error: `refusing to edit ${this.file}: ${this.message(error)}` };
-		}
-	}
-
-	private setPath(raw: Record<string, unknown>, path: readonly string[], value: unknown): void {
-		let node = raw;
-		for (let index = 0; index < path.length - 1; index += 1) {
-			const key = path[index];
-			const next = node[key];
-			if (typeof next !== "object" || next === null || Array.isArray(next)) node[key] = {};
-			node = node[key] as Record<string, unknown>;
-		}
-		node[path[path.length - 1]] = value;
-	}
-
-	private writeAtomic(raw: Record<string, unknown>): string | undefined {
-		try {
-			const target = existsSync(this.file) ? realpathSync(this.file) : this.file;
-			mkdirSync(dirname(target), { recursive: true });
-			const mode = existsSync(target) ? statSync(target).mode & 0o777 : 0o600;
-			const temporary = `${target}.${process.pid}.${randomUUID()}.tmp`;
-			let created = false;
-			try {
-				writeFileSync(temporary, `${JSON.stringify(raw, null, 2)}\n`, {
-					encoding: "utf8",
-					flag: "wx",
-					mode,
-				});
-				created = true;
-				chmodSync(temporary, mode);
-				renameSync(temporary, target);
-			} finally {
-				if (created) rmSync(temporary, { force: true });
-			}
-			return undefined;
-		} catch (error) {
-			return this.message(error);
-		}
-	}
-
-	private notify(ctx: ExtensionCommandContext, text: string): void {
-		try {
-			ctx.ui.notify(text, "info");
+			ctx.ui.notify(text, level);
 		} catch {
 			// No notification surface; nothing else to do.
 		}
-	}
-
-	private message(error: unknown): string {
-		return error instanceof Error ? error.message : String(error);
 	}
 }

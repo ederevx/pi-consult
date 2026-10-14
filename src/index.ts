@@ -19,6 +19,7 @@ import { ConsultIndex } from "./consult-index.ts";
 import { ConsultPin } from "./consult-pin.ts";
 import { ConsultRunner } from "./consult-runner.ts";
 import { ConsultSettings } from "./consult-settings.ts";
+import { ConsultSettingsStore } from "./consult-settings-store.ts";
 import { ConsultTool } from "./consult-tool.ts";
 import { ClaudeConsultant } from "./consultants/claude-consultant.ts";
 import { CodexConsultant } from "./consultants/codex-consultant.ts";
@@ -34,8 +35,9 @@ import { ToolClassifier } from "./tool-classifier.ts";
 export class ConsultExtension {
 	/** Construct every owner once and register every handler. */
 	register(pi: ExtensionAPI): void {
-		const config = ConsultConfig.load();
-		new ConsultSettings(ConsultConfig.path()).register(pi);
+		const store = new ConsultSettingsStore();
+		const config = ConsultConfig.load(store);
+		new ConsultSettings(store).register(pi);
 		if (!config.enabled) return;
 		const classifier = new ToolClassifier(config.gate);
 		const contract = new ConsultContract();

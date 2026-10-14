@@ -1,11 +1,32 @@
-import { writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { ConsultConfig } from "../src/consult-config.ts";
+import { ConsultSettingsStore } from "../src/consult-settings-store.ts";
 import { assert, assertEq, scratchDir, test } from "./harness.ts";
 
-test("config: defaults when the file is missing", () => {
-	const config = ConsultConfig.load(join(scratchDir(), "does-not-exist.json"));
+/** A unique scratch directory for a settings-document test. */
+function scratch(name: string): string {
+	const dir = join(
+		scratchDir(),
+		`${name}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+	);
+	mkdirSync(dir, { recursive: true });
+	return dir;
+}
+
+/** Write a settings document and load it through the store. */
+function loadSettings(root: Record<string, unknown>): ConsultConfig {
+	const dir = scratch("config-doc");
+	const path = join(dir, "settings.json");
+	writeFileSync(path, JSON.stringify(root));
+	return ConsultConfig.load(new ConsultSettingsStore(path));
+}
+
+test("config: defaults when the settings file is missing", () => {
+	const config = ConsultConfig.load(
+		new ConsultSettingsStore(join(scratch("config-missing"), "settings.json")),
+	);
 	assertEq(config.enabled, true, "enabled");
 	assertEq(config.confirmFirstConsult, false, "confirmFirstConsult");
 	assertEq(config.maxConcurrent, 2, "maxConcurrent");
@@ -18,11 +39,11 @@ test("config: defaults when the file is missing", () => {
 	assertEq(config.output.totalBytes, ConsultConfig.DEFAULT_TOTAL_BYTES, "total budget");
 });
 
-test("config: overrides and clamp to defaults on bad values", () => {
-	const path = join(scratchDir(), "config-overrides.json");
-	writeFileSync(
-		path,
-		JSON.stringify({
+test("config: reads the piConsult namespace and clamps bad values", () => {
+	const config = loadSettings({
+		// Sibling keys of pi's own settings file are unrelated and ignored.
+		defaultModel: "some/model",
+		piConsult: {
 			enabled: false,
 			confirmFirstConsult: false,
 			maxConcurrent: 4,
@@ -31,9 +52,8 @@ test("config: overrides and clamp to defaults on bad values", () => {
 			output: { totalBytes: 5000, answerBytes: "nope" },
 			claude: { command: "my-claude", model: "sonnet", timeoutMs: 1000, isolation: "inherit" },
 			codex: { timeoutMs: -1 },
-		}),
-	);
-	const config = ConsultConfig.load(path);
+		},
+	});
 	assertEq(config.enabled, false, "enabled override");
 	assertEq(config.confirmFirstConsult, false, "confirm override");
 	assertEq(config.maxConcurrent, 4, "concurrency override");
@@ -51,4 +71,29 @@ test("config: overrides and clamp to defaults on bad values", () => {
 	assertEq(config.claude.model, "sonnet", "claude model");
 	assertEq(config.claude.isolation, "inherit", "claude isolation override");
 	assertEq(config.codex.timeoutMs, ConsultConfig.DEFAULT_TIMEOUT_MS, "bad timeout clamped");
+});
+
+test("config: a namespace that is not an object falls back to defaults", () => {
+	const config = loadSettings({ piConsult: "not an object" });
+	assertEq(config.enabled, true, "enabled default");
+	assertEq(config.maxConcurrent, 2, "concurrency default");
+	assertEq(config.claude.command, "claude", "claude command default");
+});
+
+test("config: a settings file that is not valid JSON falls back to defaults", () => {
+	const dir = scratch("config-corrupt");
+	const path = join(dir, "settings.json");
+	writeFileSync(path, "{ not json");
+	const config = ConsultConfig.load(new ConsultSettingsStore(path));
+	assertEq(config.enabled, true, "enabled default");
+	assertEq(config.artifactDir, join(dir, "pi-consult"), "artifacts default to the agent directory");
+});
+
+test("config: a retired pi-consult.json never supplies values", () => {
+	const dir = scratch("config-legacy");
+	writeFileSync(join(dir, "pi-consult.json"), JSON.stringify({ enabled: false, maxConcurrent: 9 }));
+	writeFileSync(join(dir, "settings.json"), JSON.stringify({ piConsult: {} }));
+	const config = ConsultConfig.load(new ConsultSettingsStore(join(dir, "settings.json")));
+	assertEq(config.enabled, true, "the retired file is not read");
+	assertEq(config.maxConcurrent, 2, "the retired file supplies nothing");
 });

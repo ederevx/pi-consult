@@ -86,7 +86,7 @@ test("result view: the previous component is reused", () => {
 });
 
 test("result view: the consult tool registers a result renderer", () => {
-	const config = ConsultConfig.load();
+	const config = ConsultConfig.from({}, scratchDir());
 	const ledger = new ReceiptLedger(1);
 	const pi = new FakePi();
 	new ConsultTool({
