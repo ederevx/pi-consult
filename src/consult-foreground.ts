@@ -60,11 +60,15 @@ export class ConsultForeground {
 				}
 			}, ConsultForeground.POLL_MS);
 			poll.unref?.();
+			const unsubscribeAttention = invocation.onAttention(() =>
+				finish({ status: "detached", reason: "pi_request" }),
+			);
 			const onAbort = (): void => finish({ status: "detached", reason: "escape" });
 			const cleanup = (): void => {
 				clearInterval(poll);
 				signal?.removeEventListener("abort", onAbort);
 				unsubscribe();
+				unsubscribeAttention();
 			};
 			if (signal) {
 				if (signal.aborted) {

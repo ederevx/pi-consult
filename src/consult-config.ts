@@ -48,11 +48,18 @@ export interface OutputSettings {
 	maxLines: number;
 }
 
+/** Whether, and how long, a consultant may block on the pi agent. */
+export interface DriveSettings {
+	enabled: boolean;
+	deadlineMs: number;
+}
+
 export class ConsultConfig {
 	static readonly DEFAULT_TIMEOUT_MS = 1_200_000;
 	static readonly DEFAULT_TOTAL_BYTES = 24_000;
 	static readonly DEFAULT_ANSWER_BYTES = 12_000;
 	static readonly DEFAULT_MAX_LINES = 800;
+	static readonly DEFAULT_DRIVE_DEADLINE_MS = 600_000;
 	private static readonly DEFAULT_ARTIFACT_DIR_NAME = "pi-consult";
 	private static readonly DEFAULT_GATE_ALLOW = [
 		"pre_memory",
@@ -69,6 +76,7 @@ export class ConsultConfig {
 	readonly maxConcurrent: number;
 	readonly output: OutputSettings;
 	readonly gate: GateSettings;
+	readonly drive: DriveSettings;
 	readonly claude: ConsultantSettings;
 	readonly codex: ConsultantSettings;
 
@@ -96,6 +104,15 @@ export class ConsultConfig {
 			allow: allow.length > 0 ? allow : [...ConsultConfig.DEFAULT_GATE_ALLOW],
 			block,
 			trustReadOnlyHint: ConsultConfig.bool(gate.trustReadOnlyHint, false),
+		};
+
+		const drive = ConsultConfig.record(raw.drive);
+		this.drive = {
+			enabled: ConsultConfig.bool(drive.enabled, true),
+			deadlineMs: ConsultConfig.positiveNumber(
+				drive.deadlineMs,
+				ConsultConfig.DEFAULT_DRIVE_DEADLINE_MS,
+			),
 		};
 
 		this.claude = ConsultConfig.consultantSettings(

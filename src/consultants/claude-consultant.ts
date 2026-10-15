@@ -73,11 +73,23 @@ export class ClaudeConsultant implements Consultant {
 	buildArgs(request: ConsultRequest, sessionId: string): string[] {
 		const args = ["-p", "--output-format", "stream-json", "--verbose"];
 		args.push("--include-partial-messages");
-		if (this.settings.isolation === "clean") args.push("--safe-mode", "--restricted");
+		if (this.settings.isolation === "clean") {
+			// --safe-mode disables MCP servers, which the bridge needs; a bridged
+			// run keeps the settings-level isolation and drops the rest.
+			if (request.bridge) args.push("--setting-sources", "", "--restricted");
+			else args.push("--safe-mode", "--restricted");
+		}
 		args.push("--permission-mode", "dontAsk", "--permission-prompts", "none");
-		args.push("--tools", ClaudeConsultant.READ_TOOLS);
-		args.push("--allowed-tools", ClaudeConsultant.READ_TOOLS);
+		const tools = request.bridge
+			? `${ClaudeConsultant.READ_TOOLS},${request.bridge.qualifiedToolName}`
+			: ClaudeConsultant.READ_TOOLS;
+		args.push("--tools", tools);
+		args.push("--allowed-tools", tools);
 		args.push("--disallowed-tools", ClaudeConsultant.DENIED_READS);
+		if (request.bridge) {
+			args.push("--mcp-config", ClaudeConsultant.mcpConfig(request.bridge));
+			args.push("--strict-mcp-config");
+		}
 		if (request.systemPrompt) args.push("--append-system-prompt", request.systemPrompt);
 		const model = request.model ?? this.settings.model;
 		if (model) args.push("--model", model);
@@ -85,6 +97,16 @@ export class ClaudeConsultant implements Consultant {
 		if (request.resumeSessionId) args.push("--resume", request.resumeSessionId);
 		else args.push("--session-id", sessionId);
 		return args;
+	}
+
+	/** The inline MCP configuration Claude loads for this run. */
+	private static mcpConfig(bridge: ConsultRequest["bridge"]): string {
+		if (!bridge) return "{}";
+		return JSON.stringify({
+			mcpServers: {
+				[bridge.serverName]: { command: bridge.command, args: bridge.args },
+			},
+		});
 	}
 
 	async consult(request: ConsultRequest, signal?: AbortSignal): Promise<ConsultantResult> {

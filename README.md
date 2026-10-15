@@ -22,7 +22,19 @@ the consultants advise, pi edits and runs commands.
   single consultant, with `both` only when the task demands two independent
   perspectives — and repeats or continues as useful. The answer renders expanded in the tool window regardless of the
   global tool-expansion setting (a live stream tails until expanded); the
-  model-facing result text is unchanged.
+  model-facing result text is unchanged. Escape or a queued user message
+  **detaches** the call rather than cancelling it: the tool returns a pending
+  receipt naming the consult id and the consultants keep working.
+- **`consult_collect`** — reports a running consult's state, or returns the
+  final receipt (status, usage, answer path, provider session ids) of one that
+  finished, by consult id or `last`. Collecting is safe to repeat. A finished
+  background consult is announced once, into the session that started it, with
+  a pointer to this tool.
+- **`consult_terminate`** — the only path that ends a consultation early: it
+  aborts that consult's consultant processes and records the result.
+- **`consult_reply`** — answers a request a consultant made through the local
+  bridge, by its `requestId`, so the blocked consultant can continue. The
+  answer leaves the machine and is screened for secrets exactly like a brief.
 - **The gate** — a `tool_call` handler that blocks implementation work (`edit`,
   `write`, `bash`, `powershell`, and any tool outside the operator's allow list)
   **only until `pre_consult` has acknowledged the current contract in the
@@ -95,10 +107,11 @@ triggers a turn itself.
 
 While a `consult` runs, each consultant's live activity appears in the tool
 window (see Live output): Claude's answer streams as it is written, Codex's
-activity is reported as it happens and its answer arrives at the end. A queued
-user message or Escape interrupts the consultants, returns their partial
-answers, and keeps their session ids so a follow-up can resume with
-`continue`.
+activity is reported as it happens and its answer arrives at the end. Escape
+or a queued user message detaches the call: it returns a pending receipt at
+once, the consultants keep running behind the scenes, and the finished
+consultation is announced and collected with `consult_collect`. Only
+`consult_terminate` ends one early.
 
 ## Install
 
@@ -130,6 +143,7 @@ Missing or malformed values fall back to the defaults.
     "maxConcurrent": 2,
     "output": { "totalBytes": 24000, "answerBytes": 12000, "maxLines": 800 },
     "gate": { "allow": ["pre_memory", "pre_daemon", "pre_cache", "pre_teams", "transcript_read"], "block": [], "trustReadOnlyHint": false },
+    "drive": { "enabled": true, "deadlineMs": 600000 },
     "claude": { "enabled": true, "command": "claude", "isolation": "clean", "timeoutMs": 1200000 },
     "codex": { "enabled": true, "command": "codex", "isolation": "clean", "timeoutMs": 1200000 }
   }
@@ -184,7 +198,21 @@ Codex is surfaced as a warning.
 | `timeout_s` | Per-consultant timeout in seconds |
 
 Continuing is refused when a selected target has no saved session for that
-consult, instead of silently starting fresh under a `continuedFrom` id.
+consult, instead of silently starting fresh under a `continuedFrom` id; it is
+also refused while the consult is still running (`consult_collect` first).
+
+### The bridge
+
+When `drive.enabled` is on (the default), each consultant run is given a local
+MCP server — the bridge — that exposes one tool, `drive_pi`. The consultant can
+call it to ask pi a question and block until pi answers: pi receives the
+request as a message naming a `requestId` (stepping any foreground `consult`
+call aside), acts on it if it belongs to the task, and calls
+`consult_reply { requestId, status, answer }`. A request that is never answered
+expires after `drive.deadlineMs` and the consultant is told so; it is never
+cancelled by a timeout. The endpoint is a Unix socket under the artifact
+directory, admitted only by a per-run random token written 0600 next to the
+brief, and both directions are bounded in size.
 
 The returned details carry the consult id, each consultant's status, usage, and
 the path of the full answer. Model-facing text is bounded per the `output`

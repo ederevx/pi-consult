@@ -100,6 +100,22 @@ export interface ConsultantAvailability {
 	error?: string;
 }
 
+/** How one consultant CLI reaches the extension's bridge control server. */
+export interface BridgeConnection {
+	/** The executable the CLI runs as its MCP server. */
+	command: string;
+	args: string[];
+	/** The 0600 capability file naming the endpoint and its token. */
+	descriptorPath: string;
+	invocationId: string;
+	/** The MCP server name both CLIs are configured with. */
+	serverName: string;
+	/** The MCP tool name on that server. */
+	toolName: string;
+	/** Claude's fully-qualified name for that tool. */
+	qualifiedToolName: string;
+}
+
 /** One final or pending consult result with the answers it renders. */
 export interface ConsultReceipt {
 	details: ConsultDetails;
@@ -134,6 +150,8 @@ export interface ConsultRequest {
 	systemPrompt?: string;
 	/** Where the CLI's own "last message" file should be written, when it supports one. */
 	lastMessagePath: string;
+	/** The bridge this run may call back through, when the drive channel is on. */
+	bridge?: BridgeConnection;
 	/** A completed activity line, already prefixed with the consultant name. */
 	onProgress?: (line: string) => void;
 	/** A chunk of streamed answer text. */

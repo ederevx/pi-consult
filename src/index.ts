@@ -11,15 +11,20 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { AgentAvailability } from "./agent-availability.ts";
 import { AnswerFormatter } from "./answer-formatter.ts";
 import { ArtifactStore } from "./artifact-store.ts";
+import { BridgeLauncher } from "./bridge-launcher.ts";
 import { BriefComposer } from "./brief-composer.ts";
 import { ConsultCollectTool } from "./consult-collect-tool.ts";
 import { ConsultCommands } from "./consult-commands.ts";
 import { ConsultConfig } from "./consult-config.ts";
 import { ConsultContract } from "./consult-contract.ts";
+import { ConsultControlServer } from "./consult-control-server.ts";
 import { ConsultDelivery } from "./consult-delivery.ts";
+import { ConsultDriveDispatcher } from "./consult-drive-dispatcher.ts";
 import { ConsultForeground } from "./consult-foreground.ts";
 import { ConsultIndex } from "./consult-index.ts";
 import { ConsultRecordStore } from "./consult-record-store.ts";
+import { ConsultReplyTool } from "./consult-reply-tool.ts";
+import { ConsultRequestBroker } from "./consult-request-broker.ts";
 import { ConsultRunner } from "./consult-runner.ts";
 import { ConsultSettings } from "./consult-settings.ts";
 import { ConsultSettingsStore } from "./consult-settings-store.ts";
@@ -66,6 +71,15 @@ export class ConsultExtension {
 			new ConsultDelivery(pi, identity),
 		);
 		const formatter = new AnswerFormatter(config.output);
+		const broker = new ConsultRequestBroker(
+			new ConsultDriveDispatcher({ pi, supervisor }),
+			config.drive.deadlineMs,
+		);
+		const bridge = new BridgeLauncher(
+			new ConsultControlServer({ broker, root: config.artifactDir }),
+			artifacts,
+			config.drive,
+		);
 
 		new PreConsultTool(contract, runner).register(pi);
 		new ConsultTool({
@@ -78,9 +92,11 @@ export class ConsultExtension {
 			formatter,
 			supervisor,
 			foreground: new ConsultForeground(),
+			bridge,
 		}).register(pi);
 		new ConsultCollectTool({ supervisor, records, index, formatter }).register(pi);
 		new ConsultTerminateTool(supervisor).register(pi);
+		new ConsultReplyTool(broker, new SecretScreen()).register(pi);
 		new ImplementationGate(ledger, classifier, contract).register(pi);
 		new AgentAvailability(new FailureClassifier(), () => index.latest()?.consultId ?? null).register(pi);
 		new SessionLifecycle(
@@ -90,6 +106,7 @@ export class ConsultExtension {
 			artifacts,
 			records,
 			identity,
+			bridge,
 			contract,
 			config,
 		).register(pi);

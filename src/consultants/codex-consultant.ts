@@ -65,7 +65,12 @@ export class CodexConsultant implements Consultant {
 			this.settings.isolation === "clean"
 				? ["--ignore-user-config", "--ignore-rules"]
 				: [];
-		const common = ["--json", "--skip-git-repo-check", ...isolation];
+		const common = [
+			"--json",
+			"--skip-git-repo-check",
+			...isolation,
+			...CodexConsultant.bridgeArgs(request),
+		];
 		const model = request.model ?? this.settings.model;
 		const modelArgs = model ? ["-m", model] : [];
 		const effortArgs = this.settings.effort
@@ -104,6 +109,22 @@ export class CodexConsultant implements Consultant {
 			"-o",
 			request.lastMessagePath,
 			"-",
+		];
+	}
+
+	/** Codex's TOML overrides that register the bridge as an MCP server. */
+	private static bridgeArgs(request: ConsultRequest): string[] {
+		const bridge = request.bridge;
+		if (!bridge) return [];
+		return [
+			"-c",
+			`mcp_servers.${bridge.serverName}.command=${JSON.stringify(bridge.command)}`,
+			"-c",
+			`mcp_servers.${bridge.serverName}.args=${JSON.stringify(bridge.args)}`,
+			// Codex refuses an MCP call under approval_policy="never" unless the
+			// tool itself is pre-approved.
+			"-c",
+			`mcp_servers.${bridge.serverName}.tools.${bridge.toolName}.approval_mode="approve"`,
 		];
 	}
 

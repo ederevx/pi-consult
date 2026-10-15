@@ -26,6 +26,7 @@ import type {
 } from "./contracts.ts";
 import type { AnswerFormatter } from "./answer-formatter.ts";
 import type { ArtifactStore, ConsultPaths } from "./artifact-store.ts";
+import type { BridgeLauncher } from "./bridge-launcher.ts";
 import type { BriefComposer } from "./brief-composer.ts";
 import type { ConsultConfig } from "./consult-config.ts";
 import type { ConsultForeground } from "./consult-foreground.ts";
@@ -58,6 +59,7 @@ export interface ConsultToolDeps {
 	formatter: AnswerFormatter;
 	supervisor: ConsultSupervisor;
 	foreground: ConsultForeground;
+	bridge: BridgeLauncher;
 }
 
 /** A resolved continuation request. */
@@ -243,7 +245,7 @@ export class ConsultTool {
 		}
 
 		const invocation = this.deps.supervisor.start(
-			this.spec(consultId, sessionId, params, targets, composed, continuation, paths, ctx),
+			await this.spec(consultId, sessionId, params, targets, composed, continuation, paths, ctx),
 		);
 		const outcome = await this.deps.foreground.wait(
 			invocation,
@@ -272,7 +274,7 @@ export class ConsultTool {
 		};
 	}
 
-	private spec(
+	private async spec(
 		consultId: string,
 		sessionId: string,
 		params: ConsultParams,
@@ -281,14 +283,15 @@ export class ConsultTool {
 		continuation: Continuation | undefined,
 		paths: ConsultPaths,
 		ctx: ExtensionToolContext,
-	): InvocationSpec {
+	): Promise<InvocationSpec> {
 		const providerSessions: Partial<Record<ConsultantName, string>> = {};
-		const requests: InvocationRequestSpec[] = targets.map((name) => {
+		const requests: InvocationRequestSpec[] = [];
+		for (const name of targets) {
 			const settings = this.deps.config.consultant(name);
 			const resume = continuation?.resumeFor.get(name);
 			const freshSessionId = !resume && name === "claude" ? randomUUID() : undefined;
 			if (freshSessionId) providerSessions[name] = freshSessionId;
-			return {
+			requests.push({
 				consultant: name,
 				settings,
 				cwd: resume?.cwd ?? ctx.cwd,
@@ -296,8 +299,11 @@ export class ConsultTool {
 				sessionId: freshSessionId,
 				model: params.model && targets.length === 1 ? params.model : settings.model,
 				timeoutMs: params.timeout_s ? params.timeout_s * 1000 : settings.timeoutMs,
-			};
-		});
+				bridge: await this.deps.bridge
+					.open(consultId, name, paths)
+					.catch(() => undefined),
+			});
+		}
 		return {
 			consultId,
 			sessionId,

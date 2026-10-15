@@ -37,6 +37,10 @@ export class ConsultContract {
 			"  running in the background. Collect the finished result with",
 			"  consult_collect before continuing it; consult_terminate is the only way",
 			"  to end one early.",
+			"- A consultant may ask pi a question through a local bridge; the request",
+			"  arrives as a message naming a requestId and pi answers it with",
+			"  consult_reply. That answer leaves the machine, so it is screened for",
+			"  secrets exactly like a brief.",
 			"- Each brief is persisted under the pi-consult artifact directory before it",
 			"  is sent, as the audit record of what left the machine.",
 			"- By calling pre_consult you acknowledge the terms above and the workflow",
@@ -111,6 +115,10 @@ export class ConsultContract {
 		);
 		lines.push(
 			"- consult_terminate: end a background consult early; nothing else stops one.",
+		);
+		lines.push(
+			"- consult_reply: answer a request a consultant made through the bridge, by " +
+				"its requestId, so the blocked consultant can continue.",
 		);
 		lines.push("");
 		lines.push(this.contractText());
