@@ -88,7 +88,7 @@ export class ClaudeConsultant implements Consultant {
 	}
 
 	async consult(request: ConsultRequest, signal?: AbortSignal): Promise<ConsultantResult> {
-		const sessionId = request.resumeSessionId ?? randomUUID();
+		const sessionId = request.resumeSessionId ?? request.sessionId ?? randomUUID();
 		const parser = new ClaudeStreamParser(
 			(line) => request.onProgress?.(`claude: ${line}`),
 			(text) => request.onPartial?.(text),

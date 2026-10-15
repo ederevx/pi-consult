@@ -19,6 +19,24 @@ export type RunStatus =
 	| "unavailable"
 	| "auth";
 
+/** Lifecycle of one consult invocation, orthogonal to its attachment. */
+export type InvocationState =
+	| "queued"
+	| "running"
+	| "waiting_for_pi"
+	| "completed"
+	| "failed"
+	| "terminated";
+
+/** Whether a tool call is still watching the invocation it started. */
+export type AttachmentState = "foreground" | "detached";
+
+/** Why a foreground tool call stopped watching a still-running invocation. */
+export type DetachReason = "escape" | "steer" | "wait_timeout" | "pi_request";
+
+/** Whether a receipt describes a finished consultation or a live one. */
+export type ConsultPhase = "running" | "complete";
+
 /** Provider-reported token/cost usage for one run, when the CLI reports it. */
 export interface ConsultantUsage {
 	inputTokens?: number;
@@ -48,14 +66,20 @@ export interface ConsultRun {
  * branch, so the gate and continuation lookup can be rebuilt from it.
  */
 export interface ConsultDetails {
-	schema: 1;
+	schema: 2;
 	consultId: string;
+	/** `complete` carries final runs; `running` is a detachable receipt. */
+	phase: ConsultPhase;
 	ok: boolean;
 	cwd: string;
 	briefPath: string;
 	continuedFrom?: string;
-	/** Why the run ended early, when the user interrupted it. */
-	interrupted?: "escape" | "steer";
+	/** Set when the foreground caller detached instead of waiting. */
+	detachedBy?: DetachReason;
+	/** Set once `consult_collect` has reported a finished consultation. */
+	collected?: boolean;
+	/** The live invocation's state, when the receipt is a running one. */
+	state?: InvocationState;
 	runs: ConsultRun[];
 }
 
@@ -76,12 +100,34 @@ export interface ConsultantAvailability {
 	error?: string;
 }
 
+/** One final or pending consult result with the answers it renders. */
+export interface ConsultReceipt {
+	details: ConsultDetails;
+	answers: Map<ConsultantName, string>;
+}
+
+/** The durable per-invocation manifest, written before any process spawns. */
+export interface RunManifest {
+	schema: 1;
+	consultId: string;
+	sessionId: string;
+	cwd: string;
+	briefPath: string;
+	targets: ConsultantName[];
+	continuedFrom?: string;
+	state: InvocationState;
+	startedAt: number;
+	providerSessions: Partial<Record<ConsultantName, string>>;
+}
+
 /** One fully-composed request to one consultant. */
 export interface ConsultRequest {
 	consultant: ConsultantName;
 	brief: string;
 	cwd: string;
 	resumeSessionId?: string;
+	/** A caller-chosen id for a fresh run, so the manifest can record it early. */
+	sessionId?: string;
 	model?: string;
 	timeoutMs: number;
 	/** Role preamble for CLIs with a system-prompt flag; others inline it. */

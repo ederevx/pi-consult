@@ -1,20 +1,7 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { AnswerFormatter } from "../src/answer-formatter.ts";
-import { ArtifactStore } from "../src/artifact-store.ts";
-import { BriefComposer } from "../src/brief-composer.ts";
 import { ConsultConfig } from "../src/consult-config.ts";
-import { ConsultSettingsStore } from "../src/consult-settings-store.ts";
-import { ConsultContract } from "../src/consult-contract.ts";
-import { ConsultIndex } from "../src/consult-index.ts";
-import { ConsultRunner } from "../src/consult-runner.ts";
-import { ConsultTool } from "../src/consult-tool.ts";
-import { ClaudeConsultant } from "../src/consultants/claude-consultant.ts";
-import { CodexConsultant } from "../src/consultants/codex-consultant.ts";
-import { ProcessRunner } from "../src/process-runner.ts";
-import { ReceiptLedger } from "../src/receipt-ledger.ts";
-import { SecretScreen } from "../src/secret-screen.ts";
 import {
 	FakeContext,
 	assert,
@@ -26,82 +13,10 @@ import {
 	toolEntry,
 	userEntry,
 } from "./harness.ts";
-
-function fakeClaude(): string {
-	const path = join(scratchDir(), "fake-claude.mjs");
-	const body = [
-		'import { readFileSync, writeFileSync } from "node:fs";',
-		'const brief = readFileSync(0, "utf8");',
-		"if (process.env.CLAUDE_FAKE_RECORD) {",
-		"  writeFileSync(process.env.CLAUDE_FAKE_RECORD, JSON.stringify({ argv: process.argv.slice(2), brief }));",
-		"}",
-		'const sessionId = "fake-claude-session";',
-		'process.stdout.write(JSON.stringify({ type: "system", subtype: "init", session_id: sessionId }) + "\\n");',
-		'process.stdout.write(JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "FAKE ANSWER " + brief.length, session_id: sessionId, usage: { input_tokens: 1, output_tokens: 2 } }) + "\\n");',
-	].join("\n");
-	writeFileSync(path, `#!${process.execPath}\n${body}\n`);
-	chmodSync(path, 0o755);
-	return path;
-}
-
-function fakeCodex(): string {
-	const path = join(scratchDir(), "fake-codex.mjs");
-	const body = [
-		'import { readFileSync, writeFileSync } from "node:fs";',
-		'const brief = readFileSync(0, "utf8");',
-		"if (process.env.CODEX_FAKE_RECORD) {",
-		"  writeFileSync(process.env.CODEX_FAKE_RECORD, JSON.stringify({ argv: process.argv.slice(2), brief }));",
-		"}",
-		'process.stdout.write(JSON.stringify({ type: "thread.started", thread_id: "fake-thread" }) + "\\n");',
-		'process.stdout.write(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "FAKE CODEX" } }) + "\\n");',
-		'process.stdout.write(JSON.stringify({ type: "turn.completed", usage: { input_tokens: 1, output_tokens: 2 } }) + "\\n");',
-	].join("\n");
-	writeFileSync(path, `#!${process.execPath}\n${body}\n`);
-	chmodSync(path, 0o755);
-	return path;
-}
-
-function configFile(claudeCommand: string, codexCommand: string): ConsultConfig {
-	const path = join(scratchDir(), `integration-config-${Math.random().toString(16).slice(2)}.json`);
-	writeFileSync(
-		path,
-		JSON.stringify({
-			piConsult: {
-				confirmFirstConsult: false,
-				artifactDir: join(scratchDir(), "integration-artifacts"),
-				output: { totalBytes: 8000, answerBytes: 4000, maxLines: 100 },
-				claude: { command: claudeCommand },
-				codex: { command: codexCommand },
-				maxConcurrent: 2,
-			},
-		}),
-	);
-	return ConsultConfig.load(new ConsultSettingsStore(path));
-}
+import { buildConsultFixture, configFile, fakeClaude, fakeCodex } from "./consult-fixture.ts";
 
 function buildTool(config: ConsultConfig) {
-	const processes = new ProcessRunner();
-	const runner = new ConsultRunner(
-		[
-			new ClaudeConsultant(config.claude, processes),
-			new CodexConsultant(config.codex, processes),
-		],
-		config.maxConcurrent,
-	);
-	const ledger = new ReceiptLedger(ConsultContract.VERSION);
-	const index = new ConsultIndex(ledger);
-	const artifacts = new ArtifactStore(config.artifactDir);
-	const tool = new ConsultTool({
-		config,
-		ledger,
-		index,
-		runner,
-		artifacts,
-		screen: new SecretScreen(),
-		composer: new BriefComposer(),
-		formatter: new AnswerFormatter(config.output),
-	});
-	return { tool, ledger, artifacts };
+	return buildConsultFixture(config);
 }
 
 test("consult tool: end-to-end with a fake Claude consultant", async () => {

@@ -16,14 +16,19 @@ import type { ConsultantName } from "./contracts.ts";
 export interface ConsultPaths {
 	dir: string;
 	brief: string;
+	run: string;
+	result: string;
 	answer(name: ConsultantName): string;
 	lastMessage(name: ConsultantName): string;
 	diagnostic(name: ConsultantName): string;
 }
 
+/** Decides whether one consult directory is still needed, whatever its age. */
+export type RetainConsult = (dir: string) => Promise<boolean>;
+
 export class ArtifactStore {
 	private static readonly CONSULT_DIR = /^c-[0-9a-f]{6,}$/;
-	private readonly root: string;
+	readonly root: string;
 
 	constructor(root: string) {
 		this.root = resolve(root);
@@ -33,13 +38,20 @@ export class ArtifactStore {
 	async prepare(sessionId: string, consultId: string): Promise<ConsultPaths> {
 		const dir = join(this.root, this.safe(sessionId), this.safe(consultId));
 		await mkdir(dir, { recursive: true, mode: 0o700 });
-		return {
-			dir,
-			brief: join(dir, "brief.md"),
-			answer: (name: ConsultantName) => join(dir, `${name}.md`),
-			lastMessage: (name: ConsultantName) => join(dir, `${name}.last.md`),
-			diagnostic: (name: ConsultantName) => join(dir, `${name}.err.txt`),
-		};
+		return this.pathsFor(dir);
+	}
+
+	/** Every consult directory this store owns, newest first. */
+	async listConsults(): Promise<ConsultPaths[]> {
+		const found: ConsultPaths[] = [];
+		for (const session of await this.listDirectories(this.root)) {
+			for (const consult of await this.listDirectories(session)) {
+				if (ArtifactStore.CONSULT_DIR.test(basename(consult))) {
+					found.push(this.pathsFor(consult));
+				}
+			}
+		}
+		return found;
 	}
 
 	/** Write a text artifact, owned by this store. */
@@ -55,7 +67,7 @@ export class ArtifactStore {
 	}
 
 	/** Remove consult directories older than the retention window. */
-	async gc(retentionDays: number): Promise<void> {
+	async gc(retentionDays: number, retain?: RetainConsult): Promise<void> {
 		const cutoff = Date.now() - Math.max(1, retentionDays) * 24 * 60 * 60 * 1000;
 		const sessions = await this.listDirectories(this.root);
 		for (const session of sessions) {
@@ -64,7 +76,9 @@ export class ArtifactStore {
 				if (!ArtifactStore.CONSULT_DIR.test(basename(consult))) continue;
 				try {
 					const info = await stat(consult);
-					if (info.mtimeMs < cutoff) await rm(consult, { recursive: true, force: true });
+					if (info.mtimeMs >= cutoff) continue;
+					if (retain && (await retain(consult))) continue;
+					await rm(consult, { recursive: true, force: true });
 				} catch {
 					// raced with another cleanup
 				}
@@ -76,6 +90,18 @@ export class ArtifactStore {
 				// raced with another cleanup
 			}
 		}
+	}
+
+	private pathsFor(dir: string): ConsultPaths {
+		return {
+			dir,
+			brief: join(dir, "brief.md"),
+			run: join(dir, "run.json"),
+			result: join(dir, "result.json"),
+			answer: (name: ConsultantName) => join(dir, `${name}.md`),
+			lastMessage: (name: ConsultantName) => join(dir, `${name}.last.md`),
+			diagnostic: (name: ConsultantName) => join(dir, `${name}.err.txt`),
+		};
 	}
 
 	private async listDirectories(parent: string): Promise<string[]> {

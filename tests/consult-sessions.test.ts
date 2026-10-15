@@ -1,0 +1,232 @@
+import { existsSync, utimesSync } from "node:fs";
+
+import { ArtifactStore } from "../src/artifact-store.ts";
+import { ConsultRecordStore } from "../src/consult-record-store.ts";
+import { ConsultIndex } from "../src/consult-index.ts";
+import { ConsultContract } from "../src/consult-contract.ts";
+import { ReceiptLedger } from "../src/receipt-ledger.ts";
+import type { ConsultDetails } from "../src/contracts.ts";
+import { buildConsultFixture, configFile, fakeClaude, fakeCodex } from "./consult-fixture.ts";
+import { FakeContext, assert, assertEq, assertIncludes, scratchDir, test, toolEntry } from "./harness.ts";
+
+function context(): FakeContext {
+	return new FakeContext([], "sess-int", scratchDir(), false);
+}
+
+test("consult sessions: a steered call detaches and keeps running", async () => {
+	const fixture = buildConsultFixture(configFile(fakeClaude(600), fakeCodex()));
+	const ctx = context();
+	ctx.pending = true;
+	const result = await fixture.tool.execute(
+		"call-detach-1",
+		{ target: "claude", brief: "Slow one.", contains_no_secrets: true },
+		undefined,
+		undefined,
+		ctx as never,
+	);
+	assertEq(result.details.phase, "running", "returns a pending receipt");
+	assertEq(result.details.detachedBy, "steer", "names the interrupt");
+	assertEq(result.isError, undefined, "a detached receipt is not an error");
+	const invocation = fixture.supervisor.get(result.details.consultId);
+	assert(invocation !== undefined, "the invocation is tracked");
+	assertEq(invocation.live, true, "the invocation keeps running");
+
+	const results = await invocation.done();
+	assertEq(results[0].status, "ok", "the background run finishes");
+	await fixture.supervisor.receipt(invocation);
+	const receipt = await fixture.records.load(result.details.consultId);
+	assert(receipt !== undefined, "the finished receipt is on disk");
+	assertEq(receipt.details.phase, "complete");
+	assert(fixture.pi.messages.length >= 1, "the finished background consult is announced");
+});
+
+test("consult sessions: Escape detaches instead of aborting", async () => {
+	const fixture = buildConsultFixture(configFile(fakeClaude(600), fakeCodex()));
+	const controller = new AbortController();
+	setTimeout(() => controller.abort(), 80);
+	const result = await fixture.tool.execute(
+		"call-detach-2",
+		{ target: "claude", brief: "Interrupted.", contains_no_secrets: true },
+		controller.signal,
+		undefined,
+		context() as never,
+	);
+	assertEq(result.details.detachedBy, "escape");
+	const invocation = fixture.supervisor.get(result.details.consultId);
+	assert(invocation !== undefined && invocation.live, "Escape did not abort the run");
+	await invocation.done();
+});
+
+test("consult sessions: collect reports a running consult, then its receipt", async () => {
+	const fixture = buildConsultFixture(configFile(fakeClaude(500), fakeCodex()));
+	const ctx = context();
+	ctx.pending = true;
+	const started = await fixture.tool.execute(
+		"call-collect-1",
+		{ target: "claude", brief: "Collect me.", contains_no_secrets: true },
+		undefined,
+		undefined,
+		ctx as never,
+	);
+	const consultId = started.details.consultId;
+	const pending = await fixture.collect.execute({ id: consultId }, ctx as never);
+	assertEq(pending.details.phase, "running");
+	assertIncludes(pending.content[0].text, "still running");
+
+	const invocation = fixture.supervisor.get(consultId);
+	assert(invocation !== undefined, "tracked");
+	await invocation.done();
+	const final = await fixture.collect.execute({ id: consultId }, ctx as never);
+	assertEq(final.details.phase, "complete");
+	assertEq(final.details.collected, true);
+	assertEq(final.details.ok, true);
+	assertIncludes(final.content[0].text, "FAKE ANSWER");
+});
+
+test("consult sessions: terminate ends the run explicitly", async () => {
+	const fixture = buildConsultFixture(configFile(fakeClaude(3_000), fakeCodex()));
+	const ctx = context();
+	ctx.pending = true;
+	const started = await fixture.tool.execute(
+		"call-term-1",
+		{ target: "claude", brief: "Long.", contains_no_secrets: true },
+		undefined,
+		undefined,
+		ctx as never,
+	);
+	const invocation = fixture.supervisor.get(started.details.consultId);
+	assert(invocation !== undefined && invocation.live, "running before termination");
+	const result = await fixture.terminate.execute({ id: started.details.consultId });
+	assertEq(result.isError, false);
+	assertEq(invocation.live, false, "termination ended the invocation");
+	const receipt = await fixture.records.load(started.details.consultId);
+	assert(receipt !== undefined, "a terminated consult still records a result");
+	assertEq(receipt.details.runs[0].status, "aborted");
+});
+
+test("consult sessions: terminate refuses an unknown id", async () => {
+	const fixture = buildConsultFixture(configFile(fakeClaude(), fakeCodex()));
+	const result = await fixture.terminate.execute({ id: "c-000000000000" });
+	assertEq(result.isError, true);
+	assertIncludes(result.content[0].text, "nothing to terminate");
+});
+
+test("consult sessions: reconcile marks a dead host's manifest as abandoned", async () => {
+	const root = scratchDir();
+	const artifacts = new ArtifactStore(root);
+	const paths = await artifacts.prepare("s1", "c-abcdef123456");
+	const manifest = {
+		schema: 1,
+		consultId: "c-abcdef123456",
+		sessionId: "s1",
+		cwd: "/x",
+		briefPath: paths.brief,
+		targets: ["claude"],
+		state: "running",
+		startedAt: Date.now(),
+		providerSessions: { claude: "sess-1" },
+	};
+	await artifacts.write(paths.run, JSON.stringify(manifest));
+	const records = new ConsultRecordStore(artifacts);
+	await records.reconcile(new Set());
+	const receipt = await records.load("c-abcdef123456");
+	assert(receipt !== undefined, "reconcile produced a receipt");
+	assertEq(receipt.details.phase, "complete");
+	assertEq(receipt.details.runs[0].status, "aborted");
+	assertEq(receipt.details.runs[0].sessionId, "sess-1", "provider session survives for continuation");
+});
+
+test("consult sessions: reconcile leaves a live manifest alone", async () => {
+	const root = scratchDir();
+	const artifacts = new ArtifactStore(root);
+	const paths = await artifacts.prepare("s2", "c-bbbbbb123456");
+	await artifacts.write(
+		paths.run,
+		JSON.stringify({
+			schema: 1,
+			consultId: "c-bbbbbb123456",
+			sessionId: "s2",
+			cwd: "/x",
+			briefPath: paths.brief,
+			targets: ["codex"],
+			state: "running",
+			startedAt: Date.now(),
+			providerSessions: {},
+		}),
+	);
+	const records = new ConsultRecordStore(artifacts);
+	await records.reconcile(new Set(["c-bbbbbb123456"]));
+	assertEq(await records.load("c-bbbbbb123456"), undefined, "no receipt for a live invocation");
+});
+
+test("consult sessions: gc keeps a running manifest and reclaims it once reconciled", async () => {
+	const root = scratchDir();
+	const artifacts = new ArtifactStore(root);
+	const records = new ConsultRecordStore(artifacts);
+	const paths = await artifacts.prepare("s3", "c-cccccc123456");
+	await artifacts.write(
+		paths.run,
+		JSON.stringify({
+			schema: 1,
+			consultId: "c-cccccc123456",
+			sessionId: "s3",
+			cwd: "/x",
+			briefPath: paths.brief,
+			targets: ["claude"],
+			state: "running",
+			startedAt: Date.now(),
+			providerSessions: {},
+		}),
+	);
+	const ancient = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+	utimesSync(paths.dir, ancient, ancient);
+	await artifacts.gc(30, (dir) => records.retain(dir));
+	assert(existsSync(paths.dir), "an unfinished consult is never reclaimed by age");
+
+	await records.reconcile(new Set());
+	utimesSync(paths.dir, ancient, ancient);
+	await artifacts.gc(30, (dir) => records.retain(dir));
+	assert(!existsSync(paths.dir), "a reconciled consult is reclaimed after retention");
+});
+
+test("consult sessions: the ledger records collect receipts, not pending ones", () => {
+	const ledger = new ReceiptLedger(ConsultContract.VERSION);
+	const index = new ConsultIndex(ledger);
+	const finalReceipt: ConsultDetails = {
+		schema: 2,
+		consultId: "c-111111111111",
+		phase: "complete",
+		ok: true,
+		cwd: "/x",
+		briefPath: "/b",
+		runs: [
+			{
+				consultant: "claude",
+				status: "ok",
+				sessionId: "sess-x",
+				answerBytes: 3,
+				truncated: false,
+				partial: false,
+				durationMs: 1,
+				exitCode: 0,
+				warnings: [],
+			},
+		],
+	};
+	const pending: ConsultDetails = {
+		schema: 2,
+		consultId: "c-222222222222",
+		phase: "running",
+		ok: false,
+		cwd: "/x",
+		briefPath: "/b",
+		runs: [],
+	};
+	const branch = [
+		toolEntry("t1", "consult", pending),
+		toolEntry("t2", "consult_collect", finalReceipt),
+	];
+	ledger.rebuild(branch, branch);
+	assertEq(index.resolve("c-111111111111")?.consultId, "c-111111111111");
+	assertEq(index.resolve("c-222222222222"), undefined, "a pending receipt is not history");
+});
