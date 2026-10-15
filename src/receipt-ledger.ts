@@ -54,17 +54,8 @@ export class ReceiptLedger {
 		);
 		const consults: ConsultDetails[] = [];
 		for (const entry of branchEntries) {
-			const details = this.toolDetails(entry);
-			if (!details) continue;
-			if (
-				entry.message?.toolName === "consult" &&
-				typeof details.consultId === "string" &&
-				details.consultId !== "-" &&
-				Array.isArray(details.runs) &&
-				details.runs.length > 0
-			) {
-				consults.push(details as unknown as ConsultDetails);
-			}
+			const details = this.consultReceipt(entry);
+			if (details) consults.push(details);
 		}
 		this.snapshot = { acknowledged };
 		this.consults = consults;
@@ -97,13 +88,30 @@ export class ReceiptLedger {
 		return ack?.contractVersion === this.contractVersion;
 	}
 
-	/** The structured `schema: 1` details of a successful tool-result entry. */
+	/**
+	 * A finished consultation receipt: a direct `consult` result or the
+	 * `consult_collect` receipt that reports one. Pending receipts carry no
+	 * provider session to resume and are not history.
+	 */
+	private consultReceipt(entry: BranchEntry): ConsultDetails | undefined {
+		const toolName = entry.message?.toolName;
+		if (toolName !== "consult" && toolName !== "consult_collect") return undefined;
+		const details = this.toolDetails(entry);
+		if (!details) return undefined;
+		if (typeof details.consultId !== "string" || details.consultId === "-") return undefined;
+		if (!Array.isArray(details.runs) || details.runs.length === 0) return undefined;
+		if (details.schema === 2 && details.phase !== "complete") return undefined;
+		return details as unknown as ConsultDetails;
+	}
+
+	/** The structured `schema` details of a successful tool-result entry. */
 	private toolDetails(entry: BranchEntry): Record<string, unknown> | undefined {
 		const message = entry.message;
 		if (entry.type !== "message" || message?.role !== "toolResult") {
 			return undefined;
 		}
 		const details = message.details as Record<string, unknown> | undefined;
-		return details && details.schema === 1 ? details : undefined;
+		if (!details) return undefined;
+		return details.schema === 1 || details.schema === 2 ? details : undefined;
 	}
 }

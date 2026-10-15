@@ -1,0 +1,221 @@
+/**
+ * pi-consult — durable consult records.
+ *
+ * Owns the reading, writing, and reconciliation of one invocation's manifest
+ * (`run.json`), its final receipt (`result.json`), and the per-consultant
+ * answers. The artifact store owns the filesystem; this class owns what the
+ * records mean, including which directories garbage collection must keep.
+ */
+
+import { basename } from "node:path";
+
+import type { ArtifactStore, ConsultPaths } from "./artifact-store.ts";
+import type { ConsultInvocation } from "./consult-invocation.ts";
+import type {
+	ConsultDetails,
+	ConsultReceipt,
+	ConsultRun,
+	ConsultantName,
+	ConsultantResult,
+	InvocationState,
+	RunManifest,
+} from "./contracts.ts";
+
+export class ConsultRecordStore {
+	private readonly artifacts: ArtifactStore;
+
+	constructor(artifacts: ArtifactStore) {
+		this.artifacts = artifacts;
+	}
+
+	/** Write the manifest before any consultant process spawns. */
+	async saveRun(invocation: ConsultInvocation): Promise<void> {
+		const manifest: RunManifest = {
+			schema: 1,
+			consultId: invocation.consultId,
+			sessionId: invocation.sessionId,
+			cwd: invocation.cwd,
+			briefPath: invocation.paths.brief,
+			targets: [...invocation.targets],
+			continuedFrom: invocation.continuedFrom,
+			state: invocation.state,
+			startedAt: invocation.startedAt,
+			providerSessions: { ...invocation.providerSessions },
+		};
+		await this.artifacts.write(invocation.paths.run, `${JSON.stringify(manifest, null, 2)}\n`);
+	}
+
+	/** Persist answers and diagnostics, then the final receipt. */
+	async saveResult(
+		invocation: ConsultInvocation,
+		results: readonly ConsultantResult[],
+	): Promise<ConsultReceipt> {
+		const runs: ConsultRun[] = [];
+		const answers = new Map<ConsultantName, string>();
+		for (const result of results) {
+			const answerPath = invocation.paths.answer(result.consultant);
+			const warnings = [...result.warnings];
+			let stored = false;
+			if (result.answer) {
+				try {
+					await this.artifacts.write(answerPath, result.answer);
+					stored = true;
+				} catch (error) {
+					warnings.push(`answer could not be persisted: ${ConsultRecordStore.message(error)}`);
+				}
+			}
+			if (result.error) {
+				await this.artifacts
+					.write(invocation.paths.diagnostic(result.consultant), `${result.error}\n`)
+					.catch(() => undefined);
+			}
+			answers.set(result.consultant, result.answer);
+			runs.push({
+				consultant: result.consultant,
+				status: result.status,
+				sessionId: result.sessionId,
+				answerPath: stored ? answerPath : undefined,
+				answerBytes: Buffer.byteLength(result.answer, "utf8"),
+				truncated: false,
+				partial: result.partial,
+				durationMs: result.durationMs,
+				exitCode: result.exitCode,
+				error: result.error,
+				usage: result.usage,
+				warnings,
+			});
+		}
+		const receipt = this.receiptFor(invocation, runs, answers);
+		await this.artifacts.write(invocation.paths.result, `${JSON.stringify(receipt.details, null, 2)}\n`);
+		await this.markRun(
+			invocation.paths,
+			invocation.state === "terminated" ? "terminated" : "completed",
+		).catch(() => undefined);
+		return receipt;
+	}
+
+	/** Read a finished consult's receipt back from disk. */
+	async load(consultId: string): Promise<ConsultReceipt | undefined> {
+		for (const paths of await this.artifacts.listConsults()) {
+			if (basename(paths.dir) !== consultId) continue;
+			const details = await this.readReceipt(paths);
+			if (details) return details;
+		}
+		return undefined;
+	}
+
+	/**
+	 * Keep a consult directory that still describes a live invocation: an
+	 * unread result must never be reclaimed by age alone.
+	 */
+	async retain(dir: string): Promise<boolean> {
+		const manifest = await this.readManifest(`${dir}/run.json`);
+		if (!manifest) return false;
+		return ConsultRecordStore.unfinished(manifest.state);
+	}
+
+	/**
+	 * Mark every manifest this process does not own as failed, so a later
+	 * start never reports a dead host's invocation as still running.
+	 */
+	async reconcile(live: ReadonlySet<string>): Promise<void> {
+		for (const paths of await this.artifacts.listConsults()) {
+			if (live.has(basename(paths.dir))) continue;
+			const manifest = await this.readManifest(paths.run);
+			if (!manifest || !ConsultRecordStore.unfinished(manifest.state)) continue;
+			await this.artifacts.write(
+				paths.result,
+				`${JSON.stringify(this.abandoned(manifest), null, 2)}\n`,
+			);
+			await this.markRun(paths, "failed").catch(() => undefined);
+		}
+	}
+
+	/** The final receipt for one invocation, from results already in hand. */
+	receiptFor(
+		invocation: ConsultInvocation,
+		runs: ConsultRun[],
+		answers: Map<ConsultantName, string>,
+	): ConsultReceipt {
+		const details: ConsultDetails = {
+			schema: 2,
+			consultId: invocation.consultId,
+			phase: "complete",
+			ok: runs.some((run) => run.status === "ok"),
+			cwd: invocation.cwd,
+			briefPath: invocation.paths.brief,
+			continuedFrom: invocation.continuedFrom,
+			runs,
+		};
+		return { details, answers };
+	}
+
+	private async readReceipt(paths: ConsultPaths): Promise<ConsultReceipt | undefined> {
+		let details: ConsultDetails;
+		try {
+			details = JSON.parse(await this.artifacts.read(paths.result)) as ConsultDetails;
+		} catch {
+			return undefined;
+		}
+		if (!details || details.schema !== 2 || !Array.isArray(details.runs)) return undefined;
+		const answers = new Map<ConsultantName, string>();
+		for (const run of details.runs) {
+			if (!run.answerPath) continue;
+			try {
+				answers.set(run.consultant, await this.artifacts.read(run.answerPath));
+			} catch {
+				answers.set(run.consultant, "");
+			}
+		}
+		return { details, answers };
+	}
+
+	private async readManifest(path: string): Promise<RunManifest | undefined> {
+		try {
+			const manifest = JSON.parse(await this.artifacts.read(path)) as RunManifest;
+			return manifest && manifest.schema === 1 ? manifest : undefined;
+		} catch {
+			return undefined;
+		}
+	}
+
+	private async markRun(paths: ConsultPaths, state: InvocationState): Promise<void> {
+		const manifest = await this.readManifest(paths.run);
+		if (!manifest) return;
+		manifest.state = state;
+		await this.artifacts.write(paths.run, `${JSON.stringify(manifest, null, 2)}\n`);
+	}
+
+	private abandoned(manifest: RunManifest): ConsultDetails {
+		const runs: ConsultRun[] = manifest.targets.map((consultant) => ({
+			consultant,
+			status: "aborted",
+			sessionId: manifest.providerSessions[consultant],
+			answerBytes: 0,
+			truncated: false,
+			partial: false,
+			durationMs: 0,
+			exitCode: null,
+			error: "the pi host exited before this consult finished",
+			warnings: [],
+		}));
+		return {
+			schema: 2,
+			consultId: manifest.consultId,
+			phase: "complete",
+			ok: false,
+			cwd: manifest.cwd,
+			briefPath: manifest.briefPath,
+			continuedFrom: manifest.continuedFrom,
+			runs,
+		};
+	}
+
+	private static unfinished(state: InvocationState): boolean {
+		return state === "queued" || state === "running" || state === "waiting_for_pi";
+	}
+
+	private static message(error: unknown): string {
+		return error instanceof Error ? error.message : String(error);
+	}
+}

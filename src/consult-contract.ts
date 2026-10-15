@@ -14,7 +14,7 @@ import type { GateSnapshot } from "./receipt-ledger.ts";
 
 export class ConsultContract {
 	/** Bump when the acknowledgement terms change; old receipts stop counting. */
-	static readonly VERSION = 5;
+	static readonly VERSION = 6;
 
 	/** The acknowledgement text the agent accepts by calling `pre_consult`. */
 	contractText(): string {
@@ -32,6 +32,11 @@ export class ConsultContract {
 			"  locally and describe the shape of what matters, not its value.",
 			"- Consultants are read-only advisors: they must not modify the working",
 			"  tree, and pi executes every change itself.",
+			"- Interrupting a consult (Escape, or a queued user message) does not cancel",
+			"  it: the call returns with its consult id and the consultation keeps",
+			"  running in the background. Collect the finished result with",
+			"  consult_collect before continuing it; consult_terminate is the only way",
+			"  to end one early.",
 			"- Each brief is persisted under the pi-consult artifact directory before it",
 			"  is sent, as the audit record of what left the machine.",
 			"- By calling pre_consult you acknowledge the terms above and the workflow",
@@ -99,6 +104,13 @@ export class ConsultContract {
 				"prefer a single consultant for most tasks and use both only when the " +
 				"task demands two independent perspectives. Returns the answer and a " +
 				"continuation id.",
+		);
+		lines.push(
+			"- consult_collect: collect a running or finished consult by id (or " +
+				"'last'); the receipt carries the provider session ids used by continue.",
+		);
+		lines.push(
+			"- consult_terminate: end a background consult early; nothing else stops one.",
 		);
 		lines.push("");
 		lines.push(this.contractText());

@@ -2,11 +2,9 @@
  * pi-consult — the `consult` tool.
  *
  * Orchestrates one consultation: validate the request, screen the brief,
- * persist it, run one or both consultants concurrently while streaming
- * their live output into the tool window, persist their answers, and return
- * a bounded model-facing result with a continuation id. A queued user
- * message or Escape aborts the consultants and returns whatever they
- * produced, keeping their session ids for continuation.
+ * persist it, start the invocation under the supervisor, and watch it in the
+ * foreground. Escape or a queued user message detaches the call — the tool
+ * returns immediately and the consultation keeps running, collectible later.
  */
 
 import type {
@@ -15,25 +13,25 @@ import type {
 	ExtensionAPI,
 	ExtensionToolContext,
 } from "@earendil-works/pi-coding-agent";
+import { randomUUID } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
 import { Type } from "typebox";
 
 import type {
 	ConsultDetails,
-	ConsultRequest,
-	ConsultRun,
+	ConsultReceipt,
 	ConsultTarget,
 	ConsultantName,
-	ConsultantResult,
 } from "./contracts.ts";
 import type { AnswerFormatter } from "./answer-formatter.ts";
 import type { ArtifactStore, ConsultPaths } from "./artifact-store.ts";
 import type { BriefComposer } from "./brief-composer.ts";
 import type { ConsultConfig } from "./consult-config.ts";
+import type { ConsultForeground } from "./consult-foreground.ts";
 import type { ConsultIndex } from "./consult-index.ts";
-import { ConsultProgressFeed } from "./consult-progress.ts";
-import type { ConsultRunner } from "./consult-runner.ts";
+import type { InvocationRequestSpec, InvocationSpec } from "./consult-invocation.ts";
+import type { ConsultSupervisor } from "./consult-supervisor.ts";
 import { ConsultResultView } from "./consult-result-view.ts";
 import type { BranchEntry, ReceiptLedger } from "./receipt-ledger.ts";
 import type { SecretScreen } from "./secret-screen.ts";
@@ -54,11 +52,12 @@ export interface ConsultToolDeps {
 	config: ConsultConfig;
 	ledger: ReceiptLedger;
 	index: ConsultIndex;
-	runner: ConsultRunner;
 	artifacts: ArtifactStore;
 	screen: SecretScreen;
 	composer: BriefComposer;
 	formatter: AnswerFormatter;
+	supervisor: ConsultSupervisor;
+	foreground: ConsultForeground;
 }
 
 /** A resolved continuation request. */
@@ -97,7 +96,9 @@ export class ConsultTool {
 				"consultants advise only; pi executes every change. Use `files` to " +
 				"point a consultant at paths it should read itself instead of pasting " +
 				"contents. Pass the returned consult id as `continue` to keep talking to " +
-				"the same consultant session. Never include secrets in a brief.",
+				"the same consultant session. Escape or a queued message detaches the " +
+				"call instead of cancelling it: the consultation keeps running and is " +
+				"collected with consult_collect. Never include secrets in a brief.",
 			parameters: Type.Object({
 				target: Type.Union(
 					[Type.Literal("claude"), Type.Literal("codex"), Type.Literal("both")],
@@ -222,6 +223,13 @@ export class ConsultTool {
 					);
 				}
 			}
+			if (this.deps.supervisor.get(continuation.consultId)?.live) {
+				return this.failure(
+					ctx,
+					`consult ${continuation.consultId} is still running; collect it with ` +
+						`consult_collect {id: "${continuation.consultId}"} before continuing.`,
+				);
+			}
 		}
 
 		const consultId = this.deps.index.nextId();
@@ -234,136 +242,86 @@ export class ConsultTool {
 			return this.failure(ctx, `could not persist the brief: ${this.message(error)}`);
 		}
 
-		const feed = new ConsultProgressFeed(targets, (snapshot) => {
-			try {
-				onUpdate?.({
-					content: [{ type: "text", text: snapshot }],
-					details: undefined as unknown as ConsultDetails,
-				});
-			} catch {
-				// The host callback must never break the run.
-			}
-		});
-		const requests = targets.map((name) =>
-			this.request(name, params, composed, continuation, paths, ctx, targets.length, feed),
+		const invocation = this.deps.supervisor.start(
+			this.spec(consultId, sessionId, params, targets, composed, continuation, paths, ctx),
 		);
-
-		const parent = signal ?? ctx.signal;
-		const interrupt = new AbortController();
-		let interrupted: "escape" | "steer" | undefined;
-		const onParentAbort = (): void => {
-			interrupted ??= "escape";
-			interrupt.abort();
-		};
-		if (parent) {
-			if (parent.aborted) onParentAbort();
-			else parent.addEventListener("abort", onParentAbort, { once: true });
-		}
-		const poll = setInterval(() => {
-			if (interrupt.signal.aborted) return;
-			try {
-				if (ctx.hasPendingMessages()) {
-					interrupted ??= "steer";
-					interrupt.abort();
-				}
-			} catch {
-				// A queue read failure must not break the run.
-			}
-		}, 250);
-		poll.unref?.();
-
-		let results: ConsultantResult[] = [];
-		try {
-			results = await this.deps.runner.run(requests, interrupt.signal);
-		} finally {
-			clearInterval(poll);
-			parent?.removeEventListener("abort", onParentAbort);
-			feed.closeAndFlush();
+		const outcome = await this.deps.foreground.wait(
+			invocation,
+			signal ?? ctx.signal,
+			() => ctx.hasPendingMessages(),
+			onUpdate,
+		);
+		if (outcome.status === "detached") {
+			const details = this.deps.supervisor.pending(invocation);
+			return {
+				content: [{ type: "text", text: this.detachedText(details, invocation.snapshot()) }],
+				details,
+			};
 		}
 
-		const runs: ConsultRun[] = [];
-		const answers = new Map<ConsultantName, string>();
-		for (const result of results) {
-			const answerPath = paths.answer(result.consultant);
-			const warnings = [...result.warnings];
-			let stored = false;
-			if (result.answer) {
-				try {
-					await this.deps.artifacts.write(answerPath, result.answer);
-					stored = true;
-				} catch (error) {
-					warnings.push(`answer could not be persisted: ${this.message(error)}`);
-				}
-			}
-			if (result.error) {
-				await this.deps.artifacts
-					.write(paths.diagnostic(result.consultant), `${result.error}\n`)
-					.catch(() => undefined);
-			}
-			answers.set(result.consultant, result.answer);
-			runs.push({
-				consultant: result.consultant,
-				status: result.status,
-				sessionId: result.sessionId,
-				answerPath: stored ? answerPath : undefined,
-				answerBytes: Buffer.byteLength(result.answer, "utf8"),
-				truncated: false,
-				partial: result.partial,
-				durationMs: result.durationMs,
-				exitCode: result.exitCode,
-				error: result.error,
-				usage: result.usage,
-				warnings,
-			});
-		}
-
-		const details: ConsultDetails = {
-			schema: 1,
-			consultId,
-			ok: runs.some((run) => run.status === "ok"),
-			cwd: ctx.cwd,
-			briefPath: paths.brief,
-			continuedFrom: continuation?.consultId,
-			interrupted,
-			runs,
-		};
-		const formatted = this.deps.formatter.format(details, answers);
-		const text = interrupted
-			? `pi-consult: consult ${consultId} was interrupted by the user (${interrupted}); ` +
-				`partial answers below. Resume with continue: "${consultId}".\n\n${formatted}`
-			: formatted;
+		const receipt: ConsultReceipt = await this.deps.supervisor.receipt(invocation);
 		return {
-			content: [{ type: "text", text }],
-			details,
-			isError: !details.ok && !interrupted,
+			content: [
+				{
+					type: "text",
+					text: this.deps.formatter.format(receipt.details, receipt.answers),
+				},
+			],
+			details: receipt.details,
+			isError: !receipt.details.ok,
 		};
 	}
 
-	private request(
-		name: ConsultantName,
+	private spec(
+		consultId: string,
+		sessionId: string,
 		params: ConsultParams,
+		targets: readonly ConsultantName[],
 		composed: string,
 		continuation: Continuation | undefined,
 		paths: ConsultPaths,
 		ctx: ExtensionToolContext,
-		targetCount: number,
-		feed: ConsultProgressFeed,
-	): ConsultRequest {
-		const settings = this.deps.config.consultant(name);
-		const resume = continuation?.resumeFor.get(name);
-		const model = params.model && targetCount === 1 ? params.model : settings.model;
+	): InvocationSpec {
+		const providerSessions: Partial<Record<ConsultantName, string>> = {};
+		const requests: InvocationRequestSpec[] = targets.map((name) => {
+			const settings = this.deps.config.consultant(name);
+			const resume = continuation?.resumeFor.get(name);
+			const freshSessionId = !resume && name === "claude" ? randomUUID() : undefined;
+			if (freshSessionId) providerSessions[name] = freshSessionId;
+			return {
+				consultant: name,
+				settings,
+				cwd: resume?.cwd ?? ctx.cwd,
+				resumeSessionId: resume?.sessionId,
+				sessionId: freshSessionId,
+				model: params.model && targets.length === 1 ? params.model : settings.model,
+				timeoutMs: params.timeout_s ? params.timeout_s * 1000 : settings.timeoutMs,
+			};
+		});
 		return {
-			consultant: name,
+			consultId,
+			sessionId,
+			cwd: ctx.cwd,
+			targets,
 			brief: composed,
-			cwd: resume?.cwd ?? ctx.cwd,
-			resumeSessionId: resume?.sessionId,
-			model,
 			systemPrompt: this.deps.composer.systemPrompt(),
-			timeoutMs: params.timeout_s ? params.timeout_s * 1000 : settings.timeoutMs,
-			lastMessagePath: paths.lastMessage(name),
-			onProgress: (line: string) => feed.event(name, line),
-			onPartial: (text: string) => feed.partial(name, text),
+			paths,
+			continuedFrom: continuation?.consultId,
+			requests,
+			providerSessions,
 		};
+	}
+
+	private detachedText(details: ConsultDetails, snapshot: string): string {
+		const reason = details.detachedBy ?? "interrupt";
+		const lines = [
+			`pi-consult: consult ${details.consultId} was interrupted (${reason}) and keeps ` +
+				"running in the background.",
+			`Collect it with consult_collect {id: "${details.consultId}"}, or continue it ` +
+				"once collected.",
+		];
+		if (snapshot) lines.push("", ConsultTool.clip(snapshot, 4_000));
+		return lines.join("\n");
 	}
 
 	private resolveContinuation(handle: string | undefined): Continuation | undefined {
@@ -463,8 +421,9 @@ export class ConsultTool {
 		return {
 			content: [{ type: "text", text: `pi-consult: ${text}` }],
 			details: {
-				schema: 1,
+				schema: 2,
 				consultId: "-",
+				phase: "complete",
 				ok: false,
 				cwd: ctx?.cwd ?? process.cwd(),
 				briefPath: "",
@@ -476,5 +435,10 @@ export class ConsultTool {
 
 	private message(error: unknown): string {
 		return error instanceof Error ? error.message : String(error);
+	}
+
+	private static clip(text: string, maxBytes: number): string {
+		if (Buffer.byteLength(text, "utf8") <= maxBytes) return text;
+		return text.slice(0, maxBytes);
 	}
 }
