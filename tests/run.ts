@@ -45,6 +45,8 @@ import "./artifact-store.test.ts";
 import "./gate.test.ts";
 import "./result-view.test.ts";
 import "./availability.test.ts";
+import "./mcp-bridge.test.ts";
+import "./bridge-e2e.test.ts";
 
 await registry.runAll();
 cleanupScratch();
