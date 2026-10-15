@@ -20,7 +20,7 @@ import { ReceiptLedger } from "../src/receipt-ledger.ts";
 import { SecretScreen } from "../src/secret-screen.ts";
 import { FakePi, assert, assertEq, assertIncludes, assertNotIncludes, scratchDir, test } from "./harness.ts";
 
-const theme = { fg: (_color: string, text: string) => `<${text}>` } as unknown as Theme;
+const theme = { fg: (_color: string, text: string) => `<${text}>`, bold: (text: string) => text } as unknown as Theme;
 
 function result(text: string): AgentToolResult<unknown> {
 	return { content: [{ type: "text", text }] } as AgentToolResult<unknown>;
@@ -67,6 +67,16 @@ test("result view: a live stream tails when collapsed and expands on demand", ()
 	);
 	const expanded = rendered(view, slot, numberedLines(40), true, true).join("\n");
 	assertIncludes(expanded, "line-1", "expanding shows everything");
+});
+
+test("result view: a live stream marks a section and indents its activity", () => {
+	const view = new ConsultResultView();
+	const slot: ResultRenderSlot = { lastComponent: undefined };
+	const text = rendered(view, slot,
+		"=== claude ===\n[call bash] ls -la\nhello there", true, false).join("\n");
+	assertIncludes(text, "<=== claude ===>", "the section marker is styled");
+	assertIncludes(text, "  <[call bash] ls -la>", "activity is indented");
+	assertIncludes(text, "  <hello there>", "streamed text is indented too");
 });
 
 test("result view: the previous component is reused", () => {
