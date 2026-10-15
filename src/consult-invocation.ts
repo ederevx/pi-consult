@@ -13,6 +13,7 @@ import { ConsultProgressFeed } from "./consult-progress.ts";
 import type { ConsultRunner } from "./consult-runner.ts";
 import type {
 	AttachmentState,
+	BridgeConnection,
 	ConsultRequest,
 	ConsultantName,
 	ConsultantResult,
@@ -26,8 +27,11 @@ export interface InvocationRequestSpec {
 	settings: ConsultantSettings;
 	cwd: string;
 	resumeSessionId?: string;
+	/** A caller-chosen id for a fresh run, so the manifest can record it early. */
+	sessionId?: string;
 	model?: string;
 	timeoutMs: number;
+	bridge?: BridgeConnection;
 }
 
 /** Everything one invocation needs before it starts. */
@@ -60,6 +64,7 @@ export class ConsultInvocation {
 	private readonly controller = new AbortController();
 	private readonly feed: ConsultProgressFeed;
 	private readonly listeners = new Set<(snapshot: string) => void>();
+	private readonly attention = new Set<() => void>();
 	private completion: Promise<readonly ConsultantResult[]> | undefined;
 	private results: readonly ConsultantResult[] | undefined;
 
@@ -142,6 +147,22 @@ export class ConsultInvocation {
 		};
 	}
 
+	/**
+	 * Watch for a consultant request that the agent must service. A blocking
+	 * foreground caller uses it to step aside so the request can be answered.
+	 */
+	onAttention(listener: () => void): () => void {
+		this.attention.add(listener);
+		return () => {
+			this.attention.delete(listener);
+		};
+	}
+
+	/** Signal that the agent is needed; the foreground caller detaches. */
+	requestAttention(): void {
+		for (const listener of [...this.attention]) listener();
+	}
+
 	/** Deliver one progress snapshot to the current subscribers. */
 	private publish(snapshot: string): void {
 		for (const listener of [...this.listeners]) listener(snapshot);
@@ -158,6 +179,7 @@ export class ConsultInvocation {
 			timeoutMs: request.timeoutMs,
 			systemPrompt: this.spec.systemPrompt,
 			lastMessagePath: this.paths.lastMessage(request.consultant),
+			bridge: request.bridge,
 			onProgress: (line: string) => this.feed.event(request.consultant, line),
 			onPartial: (text: string) => this.feed.partial(request.consultant, text),
 		}));

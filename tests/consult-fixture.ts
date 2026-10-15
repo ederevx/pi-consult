@@ -11,13 +11,18 @@ import { join } from "node:path";
 
 import { AnswerFormatter } from "../src/answer-formatter.ts";
 import { ArtifactStore } from "../src/artifact-store.ts";
+import { BridgeLauncher } from "../src/bridge-launcher.ts";
 import { BriefComposer } from "../src/brief-composer.ts";
 import { ConsultCollectTool } from "../src/consult-collect-tool.ts";
 import { ConsultConfig } from "../src/consult-config.ts";
+import { ConsultControlServer } from "../src/consult-control-server.ts";
 import { ConsultDelivery } from "../src/consult-delivery.ts";
+import { ConsultDriveDispatcher } from "../src/consult-drive-dispatcher.ts";
 import { ConsultForeground } from "../src/consult-foreground.ts";
 import { ConsultIndex } from "../src/consult-index.ts";
 import { ConsultRecordStore } from "../src/consult-record-store.ts";
+import { ConsultReplyTool } from "../src/consult-reply-tool.ts";
+import { ConsultRequestBroker } from "../src/consult-request-broker.ts";
 import { ConsultRunner } from "../src/consult-runner.ts";
 import { ConsultSettingsStore } from "../src/consult-settings-store.ts";
 import { ConsultSupervisor } from "../src/consult-supervisor.ts";
@@ -71,7 +76,11 @@ export function fakeCodex(delayMs = 0): string {
 }
 
 /** A config document over a scratch artifact directory. */
-export function configFile(claudeCommand: string, codexCommand: string): ConsultConfig {
+export function configFile(
+	claudeCommand: string,
+	codexCommand: string,
+	extra: Record<string, unknown> = {},
+): ConsultConfig {
 	const path = join(scratchDir(), `integration-config-${Math.random().toString(16).slice(2)}.json`);
 	writeFileSync(
 		path,
@@ -83,6 +92,7 @@ export function configFile(claudeCommand: string, codexCommand: string): Consult
 				claude: { command: claudeCommand },
 				codex: { command: codexCommand },
 				maxConcurrent: 2,
+				...extra,
 			},
 		}),
 	);
@@ -99,9 +109,13 @@ export interface ConsultFixture {
 	records: ConsultRecordStore;
 	supervisor: ConsultSupervisor;
 	processes: ProcessRunner;
+	broker: ConsultRequestBroker;
+	control: ConsultControlServer;
+	bridge: BridgeLauncher;
 	tool: ConsultTool;
 	collect: ConsultCollectTool;
 	terminate: ConsultTerminateTool;
+	reply: ConsultReplyTool;
 }
 
 /** Build the real owners over the given configuration. */
@@ -125,6 +139,12 @@ export function buildConsultFixture(config: ConsultConfig, sessionId = "sess-int
 		new ConsultDelivery(pi as never, new SessionIdentity(sessionId)),
 	);
 	const formatter = new AnswerFormatter(config.output);
+	const broker = new ConsultRequestBroker(
+		new ConsultDriveDispatcher({ pi: pi as never, supervisor }),
+		config.drive.deadlineMs,
+	);
+	const control = new ConsultControlServer({ broker, root: config.artifactDir });
+	const screen = new SecretScreen();
 	return {
 		config,
 		pi,
@@ -134,18 +154,23 @@ export function buildConsultFixture(config: ConsultConfig, sessionId = "sess-int
 		records,
 		supervisor,
 		processes,
+		broker,
+		control,
+		bridge: new BridgeLauncher(control, artifacts, config.drive),
 		tool: new ConsultTool({
 			config,
 			ledger,
 			index,
 			artifacts,
-			screen: new SecretScreen(),
+			screen,
 			composer: new BriefComposer(),
 			formatter,
 			supervisor,
 			foreground: new ConsultForeground(),
+			bridge: new BridgeLauncher(control, artifacts, config.drive),
 		}),
 		collect: new ConsultCollectTool({ supervisor, records, index, formatter }),
 		terminate: new ConsultTerminateTool(supervisor),
+		reply: new ConsultReplyTool(broker, screen),
 	};
 }
