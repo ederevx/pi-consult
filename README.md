@@ -92,6 +92,11 @@ answer text arrives as one event at the end. Token-level Codex streaming
 exists only on the experimental `codex app-server` JSON-RPC transport
 (`item/agentMessage/delta`), which this extension does not use.
 
+With more than one consultant the window reads as one section each: a
+`=== name ===` marker in the title color, with that consultant's
+activity indented under it, so a marker never reads as another line of
+output.
+
 ### When the agent stops
 
 The extension watches the model's own results (`message_end`,
