@@ -34,13 +34,10 @@ interface EffortEntry {
 	auditFailed: boolean;
 }
 
-/** The fields of a `tool_result` event this policy reads. */
-interface ToolResultView {
-	toolName: string;
-	input?: Record<string, unknown>;
-	content?: Array<{ type?: string; text?: string }>;
-	details?: unknown;
-	isError?: boolean;
+/** One non-blank source line and the Markdown context it sits in. */
+interface SourceLine {
+	text: string;
+	kind: "plain" | "quote" | "fence" | "indented";
 }
 
 export class AgentEffortPolicy {
@@ -76,7 +73,7 @@ export class AgentEffortPolicy {
 	private auditors = new Set<string>();
 	private independent = new Set<string>();
 	private auditFailed = false;
-	private spawning = false;
+	private readonly spawns = new Set<string>();
 	private unsupported = false;
 	private lastMessage: unknown;
 	private outcome = "completed";
@@ -90,26 +87,39 @@ export class AgentEffortPolicy {
 		this.pi = pi;
 		pi.on("session_start", (_event, ctx: ExtensionContext) => this.load(ctx, false));
 		pi.on("session_tree", (_event, ctx: ExtensionContext) => this.load(ctx, true));
-		pi.on("agent_start", () => {
+		pi.on("agent_start", (_event, ctx: ExtensionContext) => {
+			this.rollback(ctx);
 			this.lastMessage = undefined;
 			this.outcome = "completed";
 		});
 		pi.on("tool_call", (event) =>
-			this.observeCall(String(event.toolName ?? ""), (event as { input?: Record<string, unknown> }).input),
+			this.observeCall(
+				String(event.toolName ?? ""),
+				String(event.toolCallId ?? ""),
+				(event as { input?: Record<string, unknown> }).input,
+			),
 		);
-		pi.on("tool_result", (event, ctx: ExtensionContext) => this.observeResult(event as unknown as ToolResultView, ctx));
-		pi.on("turn_end", (event, ctx: ExtensionContext) => this.observeTurn(event.message, ctx));
+		// tool_execution_end fires for every call, including one another
+		// extension blocked or the user aborted; tool_result does not.
+		pi.on("tool_execution_end", (event, ctx: ExtensionContext) => this.observeEnd(event, ctx));
+		pi.on("turn_end", (event, ctx: ExtensionContext) => {
+			this.rollback(ctx);
+			this.observeTurn(event.message, ctx);
+		});
 		pi.on("agent_before_settle", (event) => {
 			this.outcome = event.outcome;
 		});
-		pi.on("agent_settled", (_event, ctx: ExtensionContext) => this.settled(ctx));
+		pi.on("agent_settled", (_event, ctx: ExtensionContext) => {
+			this.rollback(ctx);
+			this.settled(ctx);
+		});
 		pi.on("model_select", (_event, ctx: ExtensionContext) => {
-			if (this.holding && !this.spawning) this.lower(ctx);
+			if (this.holding && this.spawns.size === 0) this.lower(ctx);
 		});
 		// Source-less: a model switch sets the level before model_select fires,
 		// so no selection is read as a user release; only the command releases.
 		pi.on("thinking_level_select", (event, ctx: ExtensionContext) => {
-			if (this.holding && !this.spawning && AgentEffortPolicy.LOWER.has(event.level)) this.lower(ctx);
+			if (this.holding && this.spawns.size === 0 && AgentEffortPolicy.LOWER.has(event.level)) this.lower(ctx);
 		});
 		pi.registerCommand("consult-effort", {
 			description: "Show pi-consult's thinking-level hold and audit ladder, or end the hold with `release`.",
@@ -186,7 +196,7 @@ export class AgentEffortPolicy {
 		this.holding = false;
 		this.previous = undefined;
 		this.unsupported = false;
-		this.spawning = false;
+		this.spawns.clear();
 		this.resetCycle();
 		this.persist();
 		if (previous && previous !== pi.getThinkingLevel()) pi.setThinkingLevel(previous);
@@ -236,8 +246,8 @@ export class AgentEffortPolicy {
 			this.expired.delete(name);
 			return;
 		}
-		const kind = run.error ? this.classifier.classifyText(run.error) : undefined;
-		if (AgentEffortPolicy.EXPIRING.has(run.status) || kind === "quota" || kind === "auth") {
+		const kind = run.error ? this.classifier.classifyExpiry(run.error) : null;
+		if (AgentEffortPolicy.EXPIRING.has(run.status) || kind !== null) {
 			this.expired.add(name);
 			return;
 		}
@@ -264,7 +274,7 @@ export class AgentEffortPolicy {
 		}
 	}
 
-	private observeCall(name: string, input: Record<string, unknown> | undefined): void {
+	private observeCall(name: string, toolCallId: string, input: Record<string, unknown> | undefined): void {
 		if (AgentEffortPolicy.MUTATIONS.has(name)) {
 			if (this.holding && this.fresh.size > 0) {
 				this.fresh.clear();
@@ -273,43 +283,66 @@ export class AgentEffortPolicy {
 			return;
 		}
 		const pi = this.pi;
-		if (name !== "team_spawn" || !pi || !this.holding || !this.previous) return;
+		if (name !== "team_spawn" || !toolCallId || !pi || !this.holding || !this.previous) return;
 		if (!AgentEffortPolicy.isAudit(input?.task)) return;
 		// The teammate inherits the live level at spawn: give the auditor the
-		// user's level, then lower again at this call's tool_result.
-		this.spawning = true;
+		// user's level until this call's tool_execution_end.
+		this.spawns.add(toolCallId);
 		if (this.previous !== pi.getThinkingLevel()) pi.setThinkingLevel(this.previous);
 	}
 
-	private observeResult(event: ToolResultView, ctx: ExtensionContext): void {
-		if (event.toolName !== "team_spawn" || !AgentEffortPolicy.isAudit(event.input?.task)) return;
-		const raised = this.spawning;
-		this.spawning = false;
-		if (!this.holding) return;
-		const id = event.isError ? undefined : AgentEffortPolicy.teammateId(event);
-		const serving = this.serving();
-		if (!id) {
-			this.auditFailed = true;
-		} else if (serving.length > 0) {
-			this.notify(
-				ctx,
-				`pi-consult: independent audit ${id} was spawned while ${serving.join(", ")} can still serve; its verdict will not complete the cycle.`,
-				"warning",
-			);
-		} else {
-			this.auditors.add(id);
-			this.owed.add(id);
-			this.fresh.add(id);
+	private observeEnd(
+		event: { toolCallId?: string; result?: unknown; isError?: boolean },
+		ctx: ExtensionContext,
+	): void {
+		if (!this.spawns.delete(String(event.toolCallId ?? ""))) return;
+		if (this.holding) {
+			const result = (event.result ?? {}) as { content?: Array<{ type?: string; text?: string }>; details?: unknown };
+			const id = event.isError ? undefined : AgentEffortPolicy.teammateId(result);
+			const serving = this.serving();
+			if (!id) {
+				this.auditFailed = true;
+				this.notify(
+					ctx,
+					"pi-consult: the independent audit spawn did not complete (blocked, aborted, or failed); it is recorded as a failed audit.",
+					"warning",
+				);
+			} else if (serving.length > 0) {
+				this.notify(
+					ctx,
+					`pi-consult: independent audit ${id} was spawned while ${serving.join(", ")} can still serve; its verdict will not complete the cycle.`,
+					"warning",
+				);
+			} else {
+				this.auditors.add(id);
+				this.owed.add(id);
+				this.fresh.add(id);
+			}
+			this.persist();
 		}
+		if (this.spawns.size === 0 && this.holding) this.lower(ctx, true);
+	}
+
+	/** Undo a spawn raise whose call never reported its end. */
+	private rollback(ctx: ExtensionContext | undefined): void {
+		if (this.spawns.size === 0) return;
+		this.spawns.clear();
+		if (!this.holding) return;
+		this.auditFailed = true;
 		this.persist();
-		if (raised) this.lower(ctx, true);
+		this.lower(ctx, true);
+		this.notify(
+			ctx,
+			"pi-consult: an independent audit spawn never reported its end; pi's thinking is back at low and the audit is recorded as failed.",
+			"warning",
+		);
 	}
 
 	private observeTurn(message: unknown, ctx: ExtensionContext): void {
 		this.lastMessage = message;
 		if (!this.holding) return;
 		this.collectReports(ctx);
-		const lines = AgentEffortPolicy.lines(AgentEffortPolicy.assistantText(message));
+		const lines = AgentEffortPolicy.plainLines(AgentEffortPolicy.assistantText(message));
 		if (lines.some((line) => AgentEffortPolicy.USER_AUDIT.test(line))) {
 			this.restore(ctx, "audit by pi at the user's request");
 			return;
@@ -343,7 +376,7 @@ export class AgentEffortPolicy {
 			if (data.direction !== "received" || data.kind !== "result" || typeof from !== "string") continue;
 			if (!this.auditors.has(from) || !this.owed.has(from)) continue;
 			this.owed.delete(from);
-			const last = AgentEffortPolicy.lines(String(data.payload ?? "")).at(-1) ?? "";
+			const last = AgentEffortPolicy.lastPlain(String(data.payload ?? "")) ?? "";
 			const verdict = last.match(AgentEffortPolicy.AUDIT_VERDICT)?.[1];
 			if (verdict === "approved") this.independent.add(from);
 			else if (!verdict) this.auditFailed = true;
@@ -409,7 +442,7 @@ export class AgentEffortPolicy {
 		this.auditors = new Set(data?.auditors ?? []);
 		this.independent = new Set(data?.independent ?? []);
 		this.auditFailed = data?.auditFailed === true;
-		this.spawning = false;
+		this.spawns.clear();
 		this.unsupported = false;
 		this.lastMessage = undefined;
 		if (this.holding) {
@@ -499,7 +532,7 @@ export class AgentEffortPolicy {
 		return AgentEffortPolicy.AUDIT_HEADER.test(first);
 	}
 
-	private static teammateId(event: ToolResultView): string | undefined {
+	private static teammateId(event: { content?: Array<{ type?: string; text?: string }>; details?: unknown }): string | undefined {
 		const id = (event.details as { id?: unknown } | undefined)?.id;
 		if (typeof id === "string" && id.trim()) return id.trim();
 		const text = (event.content ?? []).map((part) => part?.text ?? "").join("\n");
@@ -508,7 +541,7 @@ export class AgentEffortPolicy {
 
 	private static approves(answer: string | undefined): boolean {
 		if (!answer) return false;
-		return AgentEffortPolicy.VERDICT.test(AgentEffortPolicy.lines(answer).at(-1) ?? "");
+		return AgentEffortPolicy.VERDICT.test(AgentEffortPolicy.lastPlain(answer) ?? "");
 	}
 
 	/** The last plain line of a final, tool-free assistant message. */
@@ -516,7 +549,7 @@ export class AgentEffortPolicy {
 		const record = message as { role?: string; content?: unknown };
 		if (record?.role !== "assistant" || !Array.isArray(record.content)) return undefined;
 		if (record.content.some((part) => (part as { type?: string })?.type === "toolCall")) return undefined;
-		return AgentEffortPolicy.lines(AgentEffortPolicy.assistantText(message)).at(-1);
+		return AgentEffortPolicy.lastPlain(AgentEffortPolicy.assistantText(message));
 	}
 
 	private static assistantText(message: unknown): string {
@@ -528,19 +561,56 @@ export class AgentEffortPolicy {
 			.join("\n");
 	}
 
-	/** Trimmed non-empty lines outside code fences and blockquotes. */
-	private static lines(text: string): string[] {
-		const lines: string[] = [];
-		let fenced = false;
-		for (const raw of text.split("\n")) {
-			const line = raw.trim();
-			if (line.startsWith("```") || line.startsWith("~~~")) {
-				fenced = !fenced;
+	/** Classify every non-blank line by Markdown context; nothing is dropped. */
+	private static classify(text: string): SourceLine[] {
+		const out: SourceLine[] = [];
+		let fence: { char: string; length: number } | undefined;
+		let quoted = false;
+		for (const raw of text.replace(/\r\n?/g, "\n").split("\n")) {
+			const line = raw.replace(/\t/g, "    ");
+			const body = line.trim();
+			const indent = line.length - line.trimStart().length;
+			if (fence) {
+				const close = indent <= 3 ? body.match(/^(`{3,}|~{3,})$/) : null;
+				if (close && close[1][0] === fence.char && close[1].length >= fence.length) fence = undefined;
+				if (body) out.push({ text: body, kind: "fence" });
 				continue;
 			}
-			if (fenced || line === "" || line.startsWith(">")) continue;
-			lines.push(line);
+			if (body === "") {
+				quoted = false;
+				continue;
+			}
+			if (indent <= 3) {
+				const open = body.match(/^(`{3,}|~{3,})(.*)$/);
+				if (open && !(open[1][0] === "`" && open[2].includes("`"))) {
+					fence = { char: open[1][0], length: open[1].length };
+					quoted = false;
+					out.push({ text: body, kind: "fence" });
+					continue;
+				}
+				if (body.startsWith(">")) {
+					quoted = true;
+					out.push({ text: body, kind: "quote" });
+					continue;
+				}
+			}
+			if (quoted) out.push({ text: body, kind: "quote" });
+			else if (indent >= 4) out.push({ text: body, kind: "indented" });
+			else out.push({ text: body, kind: "plain" });
 		}
-		return lines;
+		return out;
+	}
+
+	/** Plain lines anywhere: where a pi disclosure line may sit. */
+	private static plainLines(text: string): string[] {
+		return AgentEffortPolicy.classify(text)
+			.filter((line) => line.kind === "plain")
+			.map((line) => line.text);
+	}
+
+	/** The final non-blank source line, only when it is plain. */
+	private static lastPlain(text: string): string | undefined {
+		const last = AgentEffortPolicy.classify(text).at(-1);
+		return last?.kind === "plain" ? last.text : undefined;
 	}
 }

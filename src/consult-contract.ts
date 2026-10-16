@@ -15,7 +15,7 @@ import type { GateSnapshot } from "./receipt-ledger.ts";
 
 export class ConsultContract {
 	/** Bump when the acknowledgement terms change; old receipts stop counting. */
-	static readonly VERSION = 8;
+	static readonly VERSION = 9;
 
 	/** The acknowledgement text the agent accepts by calling `pre_consult`. */
 	contractText(): string {
@@ -105,7 +105,11 @@ export class ConsultContract {
 			"  consult's answer ends with the approved verdict, it started after your",
 			"  last edit, write, or command, and nothing is still owed. A",
 			"  changes-needed verdict is the next step of the plan, not a release.",
-			"  Never write the line earlier, and never quote it.",
+			"  Never write the line earlier, and never quote, indent, or fence it.",
+			"- pi-consult reads every marker line in this contract only as plain text:",
+			"  a marker indented four or more spaces, quoted with >, inside a code",
+			"  fence, or in the lines after a quote does not count, and a completion",
+			"  or verdict line counts only as the last non-blank line of its text.",
 			"",
 			"Use consultant work without repeating it:",
 			"- Do not redo the investigation a consultant performed: no re-surveying",
@@ -175,7 +179,7 @@ export class ConsultContract {
 			"  are that independent agent and the audit is your task: do it yourself,",
 			"  read-only (no edits, no writes, no state-changing commands; edit, write,",
 			"  and powershell are blocked for you), do not delegate it, and end the",
-			"  report you send your parent with one of these lines, alone and last:",
+			"  report you send your parent with one of these lines, plain and last:",
 			"    Independent audit verdict: approved - <one-line reason>.",
 			"    Independent audit verdict: changes needed - <one-line reason>.",
 			"- Only when every enabled consultant has expired may you carry a",
@@ -241,7 +245,8 @@ export class ConsultContract {
 				"effort declaration, no waiver. Whether a task consults is your stated " +
 				"judgment. A failed or unavailable consultant does not close the gate. " +
 				"The consultant-mode, roadblock, and audit terms are commitments, not " +
-				"gate checks.",
+				"gate checks. The one exception: a session spawned as a pi-consult independent " +
+				"auditor keeps edit, write, and powershell blocked for its whole life.",
 		);
 		lines.push("");
 		lines.push("Consultants:");

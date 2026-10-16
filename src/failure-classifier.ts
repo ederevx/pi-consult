@@ -26,6 +26,12 @@ export class FailureClassifier {
 	private static readonly AUTH = /unauthori[sz]ed|invalid api key|authentication|permission denied/i;
 	/** Transient throttling and overload. */
 	private static readonly RATE = /rate.?limit|too many requests|overloaded|try again later/i;
+	/** Provider account exhaustion, as the provider words it; never a bare "quota" or "billing". */
+	private static readonly EXPIRED_QUOTA =
+		/\binsufficient_quota\b|exceeded your current quota|credit balance is too low|billing_hard_limit_reached|billing hard limit (?:has been )?reached|usage limit (?:has been )?(?:reached|exceeded)/i;
+	/** Provider credential failure, as the provider words it; never a bare "permission denied". */
+	private static readonly EXPIRED_AUTH =
+		/\binvalid[ _]api[ _]key\b|\binvalid x-api-key\b|\bauthentication_error\b|\bnot logged in\b|please run \/login|\boauth token (?:has )?expired\b|\b401\b[^\n]*\bunauthori[sz]ed\b|\bunauthori[sz]ed\b[^\n]*\b401\b/i;
 
 	/** Null unless the run failed: "error" classifies its text, "length" is the output limit. */
 	classifyMessage(
@@ -48,5 +54,12 @@ export class FailureClassifier {
 			return "rate_limited";
 		}
 		return "provider_error";
+	}
+
+	/** Strict: only provider wording that a retry cannot fix expires a consultant. */
+	classifyExpiry(text: string): "quota" | "auth" | null {
+		if (FailureClassifier.EXPIRED_QUOTA.test(text)) return "quota";
+		if (FailureClassifier.EXPIRED_AUTH.test(text)) return "auth";
+		return null;
 	}
 }
