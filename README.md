@@ -168,9 +168,11 @@ The consult row uses pi's normal shell: one header line naming the target
 and brief, then one fixed status line per consultant while the call runs,
 and pi's ten-line preview of the answer once it finishes. The consultant's
 own stream appears as separate transcript cards below the row — one per
-tool-use burst or block of prose, each on the custom-message background
-with an author tag (`claude · tool`, `codex · said`), collapsed by default
-and opened with pi's standard expand toggle. The cards are TUI-only, stay
+tool-use burst or block of prose. A tool card renders as a pi tool row
+titled by the consultant (a success or error background, the tool name in
+bold, its argument muted); a prose card renders as pi's `[claude]`
+custom-message box. Both are collapsed by default and opened with pi's
+standard expand toggle. The cards are TUI-only, stay
 out of the model context, and are bounded per consultant; the row and the
 cards are views, so the model-facing snapshot is unchanged.
 
