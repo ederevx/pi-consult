@@ -162,10 +162,14 @@ answer text arrives as one event at the end. Token-level Codex streaming
 exists only on the experimental `codex app-server` JSON-RPC transport
 (`item/agentMessage/delta`), which this extension does not use.
 
-With more than one consultant the window reads as one section each: a
-`=== name ===` marker in the title color, with that consultant's
-activity indented under it, so a marker never reads as another line of
-output.
+The consult row draws its own shell, so the live window reads as cards:
+the call card names the target and brief, then one section per
+consultant opens with its name and streams that consultant's activity the
+way pi draws its own — a tool use as its own pending box, streamed answer
+text as plain prose. A finished or interrupted consult collapses to one
+card holding the whole answer, and the row's background is pending while
+the consult runs, then success or error. `=== name ===` markers remain
+only in the plain snapshot `consult_collect` reports.
 
 ### When the agent stops
 
