@@ -115,3 +115,10 @@ test("gate: the denial never demands an effort declaration or waiver", () => {
 	assertNotIncludes(reason, "threshold");
 	assertIncludes(reason, "acknowledge: true");
 });
+
+test("gate: the compaction reminder keeps the roadblock and cycle obligations", () => {
+	const reminder = new ConsultContract().compactionReminder({ acknowledged: true } as never);
+	assertIncludes(reminder, "every roadblock goes back to it");
+	assertIncludes(reminder, "never to you");
+	assertIncludes(reminder, "Write the Consultation cycle: complete line only after");
+});

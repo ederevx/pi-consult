@@ -230,3 +230,77 @@ test("consult sessions: the ledger records collect receipts, not pending ones", 
 	assertEq(index.resolve("c-111111111111")?.consultId, "c-111111111111");
 	assertEq(index.resolve("c-222222222222"), undefined, "a pending receipt is not history");
 });
+
+test("consult sessions: a non-live collect settles the consult; a live one does not", async () => {
+	const settles: string[] = [];
+	const effort = {
+		engage: (_ctx: unknown, _id: string) => undefined,
+		settle: (id: string) => settles.push(id),
+	};
+	const fixture = buildConsultFixture(
+		configFile(fakeClaude(500), fakeCodex()),
+		"sess-collect-effort",
+		effort,
+	);
+	const ctx = context();
+	ctx.pending = true;
+	const started = await fixture.tool.execute(
+		"call-collect-effort",
+		{ target: "claude", brief: "Collect me.", contains_no_secrets: true },
+		undefined,
+		undefined,
+		ctx as never,
+	);
+	const consultId = started.details.consultId;
+	const live = await fixture.collect.execute({ id: consultId }, ctx as never);
+	assertEq(live.details.phase, "running", "the live consult reports its state");
+	assertEq(settles.length, 0, "a live collect settles nothing");
+
+	const invocation = fixture.supervisor.get(consultId);
+	assert(invocation !== undefined, "tracked");
+	await invocation.done();
+	const final = await fixture.collect.execute({ id: consultId }, ctx as never);
+	assertEq(final.details.phase, "complete");
+	assertEq(settles.length, 1, "a non-live collect settles once");
+	assertEq(settles[0], consultId);
+
+	// 'last' resolves through the ledger, so give it a recorded receipt.
+	const receipt = toolEntry("t-collect-last", "consult", final.details);
+	fixture.ledger.rebuild([receipt], [receipt]);
+	const byLast = await fixture.collect.execute({ id: "last" }, ctx as never);
+	assertEq(byLast.details.phase, "complete");
+	assertEq(settles.length, 2, "a non-live 'last' collect settles too");
+	assertEq(settles[1], final.details.consultId);
+});
+
+test("consult sessions: terminate settles only a successful termination", async () => {
+	const settles: string[] = [];
+	const effort = {
+		engage: (_ctx: unknown, _id: string) => undefined,
+		settle: (id: string) => settles.push(id),
+	};
+	const fixture = buildConsultFixture(
+		configFile(fakeClaude(3_000), fakeCodex()),
+		"sess-term-effort",
+		effort,
+	);
+	const ctx = context();
+	ctx.pending = true;
+	const started = await fixture.tool.execute(
+		"call-term-effort",
+		{ target: "claude", brief: "Long.", contains_no_secrets: true },
+		undefined,
+		undefined,
+		ctx as never,
+	);
+	const invocation = fixture.supervisor.get(started.details.consultId);
+	assert(invocation !== undefined && invocation.live, "running before termination");
+	const result = await fixture.terminate.execute({ id: started.details.consultId });
+	assertEq(result.isError, false);
+	assertEq(settles.length, 1, "the successful terminate settles the consult");
+	assertEq(settles[0], started.details.consultId);
+
+	const failed = await fixture.terminate.execute({ id: "c-000000000000" });
+	assertEq(failed.isError, true);
+	assertEq(settles.length, 1, "a failed terminate settles nothing");
+});
