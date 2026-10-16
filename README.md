@@ -2,8 +2,9 @@
 
 Offload thinking work from the [pi](https://pi.dev) coding agent to external
 consultants — **Claude Code** and **OpenAI Codex** — behind an
-acknowledgement gate with a stated consultation judgment. pi keeps execution:
-the consultants advise, pi edits and runs commands.
+acknowledgement gate with a stated consultation judgment. In consultant mode
+the consultant owns the design and its verification; pi owns implementation
+and execution, at low thinking effort, and consults again at any roadblock.
 
 ## How it works
 
@@ -13,8 +14,10 @@ the consultants advise, pi edits and runs commands.
   the acknowledgement that briefs, and any files a consultant reads, leave the
   machine, that no secrets may be included, and of the consultation workflow:
   judge each task (leaning toward consulting for evaluation, audit, and
-  investigative work), verify rather than repeat a consultant's investigation,
-  and carry every doubt back through continuation. Its `promptGuidelines` keep that
+  investigative work), let the consultant own the design and its
+  verification, verify rather than repeat a consultant's investigation, carry
+  every doubt and roadblock back through continuation, and route audits of
+  consultant work to a consultant. Its `promptGuidelines` keep that
   workflow in the system prompt after a compaction.
 - **`consult`** — sends a self-contained brief to `claude`, `codex`, or both
   concurrently and returns their answers plus a continuation id. The agent
@@ -68,16 +71,43 @@ The catalogue instructs the agent, and the tool's prompt guidelines repeat it:
   enforcement.
 - The agent does **not** redo a consultant's investigation. It verifies the
   claims the change relies on — reading the cited files and lines, checking
-  names, signatures, and paths exist, running the relevant tests — and nothing
-  more.
+  names, signatures, and paths exist, running the relevant tests — and
+  reports that evidence as it came out. Whether the work is correct,
+  complete, best, or worth shipping is the consultant's verdict: finished
+  work goes back through `continue` for it.
 - Every doubt goes back to the consultant through `continue` with the consult
-  id, not to a silent parallel investigation. Deviations from the
-  recommendation are reported to the user with the verification that justified
-  them.
+  id, not to a silent parallel investigation. A **roadblock** — a failed
+  check, a step the plan does not cover, an unexpected result, or an
+  ambiguity — **must** go back the same way before the agent works around it.
+  Deviations from the recommendation are reported to the user and verified by
+  the consultant.
+- An audit of consultant-derived work is itself a consult; pi never audits it.
+  Two disclosed exceptions: no consultant is available
+  (`Consultant fallback: no consultant available - <reason>.`), or the user
+  directly asks pi to audit (`Audit by pi at the user's request - <request>.`).
+  Neither is presented as consultant verification. These are contract terms,
+  not gate checks.
 - Most tasks consult **one** consultant; `target: "both"` is reserved for
   tasks that genuinely demand two independent perspectives (cross-validating
   a high-stakes design, comparing incompatible approaches), never as a
   default.
+
+### pi's thinking level
+
+From the first consult of a task, pi-consult holds pi's own thinking level at
+`low` (`medium` where the model has no `low`; never `high`, `xhigh`, or `max`):
+the consultant owns the plan, so pi implements and executes it and consults
+again at a roadblock. The hold lasts until the consultation cycle is complete:
+pi ends a reply with `Consultation cycle: complete - <consult id> verified.`
+after the consultant has verified the finished work, the run settles cleanly,
+and no consult is still running or uncollected. pi-consult then restores the
+level pi had when the cycle began. A `Consultant fallback:` or
+`Audit by pi at the user's request` line, or a `pre_consult` probe that finds no
+consultant, restores it at once. During a run a manual raise is lowered again;
+between runs a manual raise ends the hold until the next consult. The hold
+survives reload and compaction, `off`, `minimal`, and `low` are left alone,
+and the configured default for new sessions is not changed. Consultant
+`effort` settings are unaffected.
 
 ### Live output
 
@@ -121,7 +151,7 @@ consultation is announced and collected with `consult_collect`. Only
 ## Install
 
 ```bash
-pi install git:github.com/ederevx/pi-consult@v0.11.0
+pi install git:github.com/ederevx/pi-consult@v0.12.0
 ```
 
 The package has no runtime dependencies; it uses the host-provided

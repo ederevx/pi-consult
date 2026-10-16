@@ -24,6 +24,7 @@ import type {
 	ConsultTarget,
 	ConsultantName,
 } from "./contracts.ts";
+import type { AgentEffortPolicy } from "./agent-effort-policy.ts";
 import type { AnswerFormatter } from "./answer-formatter.ts";
 import type { ArtifactStore, ConsultPaths } from "./artifact-store.ts";
 import type { BridgeLauncher } from "./bridge-launcher.ts";
@@ -60,6 +61,8 @@ export interface ConsultToolDeps {
 	supervisor: ConsultSupervisor;
 	foreground: ConsultForeground;
 	bridge: BridgeLauncher;
+	/** pi's thinking-level cycle; engaged by a consult, settled by its receipt. */
+	effort?: AgentEffortPolicy;
 }
 
 /** A resolved continuation request. */
@@ -94,7 +97,10 @@ export class ConsultTool {
 				"target 'both' only when " +
 				"the task demands two independent perspectives or cross-validation. " +
 				"The answer is the plan of record: verify its claims rather than repeating " +
-				"its investigation, and carry every doubt back with continue. The " +
+				"its investigation, and carry every doubt and every roadblock back with " +
+				"continue instead of working around it. The consultant also verifies the " +
+				"finished work: send the evidence back with continue; never audit " +
+				"consultant work yourself. The " +
 				"consultants advise only; pi executes every change. Use `files` to " +
 				"point a consultant at paths it should read itself instead of pasting " +
 				"contents. Pass the returned consult id as `continue` to keep talking to " +
@@ -247,6 +253,7 @@ export class ConsultTool {
 		const invocation = this.deps.supervisor.start(
 			await this.spec(consultId, sessionId, params, targets, composed, continuation, paths, ctx),
 		);
+		this.deps.effort?.engage(ctx, consultId);
 		const outcome = await this.deps.foreground.wait(
 			invocation,
 			signal ?? ctx.signal,
@@ -262,6 +269,7 @@ export class ConsultTool {
 		}
 
 		const receipt: ConsultReceipt = await this.deps.supervisor.receipt(invocation);
+		this.deps.effort?.settle(consultId);
 		return {
 			content: [
 				{

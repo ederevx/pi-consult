@@ -9,6 +9,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { AgentAvailability } from "./agent-availability.ts";
+import { AgentEffortPolicy } from "./agent-effort-policy.ts";
 import { AnswerFormatter } from "./answer-formatter.ts";
 import { ArtifactStore } from "./artifact-store.ts";
 import { BridgeLauncher } from "./bridge-launcher.ts";
@@ -81,7 +82,10 @@ export class ConsultExtension {
 			config.drive,
 		);
 
-		new PreConsultTool(contract, runner).register(pi);
+		const effort = new AgentEffortPolicy(config);
+		effort.register(pi);
+
+		new PreConsultTool(contract, runner, effort).register(pi);
 		new ConsultTool({
 			config,
 			ledger,
@@ -93,9 +97,10 @@ export class ConsultExtension {
 			supervisor,
 			foreground: new ConsultForeground(),
 			bridge,
+			effort,
 		}).register(pi);
-		new ConsultCollectTool({ supervisor, records, index, formatter }).register(pi);
-		new ConsultTerminateTool(supervisor).register(pi);
+		new ConsultCollectTool({ supervisor, records, index, formatter, effort }).register(pi);
+		new ConsultTerminateTool(supervisor, effort).register(pi);
 		new ConsultReplyTool(broker, new SecretScreen()).register(pi);
 		new ImplementationGate(ledger, classifier, contract).register(pi);
 		new AgentAvailability(new FailureClassifier(), () => index.latest()?.consultId ?? null).register(pi);

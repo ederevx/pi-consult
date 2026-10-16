@@ -14,6 +14,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
+import type { AgentEffortPolicy } from "./agent-effort-policy.ts";
 import type { ConsultSupervisor } from "./consult-supervisor.ts";
 
 /** The `consult_terminate` tool's parameters. */
@@ -23,9 +24,11 @@ export interface ConsultTerminateParams {
 
 export class ConsultTerminateTool {
 	private readonly supervisor: ConsultSupervisor;
+	private readonly effort: AgentEffortPolicy | undefined;
 
-	constructor(supervisor: ConsultSupervisor) {
+	constructor(supervisor: ConsultSupervisor, effort?: AgentEffortPolicy) {
 		this.supervisor = supervisor;
+		this.effort = effort;
 	}
 
 	/** Register the tool with pi. */
@@ -64,6 +67,7 @@ export class ConsultTerminateTool {
 			};
 		}
 		const terminated = await this.supervisor.terminate(handle);
+		if (terminated) this.effort?.settle(handle);
 		return {
 			content: [
 				{

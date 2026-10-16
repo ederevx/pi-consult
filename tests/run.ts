@@ -34,6 +34,7 @@ import "./parsers.test.ts";
 import "./process-runner.test.ts";
 import "./consultants.test.ts";
 import "./consult-tool.test.ts";
+import "./agent-effort.test.ts";
 import "./consult-sessions.test.ts";
 import "./consult-drive.test.ts";
 import "./pre-consult.test.ts";

@@ -3,6 +3,7 @@ import { join } from "node:path";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
+import { ConsultConfig } from "../src/consult-config.ts";
 import { ConsultSettings } from "../src/consult-settings.ts";
 import { ConsultSettingsStore } from "../src/consult-settings-store.ts";
 import { assertEq, assertIncludes, scratchDir, test } from "./harness.ts";
@@ -128,6 +129,15 @@ test("settings: an outside edit between two operations survives", () => {
 	assertEq(raw.sibling, "added elsewhere", "the outside key survives the next write");
 	assertEq(raw.piConsult.maxConcurrent, 3, "the earlier setting survives too");
 	assertEq(raw.piConsult.retentionDays, 7);
+});
+
+test("settings: consultant effort settings are untouched by the hold", () => {
+	const config = ConsultConfig.from(
+		{ claude: { effort: "high" }, codex: { effort: "xhigh" } },
+		scratch("settings-effort"),
+	);
+	assertEq(config.claude.effort, "high", "the claude effort is preserved");
+	assertEq(config.codex.effort, "xhigh", "the codex effort is preserved");
 });
 
 test("settings: the default store follows PI_CODING_AGENT_DIR at call time", () => {

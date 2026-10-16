@@ -268,3 +268,56 @@ test("consult tool: continue is refused when the target has no saved session", a
 		delete process.env.CLAUDE_FAKE_RECORD;
 	}
 });
+
+test("consult tool: engage starts the cycle and settle fires only on a foreground receipt", async () => {
+	const engages: string[] = [];
+	const settles: string[] = [];
+	const effort = {
+		engage: (_ctx: unknown, id: string) => engages.push(id),
+		settle: (id: string) => settles.push(id),
+	};
+	const { tool } = buildConsultFixture(
+		configFile(fakeClaude(), fakeCodex()),
+		"sess-effort",
+		effort,
+	);
+	const result = await tool.execute(
+		"call-effort-1",
+		{ target: "claude", brief: "Design the widget.", contains_no_secrets: true },
+		undefined,
+		undefined,
+		new FakeContext([], "sess-effort", scratchDir(), false) as never,
+	);
+	assertEq(result.details.ok, true);
+	assertEq(engages.length, 1, "engage runs for the started consult");
+	assertEq(engages[0], result.details.consultId);
+	assertEq(settles.length, 1, "a foreground receipt settles the consult");
+	assertEq(settles[0], result.details.consultId);
+
+	const detachedEngages: string[] = [];
+	const detachedSettles: string[] = [];
+	const detachedEffort = {
+		engage: (_ctx: unknown, id: string) => detachedEngages.push(id),
+		settle: (id: string) => detachedSettles.push(id),
+	};
+	const slow = buildConsultFixture(
+		configFile(fakeClaude(600), fakeCodex()),
+		"sess-effort-2",
+		detachedEffort,
+	);
+	const controller = new AbortController();
+	setTimeout(() => controller.abort(), 60);
+	const pending = await slow.tool.execute(
+		"call-effort-2",
+		{ target: "claude", brief: "Slow one.", contains_no_secrets: true },
+		controller.signal,
+		undefined,
+		new FakeContext([], "sess-effort-2", scratchDir(), false) as never,
+	);
+	assertEq(pending.details.phase, "running", "the call detached");
+	assertEq(detachedEngages.length, 1, "engage still runs for a detached consult");
+	assertEq(detachedSettles.length, 0, "a detached return settles nothing");
+	const invocation = slow.supervisor.get(pending.details.consultId);
+	assert(invocation !== undefined, "the detached invocation is tracked");
+	await invocation.done();
+});

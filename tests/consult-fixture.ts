@@ -119,7 +119,11 @@ export interface ConsultFixture {
 }
 
 /** Build the real owners over the given configuration. */
-export function buildConsultFixture(config: ConsultConfig, sessionId = "sess-int"): ConsultFixture {
+export function buildConsultFixture(
+	config: ConsultConfig,
+	sessionId = "sess-int",
+	effort?: unknown,
+): ConsultFixture {
 	const processes = new ProcessRunner();
 	const runner = new ConsultRunner(
 		[
@@ -168,9 +172,10 @@ export function buildConsultFixture(config: ConsultConfig, sessionId = "sess-int
 			supervisor,
 			foreground: new ConsultForeground(),
 			bridge: new BridgeLauncher(control, artifacts, config.drive),
+			effort: effort as never,
 		}),
-		collect: new ConsultCollectTool({ supervisor, records, index, formatter }),
-		terminate: new ConsultTerminateTool(supervisor),
+		collect: new ConsultCollectTool({ supervisor, records, index, formatter, effort: effort as never }),
+		terminate: new ConsultTerminateTool(supervisor, effort as never),
 		reply: new ConsultReplyTool(broker, screen),
 	};
 }

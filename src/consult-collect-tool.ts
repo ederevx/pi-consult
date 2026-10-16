@@ -14,6 +14,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
+import type { AgentEffortPolicy } from "./agent-effort-policy.ts";
 import type { AnswerFormatter } from "./answer-formatter.ts";
 import type { ConsultIndex } from "./consult-index.ts";
 import type { ConsultRecordStore } from "./consult-record-store.ts";
@@ -31,6 +32,8 @@ export interface ConsultCollectDeps {
 	records: ConsultRecordStore;
 	index: ConsultIndex;
 	formatter: AnswerFormatter;
+	/** pi's thinking-level cycle; a collected receipt settles its consult. */
+	effort?: AgentEffortPolicy;
 }
 
 export class ConsultCollectTool {
@@ -88,6 +91,7 @@ export class ConsultCollectTool {
 		const receipt = await this.resolve(handle, invocation !== undefined);
 		if (!receipt) return this.failure(ctx, `unknown consult id: ${handle}`);
 		const details: ConsultDetails = { ...receipt.details, collected: true };
+		this.deps.effort?.settle(details.consultId);
 		return {
 			content: [{ type: "text", text: this.deps.formatter.format(details, receipt.answers) }],
 			details,
