@@ -48,7 +48,9 @@ export class PreConsultTool {
 				"while pi implements and executes, how roadblocks and audits of " +
 				"consultant work go back to a consultant, and the acknowledgement " +
 				"gate's rules. Until this succeeds for the current contract, " +
-				"implementation tools stay blocked; after it, pi-consult blocks nothing.",
+				"implementation tools stay blocked; after it, pi-consult blocks nothing, " +
+				"except edit, write, and powershell in a session spawned as a pi-consult " +
+				"independent auditor.",
 			promptGuidelines: [
 				'Before your first implementation call, state a visible consultation decision for the task: "Consultation decision: needed - <reason>." or "Consultation decision: not needed - <reason>".',
 				"Verify a consultant's claims without redoing its investigation; carry every doubt back through consult continuation, and send every roadblock (a failed check, a step the plan does not cover, an unexpected result, an ambiguity) back the same way before working around it - never improvise a workaround.",

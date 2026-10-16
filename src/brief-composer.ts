@@ -20,7 +20,7 @@ export class BriefComposer {
 		"it directly first, then the supporting detail.",
 		"",
 		"When the brief asks you to verify finished work, end your answer with one",
-		"of these lines, alone and as its last line:",
+		"of these lines, alone and as its last line, not quoted or in a code block:",
 		"  Consultant verdict: approved - <one-line reason>.",
 		"  Consultant verdict: changes needed - <one-line reason>.",
 		"Approved hands control back to pi; give it only when nothing remains.",

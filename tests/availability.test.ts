@@ -30,6 +30,24 @@ test("classifier: overflow, quota, rate, auth, and the rest by precedence", () =
 	assertEq(classifier.classifyText("something broke"), "provider_error");
 });
 
+test("classifier: classifyExpiry is a strict provider allowlist", () => {
+	const classifier = new FailureClassifier();
+	for (const phrase of [
+		"insufficient_quota",
+		"you exceeded your current quota",
+		"credit balance is too low",
+		"Invalid API key · Please run /login",
+		"401 Unauthorized",
+		"authentication_error",
+	]) {
+		assert(classifier.classifyExpiry(phrase) !== null, phrase);
+	}
+	assertEq(classifier.classifyExpiry("ENOENT: cannot open /work/billing/schema.json"), null);
+	assertEq(classifier.classifyExpiry("EACCES: permission denied, open /work/a.txt"), null);
+	assertEq(classifier.classifyExpiry("permission denied"), null);
+	assertEq(classifier.classifyExpiry("billing failure"), null);
+});
+
 test("classifier: stop reasons", () => {
 	const classifier = new FailureClassifier();
 	assertEq(classifier.classifyMessage({ stopReason: "length" }), "output_limit");

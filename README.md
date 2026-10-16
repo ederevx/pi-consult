@@ -41,8 +41,10 @@ and execution, at low thinking effort, and consults again at any roadblock.
 - **The gate** — a `tool_call` handler that blocks implementation work (`edit`,
   `write`, `bash`, `powershell`, and any tool outside the operator's allow list)
   **only until `pre_consult` has acknowledged the current contract in the
-  session**. After that, pi-consult blocks nothing: no consult receipt, no
-  effort declaration, no waiver. Reads (`read`, `grep`, `find`, `ls`) and the
+  session**. After that, pi-consult blocks nothing — no consult receipt, no
+  effort declaration, no waiver — except in a session spawned as a pi-consult
+  independent auditor, where `edit`, `write`, and `powershell` stay blocked.
+  Reads (`read`, `grep`, `find`, `ls`) and the
   pi-consult tools are never blocked. The acknowledgement is read session-wide,
   so compaction, reload, resume, and `/tree` navigation keep it; a new session
   starts closed until `pre_consult` runs once.
@@ -94,8 +96,10 @@ The catalogue instructs the agent, and the tool's prompt guidelines repeat it:
      `write`, or `powershell`, and ends its report with
      `Independent audit verdict: approved|changes needed - <reason>.`
      pi-consult reads that verdict from the report pi-teams logs, not from
-     pi's claim. The auditor is independent of the implementing session, not
-     of its model: it runs on pi's model and provider.
+     pi's claim. Markers count only as plain lines: indented, quoted, or
+     fenced copies are ignored, and a completion or verdict line must be the
+     last non-blank line. The auditor is independent of the implementing
+     session, not of its model: it runs on pi's model and provider.
   3. **pi itself**, only on the user's explicit request
      (`Audit by pi at the user's request - <request>.`).
 
@@ -187,7 +191,7 @@ consultation is announced and collected with `consult_collect`. Only
 ## Install
 
 ```bash
-pi install git:github.com/ederevx/pi-consult@v0.12.1
+pi install git:github.com/ederevx/pi-consult@v0.12.2
 ```
 
 The package has no runtime dependencies; it uses the host-provided

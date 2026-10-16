@@ -147,17 +147,26 @@ test("pre_consult: a nested call is rejected", async () => {
 	assertEq(threw, true);
 });
 
-test("pre_consult: contract v8 states the hold, the verdict and the completion line", async () => {
+test("pre_consult: contract v9 states the hold, the verdict and the completion line", async () => {
 	const text = await contractText();
-	assertEq(ConsultContract.VERSION, 8);
+	assertEq(ConsultContract.VERSION, 9);
 	assertIncludes(text, "holds your own thinking effort");
 	assertIncludes(text, "It never leaves you at high, xhigh, or max");
 	assertIncludes(text, "you own the implementation and the\n  execution");
 	assertIncludes(text, "Consultant verdict: approved - <one-line reason>.");
 	assertIncludes(text, "Consultation cycle: complete - <consult id> verified.");
-	assertIncludes(text, "Never write the line earlier, and never quote it.");
+	assertIncludes(text, "Never write the line earlier, and never quote, indent, or fence it.");
 	assertIncludes(text, "/consult-effort release");
 	assertNotIncludes(text, "low; never high, xhigh, or max)");
+});
+
+test("pre_consult: the catalogue names the auditor exception and the marker rule", async () => {
+	const definition = register({ probeAll: async () => [] } as unknown as ConsultRunner);
+	const text = await contractText();
+	assertIncludes(String(definition.description), "except edit, write, and powershell");
+	assertIncludes(text, "keeps edit, write, and powershell blocked");
+	assertIncludes(text, "reads every marker line in this contract only as plain text");
+	assertIncludes(text, "never quote, indent, or fence it");
 });
 
 test("pre_consult: the contract sends roadblocks back to the consultant", async () => {

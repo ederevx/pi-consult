@@ -547,3 +547,56 @@ test("agent effort: a completion from a non-assistant or inline message is ignor
 	host.emit("agent_settled", {});
 	assertEq(host.getThinkingLevel(), "low", "only assistant text parts count");
 });
+
+test("agent effort: Markdown context hides a completion line from the last-line rule", async () => {
+	const line = "Consultation cycle: complete - c-000050 verified.";
+	const contexts = [
+		`    ${line}`,
+		`\t${line}`,
+		`> Quoted example:\n${line}`,
+		`${line}\n> Still unfinished.`,
+		`${line}\n\`\`\`\ncaveat\n\`\`\``,
+		"````\n```\n" + line + "\n```\n````",
+		"~~~\n```\n" + line + "\n```\n~~~",
+		"```\n" + line,
+	];
+	for (const text of contexts) {
+		const { host, ctx, policy } = setup({ level: "high" });
+		policy.engage(ctx as never, "c-000050");
+		policy.settle(
+			"c-000050",
+			consultDetails("c-000050", [consultRun("claude", "ok")]),
+			verdictAnswers({ claude: APPROVED_VERDICT }),
+		);
+		await host.run(text);
+		assertEq(host.getThinkingLevel(), "low", `held for ${JSON.stringify(text)}`);
+	}
+});
+
+test("agent effort: a two-space indent and a closed fence keep plain lines", async () => {
+	const indented = setup({ level: "high" });
+	indented.policy.engage(indented.ctx as never, "c-000051");
+	indented.policy.settle(
+		"c-000051",
+		consultDetails("c-000051", [consultRun("claude", "ok")]),
+		verdictAnswers({ claude: "  Consultant verdict: approved - indented." }),
+	);
+	await indented.host.run("Consultation cycle: complete - c-000051 verified.");
+	assertEq(indented.host.getThinkingLevel(), "high", "a two-space indent is plain");
+
+	const fenced = setup({ level: "high" });
+	fenced.policy.engage(fenced.ctx as never, "c-000052");
+	fenced.policy.settle(
+		"c-000052",
+		consultDetails("c-000052", [consultRun("claude", "ok")]),
+		verdictAnswers({ claude: APPROVED_VERDICT }),
+	);
+	await fenced.host.run("```\ncaveat\n```\n\nConsultation cycle: complete - c-000052 verified.");
+	assertEq(fenced.host.getThinkingLevel(), "high", "a closed fence does not hide the last line");
+});
+
+test("agent effort: a plain fallback line in the middle of a reply restores", async () => {
+	const state = expired();
+	await state.host.run("Consultant fallback: no consultant available - the CLI is gone.\nStill explaining.");
+	assertEq(state.host.getThinkingLevel(), "high");
+});

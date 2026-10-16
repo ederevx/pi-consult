@@ -358,8 +358,19 @@ export class FakeEffortHost {
 		this.branch.push({ type: "custom", id: `e${++this.seq}`, customType: "pi-teams-log", data });
 	}
 
-	toolCall(name: string, input?: Record<string, unknown>): void {
-		this.emit("tool_call", { toolName: name, input });
+	toolCall(name: string, input?: Record<string, unknown>, toolCallId = ""): void {
+		this.emit("tool_call", { toolName: name, toolCallId, input });
+	}
+
+	toolExecutionEnd(
+		toolCallId: string,
+		options: { result?: unknown; isError?: boolean } = {},
+	): void {
+		this.emit("tool_execution_end", {
+			toolCallId,
+			result: options.result,
+			isError: options.isError === true,
+		});
 	}
 
 	toolResult(
