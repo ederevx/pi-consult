@@ -87,6 +87,7 @@ export class ConsultExtension {
 		effort.register(pi);
 		new AuditorSession().register(pi);
 
+		const foreground = new ConsultForeground();
 		new PreConsultTool(contract, runner, effort).register(pi);
 		new ConsultTool({
 			config,
@@ -97,11 +98,12 @@ export class ConsultExtension {
 			composer: new BriefComposer(),
 			formatter,
 			supervisor,
-			foreground: new ConsultForeground(),
+			foreground,
 			bridge,
 			effort,
 		}).register(pi);
-		new ConsultCollectTool({ supervisor, records, index, formatter, effort }).register(pi);
+		new ConsultCollectTool({ supervisor, records, index, formatter, foreground, effort })
+			.register(pi);
 		new ConsultTerminateTool(supervisor, effort).register(pi);
 		new ConsultReplyTool(broker, new SecretScreen()).register(pi);
 		new ImplementationGate(ledger, classifier, contract).register(pi);

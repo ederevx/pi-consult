@@ -30,9 +30,10 @@ import type { ArtifactStore, ConsultPaths } from "./artifact-store.ts";
 import type { BridgeLauncher } from "./bridge-launcher.ts";
 import type { BriefComposer } from "./brief-composer.ts";
 import type { ConsultConfig } from "./consult-config.ts";
-import type { ConsultForeground } from "./consult-foreground.ts";
+import type { ConsultForeground, ForegroundOutcome } from "./consult-foreground.ts";
 import { ConsultCallView } from "./consult-call-view.ts";
-import { ConsultLiveRegistry } from "./consult-live-registry.ts";
+import { ConsultStepCards, type ConsultStepData } from "./consult-step-cards.ts";
+import { ConsultStepRenderer } from "./consult-step-renderer.ts";
 import type { ConsultIndex } from "./consult-index.ts";
 import type { InvocationRequestSpec, InvocationSpec } from "./consult-invocation.ts";
 import type { ConsultSupervisor } from "./consult-supervisor.ts";
@@ -79,9 +80,10 @@ export class ConsultTool {
 	private static readonly MAX_SCREEN_BYTES = 512 * 1024;
 	private readonly deps: ConsultToolDeps;
 	private readonly confirmedSessions = new Set<string>();
-	private readonly live = new ConsultLiveRegistry();
 	private readonly callView = new ConsultCallView();
-	private readonly resultView = new ConsultResultView(this.live);
+	private readonly resultView = new ConsultResultView();
+	private readonly stepRenderer = new ConsultStepRenderer();
+	private append?: (customType: string, data: ConsultStepData) => void;
 
 	constructor(deps: ConsultToolDeps) {
 		this.deps = deps;
@@ -89,6 +91,9 @@ export class ConsultTool {
 
 	/** Register the tool with pi. */
 	register(pi: ExtensionAPI): void {
+		this.append = (customType, data) => pi.appendEntry(customType, data);
+		pi.registerEntryRenderer(ConsultStepCards.ENTRY, (entry, options, theme) =>
+			this.stepRenderer.render(entry, options, theme));
 		pi.registerTool({
 			name: "consult",
 			label: "consult",
@@ -159,7 +164,6 @@ export class ConsultTool {
 				ctx: ExtensionToolContext,
 			): Promise<AgentToolResult<ConsultDetails>> =>
 				this.execute(toolCallId, params, signal, onUpdate, ctx),
-			renderShell: "self",
 			renderCall: (args, theme, context) =>
 				this.callView.render(args, theme, context),
 			renderResult: (result, options, theme, context) =>
@@ -263,15 +267,22 @@ export class ConsultTool {
 			await this.spec(consultId, sessionId, params, targets, composed, continuation, paths, ctx),
 		);
 		this.deps.effort?.engage(ctx, consultId);
-		this.live.attach(toolCallId, invocation);
-		const outcome = await this.deps.foreground
-			.wait(
+		const steps = ctx.mode === "tui" && this.append
+			? new ConsultStepCards(consultId, this.append) : undefined;
+		const unobserve = steps ? invocation.observeSteps(steps) : () => undefined;
+		let outcome: ForegroundOutcome;
+		try {
+			outcome = await this.deps.foreground.wait(
 				invocation,
 				signal ?? ctx.signal,
 				() => ctx.hasPendingMessages(),
 				onUpdate,
-			)
-			.finally(() => this.live.release(toolCallId));
+			);
+		} finally {
+			unobserve();
+		}
+		if (outcome.status === "detached") steps?.detach();
+		else steps?.finish();
 		if (outcome.status === "detached") {
 			const details = this.deps.supervisor.pending(invocation);
 			return {
@@ -343,8 +354,8 @@ export class ConsultTool {
 		const lines = [
 			`pi-consult: consult ${details.consultId} was interrupted (${reason}) and keeps ` +
 				"running in the background.",
-			`Collect it with consult_collect {id: "${details.consultId}"}, or continue it ` +
-				"once collected.",
+			`Collect it with consult_collect {id: "${details.consultId}", wait: 300}, ` +
+				"or continue it once collected.",
 		];
 		if (snapshot) lines.push("", ConsultTool.clip(snapshot, 4_000));
 		return lines.join("\n");

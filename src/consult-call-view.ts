@@ -1,34 +1,31 @@
 /**
- * pi-consult — the card a `consult` call itself draws.
+ * pi-consult — the header the `consult` row draws.
  *
- * In the self shell this is the row's first card: one line naming the
- * consultant(s), any continuation, and the leading words of the brief. The
- * live/final result cards follow it and share its background, so a finished
- * consult reads as one card and a running one as a header followed by its
- * streamed cards.
+ * One line naming the consultant(s), any continuation, and the leading
+ * words of the brief. The row uses pi's default shell, so this is a plain
+ * reused text component and the live stream appears as its own transcript
+ * cards below.
  */
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { Spacer, Text, type Component } from "@earendil-works/pi-tui";
+import { Text, type Component } from "@earendil-works/pi-tui";
 
-import { ConsultCardFrame, type CardContext } from "./consult-card-frame.ts";
 import type { ConsultParams } from "./consult-tool.ts";
 
-/** The render-context fields the call card reads. */
-export interface CallRenderSlot extends CardContext {
+/** The part of pi's render context this view reads. */
+export interface CallRenderSlot {
 	lastComponent: Component | undefined;
 }
 
 export class ConsultCallView {
 	private static readonly BRIEF_CHARS = 80;
-	private readonly frame = new ConsultCardFrame();
 
-	/** Draw (or repaint) the call card. */
+	/** Draw (or repaint) the call header. */
 	render(args: ConsultParams, theme: Theme, context: CallRenderSlot): Component {
-		const box = this.frame.reuse(context.lastComponent, theme, context);
-		box.addChild(new Spacer(1));
-		box.addChild(new Text(this.header(args, theme), 0, 0));
-		return box;
+		const component = context.lastComponent instanceof Text
+			? context.lastComponent : new Text("", 0, 0);
+		component.setText(this.header(args, theme));
+		return component;
 	}
 
 	private header(args: ConsultParams, theme: Theme): string {

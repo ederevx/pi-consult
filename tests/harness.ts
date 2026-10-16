@@ -143,6 +143,7 @@ export class FakePi {
 	readonly handlers = new Map<string, Array<(...args: unknown[]) => unknown>>();
 	readonly commands = new Map<string, Record<string, unknown>>();
 	readonly entries: Array<{ customType: string; data?: unknown }> = [];
+	readonly entryRenderers = new Map<string, unknown>();
 	readonly messages: Array<{ message: unknown; options?: unknown }> = [];
 
 	registerTool(definition: Record<string, unknown> & { name: string }): void {
@@ -164,6 +165,10 @@ export class FakePi {
 		this.entries.push({ customType, data });
 	}
 
+	registerEntryRenderer(customType: string, renderer: unknown): void {
+		this.entryRenderers.set(customType, renderer);
+	}
+
 	getAllTools(): Array<{ name: string; annotations?: Record<string, unknown> }> {
 		return [...this.tools.values()].map((tool) => ({
 			name: String(tool.name),
@@ -183,8 +188,8 @@ export type FakeMode = "tui" | "rpc" | "json" | "print";
 export class FakeContext {
 	readonly cwd: string;
 	readonly hasUI: boolean;
-	/** Set per test; defaults to "print" so UI-dependent paths stay off by default. */
-	mode: FakeMode = "print";
+	/** Set per test; defaults to "tui" so interactive paths run unless a test opts out. */
+	mode: FakeMode = "tui";
 	readonly widgetCalls: Array<{ key: string; content: string[] | undefined; options?: unknown }> = [];
 	readonly statusCalls: Array<{ key: string; text: string | undefined }> = [];
 	readonly notifyCalls: Array<{ message: string; type?: string }> = [];

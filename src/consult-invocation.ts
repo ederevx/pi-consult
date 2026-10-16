@@ -9,7 +9,7 @@
 
 import type { ConsultPaths } from "./artifact-store.ts";
 import type { ConsultantSettings } from "./consult-config.ts";
-import { ConsultProgressFeed, type ConsultLiveSection } from "./consult-progress.ts";
+import { ConsultProgressFeed } from "./consult-progress.ts";
 import type { ConsultRunner } from "./consult-runner.ts";
 import type {
 	AttachmentState,
@@ -32,6 +32,13 @@ export interface InvocationRequestSpec {
 	model?: string;
 	timeoutMs: number;
 	bridge?: BridgeConnection;
+}
+
+/** One live consumer of a running invocation's steps: the transcript
+ *  cards the `consult` row appends. */
+export interface StepObserver {
+	event(name: ConsultantName, line: string): void;
+	partial(name: ConsultantName, text: string): void;
 }
 
 /** Everything one invocation needs before it starts. */
@@ -65,6 +72,7 @@ export class ConsultInvocation {
 	private readonly feed: ConsultProgressFeed;
 	private readonly listeners = new Set<(snapshot: string) => void>();
 	private readonly attention = new Set<() => void>();
+	private readonly stepObservers = new Set<StepObserver>();
 	private completion: Promise<readonly ConsultantResult[]> | undefined;
 	private results: readonly ConsultantResult[] | undefined;
 
@@ -139,9 +147,13 @@ export class ConsultInvocation {
 		return this.feed.snapshot();
 	}
 
-	/** The typed live sections the tool's cards draw. */
-	sections(): ConsultLiveSection[] {
-		return this.feed.sections();
+	/** Watch every step this invocation reports; the returned function
+	 *  stops only this observer. */
+	observeSteps(observer: StepObserver): () => void {
+		this.stepObservers.add(observer);
+		return () => {
+			this.stepObservers.delete(observer);
+		};
 	}
 
 	/** Watch progress; the returned function stops only this subscription. */
@@ -173,6 +185,23 @@ export class ConsultInvocation {
 		for (const listener of [...this.listeners]) listener(snapshot);
 	}
 
+	/** Fans one step out to the progress feed and every live observer. An
+	 *  observer that throws must never break the run. */
+	private publishStep(
+		kind: "event" | "partial",
+		name: ConsultantName,
+		text: string,
+	): void {
+		for (const observer of [...this.stepObservers]) {
+			try {
+				if (kind === "event") observer.event(name, text);
+				else observer.partial(name, text);
+			} catch {
+				// A failing observer is not the run's problem.
+			}
+		}
+	}
+
 	private requests(): ConsultRequest[] {
 		return this.spec.requests.map((request) => ({
 			consultant: request.consultant,
@@ -185,8 +214,14 @@ export class ConsultInvocation {
 			systemPrompt: this.spec.systemPrompt,
 			lastMessagePath: this.paths.lastMessage(request.consultant),
 			bridge: request.bridge,
-			onProgress: (line: string) => this.feed.event(request.consultant, line),
-			onPartial: (text: string) => this.feed.partial(request.consultant, text),
+			onProgress: (line: string) => {
+				this.feed.event(request.consultant, line);
+				this.publishStep("event", request.consultant, line);
+			},
+			onPartial: (text: string) => {
+				this.feed.partial(request.consultant, text);
+				this.publishStep("partial", request.consultant, text);
+			},
 		}));
 	}
 }

@@ -219,6 +219,7 @@ test("consult tool: the description carries no NaN concatenation artifact", asyn
 		registerTool: (definition: { description?: string }) => {
 			description = String(definition.description ?? "");
 		},
+		registerEntryRenderer: () => undefined,
 	} as never;
 	tool.register(pi);
 	assertNotIncludes(description, "NaN", "the description must not contain NaN");

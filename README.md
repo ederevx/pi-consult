@@ -30,9 +30,11 @@ and execution, at low thinking effort, and consults again at any roadblock.
   receipt naming the consult id and the consultants keep working.
 - **`consult_collect`** — reports a running consult's state, or returns the
   final receipt (status, usage, answer path, provider session ids) of one that
-  finished, by consult id or `last`. Collecting is safe to repeat. A finished
-  background consult is announced once, into the session that started it, with
-  a pointer to this tool.
+  finished, by consult id or `last`. Pass `wait` (seconds) to block until it
+  finishes; the wait returns early on Escape, a queued message, or a consultant
+  request, and never stops the consult. Collecting is safe to repeat. A
+  finished background consult is announced once, into the session that started
+  it, with a pointer to this tool.
 - **`consult_terminate`** — the only path that ends a consultation early: it
   aborts that consult's consultant processes and records the result.
 - **`consult_reply`** — answers a request a consultant made through the local
@@ -162,14 +164,15 @@ answer text arrives as one event at the end. Token-level Codex streaming
 exists only on the experimental `codex app-server` JSON-RPC transport
 (`item/agentMessage/delta`), which this extension does not use.
 
-The consult row draws its own shell, so the live window reads as cards:
-the call card names the target and brief, then one section per
-consultant opens with its name and streams that consultant's activity the
-way pi draws its own — a tool use as its own pending box, streamed answer
-text as plain prose. A finished or interrupted consult collapses to one
-card holding the whole answer, and the row's background is pending while
-the consult runs, then success or error. `=== name ===` markers remain
-only in the plain snapshot `consult_collect` reports.
+The consult row uses pi's normal shell: one header line naming the target
+and brief, then one fixed status line per consultant while the call runs,
+and pi's ten-line preview of the answer once it finishes. The consultant's
+own stream appears as separate transcript cards below the row — one per
+tool-use burst or block of prose, each on the custom-message background
+with an author tag (`claude · tool`, `codex · said`), collapsed by default
+and opened with pi's standard expand toggle. The cards are TUI-only, stay
+out of the model context, and are bounded per consultant; the row and the
+cards are views, so the model-facing snapshot is unchanged.
 
 ### When the agent stops
 
@@ -195,7 +198,7 @@ consultation is announced and collected with `consult_collect`. Only
 ## Install
 
 ```bash
-pi install git:github.com/ederevx/pi-consult@v0.12.3
+pi install git:github.com/ederevx/pi-consult@v0.13.0
 ```
 
 The package has no runtime dependencies; it uses the host-provided

@@ -37,8 +37,9 @@ import { SecretScreen } from "../src/secret-screen.ts";
 import { SessionIdentity } from "../src/session-identity.ts";
 import { FakePi, scratchDir } from "./harness.ts";
 
-/** Write an executable fake Claude that answers after `delayMs`. */
-export function fakeClaude(delayMs = 0): string {
+/** Write an executable fake Claude that answers after `delayMs`, and
+ *  optionally reports one tool use so a card-writing path can be tested. */
+export function fakeClaude(delayMs = 0, toolUse = false): string {
 	const path = join(scratchDir(), `fake-claude-${Math.random().toString(16).slice(2)}.mjs`);
 	const body = [
 		'import { readFileSync, writeFileSync } from "node:fs";',
@@ -46,6 +47,9 @@ export function fakeClaude(delayMs = 0): string {
 		"if (process.env.CLAUDE_FAKE_RECORD) {",
 		"  writeFileSync(process.env.CLAUDE_FAKE_RECORD, JSON.stringify({ argv: process.argv.slice(2), brief }));",
 		"}",
+		...(toolUse ? [
+			'process.stdout.write(JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id: "tool-1", name: "Read", input: { file_path: "src/x.ts" } }] } }) + "\\n");',
+		] : []),
 		`await new Promise((resolve) => setTimeout(resolve, ${delayMs}));`,
 		'const sessionId = "fake-claude-session";',
 		'process.stdout.write(JSON.stringify({ type: "system", subtype: "init", session_id: sessionId }) + "\\n");',
