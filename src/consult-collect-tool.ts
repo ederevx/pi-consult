@@ -91,7 +91,7 @@ export class ConsultCollectTool {
 		const receipt = await this.resolve(handle, invocation !== undefined);
 		if (!receipt) return this.failure(ctx, `unknown consult id: ${handle}`);
 		const details: ConsultDetails = { ...receipt.details, collected: true };
-		this.deps.effort?.settle(details.consultId);
+		this.deps.effort?.settle(details.consultId, details, receipt.answers);
 		return {
 			content: [{ type: "text", text: this.deps.formatter.format(details, receipt.answers) }],
 			details,

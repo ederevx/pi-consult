@@ -7,6 +7,7 @@
 
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 
+import type { AgentEffortPolicy } from "./agent-effort-policy.ts";
 import type { ConsultContract } from "./consult-contract.ts";
 import type { ConsultIndex } from "./consult-index.ts";
 import type { BranchEntry, ReceiptLedger } from "./receipt-ledger.ts";
@@ -16,17 +17,20 @@ export class ConsultCommands {
 	private readonly ledger: ReceiptLedger;
 	private readonly index: ConsultIndex;
 	private readonly contract: ConsultContract;
+	private readonly effort: AgentEffortPolicy | undefined;
 
 	constructor(
 		pi: ExtensionAPI,
 		ledger: ReceiptLedger,
 		index: ConsultIndex,
 		contract: ConsultContract,
+		effort?: AgentEffortPolicy,
 	) {
 		this.pi = pi;
 		this.ledger = ledger;
 		this.index = index;
 		this.contract = contract;
+		this.effort = effort;
 	}
 
 	/** Register the commands with pi. */
@@ -43,7 +47,7 @@ export class ConsultCommands {
 				}
 				const last = this.index.latest()?.consultId ?? null;
 				ctx.ui.notify(
-					this.contract.statusText(this.ledger.current(), names, last),
+					this.contract.statusText(this.ledger.current(), names, last, this.effort?.describe() ?? "effort hold: off"),
 					"info",
 				);
 			},

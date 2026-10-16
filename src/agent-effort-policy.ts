@@ -1,95 +1,209 @@
 /**
  * pi-consult — pi's own thinking level in consultant mode.
  *
- * Owns one consultation cycle: from the first consult of a task, pi runs at
- * low thinking (the consultant owns the plan); when pi declares the cycle
- * complete with nothing owed, or falls back without a consultant, the
- * user's level is restored. The cycle survives reloads through a custom
- * session entry. Consultant `effort` settings are not touched.
+ * Owns one consultation cycle: from a task's first consult, pi runs at low
+ * thinking (the consultant owns the plan) until control is handed back — a
+ * consult whose answer ends with the approved verdict, or, once every
+ * enabled consultant has expired, an approved report from a dedicated
+ * independent auditor spawned through pi-teams. A fallback the records
+ * support, an explicit user audit, or `/consult-effort release` also ends
+ * it. Every change is persisted on the session branch. Consultant `effort`
+ * settings are not touched.
  */
 
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import type { ConsultConfig } from "./consult-config.ts";
+import type { ConsultDetails, ConsultRun, ConsultantAvailability, ConsultantName } from "./contracts.ts";
+import { FailureClassifier } from "./failure-classifier.ts";
 
 type Level = ReturnType<ExtensionAPI["getThinkingLevel"]>;
 
-/** The persisted cycle state. */
+/** The persisted cycle state, written on every change. */
 interface EffortEntry {
 	holding: boolean;
 	previous?: Level;
+	owed: string[];
+	fresh: string[];
+	approved: string[];
+	failures: Partial<Record<ConsultantName, number>>;
+	expired: ConsultantName[];
+	unavailable: ConsultantName[];
+	auditors: string[];
+	independent: string[];
+	auditFailed: boolean;
+}
+
+/** The fields of a `tool_result` event this policy reads. */
+interface ToolResultView {
+	toolName: string;
+	input?: Record<string, unknown>;
+	content?: Array<{ type?: string; text?: string }>;
+	details?: unknown;
+	isError?: boolean;
 }
 
 export class AgentEffortPolicy {
 	static readonly ENTRY = "pi-consult-effort";
-	static readonly COMPLETE = "Consultation cycle: complete - ";
-	private static readonly FALLBACKS = [
-		"Consultant fallback: no consultant available - ",
-		"Audit by pi at the user's request - ",
-	];
+	static readonly AUDIT_HEADER = /^pi-consult independent audit - \S.*$/;
+	private static readonly COMPLETE = /^Consultation cycle: complete - (c-[0-9a-f]+) verified\.$/;
+	private static readonly INDEPENDENT = /^Consultation cycle: complete - (\S+) independently verified\.$/;
+	private static readonly VERDICT = /^Consultant verdict: approved - \S.*$/;
+	private static readonly AUDIT_VERDICT = /^Independent audit verdict: (approved|changes needed) - \S.*$/;
+	private static readonly AUDIT_UNAVAILABLE = /^Independent audit unavailable - \S.*$/;
+	private static readonly FALLBACK = /^Consultant fallback: no consultant available - \S.*$/;
+	private static readonly USER_AUDIT = /^Audit by pi at the user's request - \S.*$/;
+	private static readonly SPAWNED = /^spawned teammate (\S+)/;
+	private static readonly TEAMS_LOG = "pi-teams-log";
+	private static readonly MUTATIONS = new Set(["edit", "write", "bash", "powershell"]);
+	private static readonly RETRYABLE = new Set(["error", "timeout"]);
+	private static readonly EXPIRING = new Set(["unavailable", "auth"]);
+	private static readonly LEVELS = new Set<string>(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 	private static readonly LOWER = new Set<Level>(["medium", "high", "xhigh", "max"]);
 	private static readonly ABOVE = new Set<Level>(["high", "xhigh", "max"]);
+	private static readonly NAMES: readonly ConsultantName[] = ["claude", "codex"];
 	private readonly config: ConsultConfig;
-	private readonly owed = new Set<string>();
+	private readonly classifier = new FailureClassifier();
 	private pi: ExtensionAPI | undefined;
 	private holding = false;
 	private previous: Level | undefined;
-	private running = false;
-	private completed = false;
+	private owed = new Set<string>();
+	private fresh = new Set<string>();
+	private approved = new Set<string>();
+	private failures = new Map<ConsultantName, number>();
+	private expired = new Set<ConsultantName>();
+	private unavailable = new Set<ConsultantName>();
+	private auditors = new Set<string>();
+	private independent = new Set<string>();
+	private auditFailed = false;
+	private spawning = false;
+	private unsupported = false;
+	private lastMessage: unknown;
 	private outcome = "completed";
 
 	constructor(config: ConsultConfig) {
 		this.config = config;
 	}
 
-	/** Register the cycle's observers. */
+	/** Register the cycle's observers and the user-only release command. */
 	register(pi: ExtensionAPI): void {
 		this.pi = pi;
-		pi.on("session_start", (_event, ctx: ExtensionContext) => this.rehydrate(ctx));
+		pi.on("session_start", (_event, ctx: ExtensionContext) => this.load(ctx, false));
+		pi.on("session_tree", (_event, ctx: ExtensionContext) => this.load(ctx, true));
 		pi.on("agent_start", () => {
-			this.running = true;
-			this.completed = false;
+			this.lastMessage = undefined;
+			this.outcome = "completed";
 		});
-		pi.on("turn_end", (event, ctx: ExtensionContext) => this.observe(event.message, ctx));
+		pi.on("tool_call", (event) =>
+			this.observeCall(String(event.toolName ?? ""), (event as { input?: Record<string, unknown> }).input),
+		);
+		pi.on("tool_result", (event, ctx: ExtensionContext) => this.observeResult(event as unknown as ToolResultView, ctx));
+		pi.on("turn_end", (event, ctx: ExtensionContext) => this.observeTurn(event.message, ctx));
 		pi.on("agent_before_settle", (event) => {
 			this.outcome = event.outcome;
 		});
 		pi.on("agent_settled", (_event, ctx: ExtensionContext) => this.settled(ctx));
 		pi.on("model_select", (_event, ctx: ExtensionContext) => {
-			if (this.holding) this.lower(ctx);
+			if (this.holding && !this.spawning) this.lower(ctx);
 		});
-		pi.on("thinking_level_select", (event, ctx: ExtensionContext) => this.selected(event.level, ctx));
+		// Source-less: a model switch sets the level before model_select fires,
+		// so no selection is read as a user release; only the command releases.
+		pi.on("thinking_level_select", (event, ctx: ExtensionContext) => {
+			if (this.holding && !this.spawning && AgentEffortPolicy.LOWER.has(event.level)) this.lower(ctx);
+		});
+		pi.registerCommand("consult-effort", {
+			description: "Show pi-consult's thinking-level hold and audit ladder, or end the hold with `release`.",
+			handler: async (args: string, ctx: ExtensionCommandContext) => this.command(args, ctx),
+		});
 	}
 
 	/** A consult was launched: start the cycle, or join the running one. */
 	engage(ctx: ExtensionContext | undefined, consultId: string): void {
+		if (!this.pi || !this.active()) return;
+		if (!this.holding) {
+			this.holding = true;
+			this.previous = this.pi.getThinkingLevel();
+			this.resetCycle();
+		}
 		this.owed.add(consultId);
-		if (!this.pi || this.holding || !this.active()) return;
-		this.holding = true;
-		this.previous = this.pi.getThinkingLevel();
+		this.fresh.add(consultId);
 		this.persist();
 		this.lower(ctx);
 	}
 
-	/** The model received this consult's final receipt. */
-	settle(consultId: string): void {
-		this.owed.delete(consultId);
+	/** The model received this consult's final receipt (or it was terminated). */
+	settle(consultId: string, details?: ConsultDetails, answers?: ReadonlyMap<ConsultantName, string>): void {
+		if (!this.owed.delete(consultId)) return;
+		if (details?.phase === "complete") {
+			const answered = details.runs.filter((run) => run.status === "ok");
+			if (
+				details.ok &&
+				answered.length > 0 &&
+				answered.every((run) => AgentEffortPolicy.approves(answers?.get(run.consultant)))
+			) {
+				this.approved.add(consultId);
+			}
+			for (const run of details.runs) this.account(run);
+		}
+		this.persist();
 	}
 
-	/** End the cycle and give the user's level back. */
-	restore(ctx: ExtensionContext | undefined, reason: string): void {
+	/** The `pre_consult` probe result. */
+	observeAvailability(ctx: ExtensionContext | undefined, availability: readonly ConsultantAvailability[]): void {
+		for (const item of availability) {
+			if (item.available) this.unavailable.delete(item.name);
+			else this.unavailable.add(item.name);
+		}
+		if (!this.holding) return;
+		this.persist();
+		if (!this.fallbackRefusal()) this.restore(ctx, "no consultant available");
+	}
+
+	/** A one-line state for `/consult-status` and `/consult-effort`. */
+	describe(): string {
+		return `${this.holdText()} | audit ladder: ${this.ladder()}`;
+	}
+
+	private holdText(): string {
+		if (!this.holding) return "effort hold: off";
+		const level = this.pi?.getThinkingLevel() ?? "unknown";
+		const state = this.unsupported ? "unsupported" : "on";
+		const owed = this.owed.size > 0 ? `, owed: ${[...this.owed].join(", ")}` : "";
+		return `effort hold: ${state} (${level}, restores to ${this.previous ?? "unchanged"}${owed})`;
+	}
+
+	private ladder(): string {
+		const serving = this.serving();
+		if (serving.length > 0) return `consultant (${serving.join(", ")})`;
+		if (this.teamsPresent()) return "independent agent via pi-teams (every enabled consultant expired)";
+		return "stopped: no consultant and no pi-teams; pi audits only on the user's explicit request";
+	}
+
+	private restore(ctx: ExtensionContext | undefined, reason: string): void {
 		const pi = this.pi;
 		if (!pi || !this.holding) return;
 		const previous = this.previous;
 		this.holding = false;
 		this.previous = undefined;
-		this.completed = false;
+		this.unsupported = false;
+		this.spawning = false;
+		this.resetCycle();
 		this.persist();
 		if (previous && previous !== pi.getThinkingLevel()) pi.setThinkingLevel(previous);
 		this.notify(ctx, `pi-consult: ${reason}; pi's thinking level restored to ${pi.getThinkingLevel()}.`, "info");
 	}
 
-	private lower(ctx: ExtensionContext | undefined): void {
+	private resetCycle(): void {
+		this.fresh.clear();
+		this.approved.clear();
+		this.failures.clear();
+		this.expired.clear();
+		this.auditors.clear();
+		this.independent.clear();
+		this.auditFailed = false;
+	}
+
+	private lower(ctx: ExtensionContext | undefined, quiet = false): void {
 		const pi = this.pi;
 		if (!pi) return;
 		const current = pi.getThinkingLevel();
@@ -97,74 +211,243 @@ export class AgentEffortPolicy {
 		pi.setThinkingLevel("low");
 		if (AgentEffortPolicy.ABOVE.has(pi.getThinkingLevel())) pi.setThinkingLevel("medium");
 		const after = pi.getThinkingLevel();
-		if (AgentEffortPolicy.ABOVE.has(after)) {
-			this.notify(ctx, `pi-consult: this model cannot run below ${after} thinking; consultant mode expects low.`, "warning");
-		} else if (after !== current) {
+		const unsupported = AgentEffortPolicy.ABOVE.has(after);
+		if (unsupported && !this.unsupported) {
 			this.notify(
 				ctx,
-				`pi-consult: consultation cycle started; pi's thinking held at ${after} (was ${current}) until it completes.`,
+				`pi-consult: this model offers nothing below ${after}; the consultation hold is unsupported on it and pi stays at ${after}.`,
+				"warning",
+			);
+		} else if (!unsupported && after !== current && !quiet) {
+			this.notify(
+				ctx,
+				`pi-consult: consultation hold: pi's thinking set to ${after} (was ${current}) until the cycle completes; /consult-effort release ends it early.`,
 				"info",
 			);
 		}
+		this.unsupported = unsupported;
 	}
 
-	private selected(level: Level, ctx: ExtensionContext): void {
-		if (!this.holding || !AgentEffortPolicy.ABOVE.has(level)) return;
-		if (this.running) {
-			this.lower(ctx);
+	private account(run: ConsultRun): void {
+		const name = run.consultant;
+		if (run.status === "aborted") return;
+		if (run.status === "ok") {
+			this.failures.delete(name);
+			this.expired.delete(name);
 			return;
 		}
-		this.holding = false;
-		this.previous = undefined;
-		this.persist();
-		this.notify(ctx, `pi-consult: thinking raised to ${level} by hand; the consultation hold ends until the next consult.`, "info");
+		const kind = run.error ? this.classifier.classifyText(run.error) : undefined;
+		if (AgentEffortPolicy.EXPIRING.has(run.status) || kind === "quota" || kind === "auth") {
+			this.expired.add(name);
+			return;
+		}
+		if (AgentEffortPolicy.RETRYABLE.has(run.status)) {
+			this.failures.set(name, (this.failures.get(name) ?? 0) + 1);
+		}
 	}
 
-	private observe(message: unknown, ctx: ExtensionContext): void {
+	private serving(): ConsultantName[] {
+		return AgentEffortPolicy.NAMES.filter(
+			(name) =>
+				this.config.consultant(name).enabled &&
+				!this.unavailable.has(name) &&
+				!this.expired.has(name) &&
+				(this.failures.get(name) ?? 0) < 2,
+		);
+	}
+
+	private teamsPresent(): boolean {
+		try {
+			return this.pi?.getAllTools().some((tool) => tool.name === "team_spawn") ?? false;
+		} catch {
+			return false;
+		}
+	}
+
+	private observeCall(name: string, input: Record<string, unknown> | undefined): void {
+		if (AgentEffortPolicy.MUTATIONS.has(name)) {
+			if (this.holding && this.fresh.size > 0) {
+				this.fresh.clear();
+				this.persist();
+			}
+			return;
+		}
+		const pi = this.pi;
+		if (name !== "team_spawn" || !pi || !this.holding || !this.previous) return;
+		if (!AgentEffortPolicy.isAudit(input?.task)) return;
+		// The teammate inherits the live level at spawn: give the auditor the
+		// user's level, then lower again at this call's tool_result.
+		this.spawning = true;
+		if (this.previous !== pi.getThinkingLevel()) pi.setThinkingLevel(this.previous);
+	}
+
+	private observeResult(event: ToolResultView, ctx: ExtensionContext): void {
+		if (event.toolName !== "team_spawn" || !AgentEffortPolicy.isAudit(event.input?.task)) return;
+		const raised = this.spawning;
+		this.spawning = false;
 		if (!this.holding) return;
-		const text = AgentEffortPolicy.assistantText(message);
-		if (AgentEffortPolicy.FALLBACKS.some((line) => text.includes(line))) {
-			this.restore(ctx, "consultant fallback stated");
+		const id = event.isError ? undefined : AgentEffortPolicy.teammateId(event);
+		const serving = this.serving();
+		if (!id) {
+			this.auditFailed = true;
+		} else if (serving.length > 0) {
+			this.notify(
+				ctx,
+				`pi-consult: independent audit ${id} was spawned while ${serving.join(", ")} can still serve; its verdict will not complete the cycle.`,
+				"warning",
+			);
+		} else {
+			this.auditors.add(id);
+			this.owed.add(id);
+			this.fresh.add(id);
+		}
+		this.persist();
+		if (raised) this.lower(ctx, true);
+	}
+
+	private observeTurn(message: unknown, ctx: ExtensionContext): void {
+		this.lastMessage = message;
+		if (!this.holding) return;
+		this.collectReports(ctx);
+		const lines = AgentEffortPolicy.lines(AgentEffortPolicy.assistantText(message));
+		if (lines.some((line) => AgentEffortPolicy.USER_AUDIT.test(line))) {
+			this.restore(ctx, "audit by pi at the user's request");
 			return;
 		}
-		if (text.includes(AgentEffortPolicy.COMPLETE)) this.completed = true;
+		if (
+			lines.some((line) => AgentEffortPolicy.AUDIT_UNAVAILABLE.test(line)) &&
+			this.teamsPresent() &&
+			!this.auditFailed
+		) {
+			this.notify(
+				ctx,
+				"pi-consult: independent audit stated unavailable, but pi-teams is installed and no independent audit has failed in this cycle; spawn one with team_spawn.",
+				"warning",
+			);
+		}
+		if (!lines.some((line) => AgentEffortPolicy.FALLBACK.test(line))) return;
+		const refusal = this.fallbackRefusal();
+		if (refusal) this.notify(ctx, `pi-consult: consultant fallback stated, but ${refusal}; holding low.`, "warning");
+		else this.restore(ctx, "consultant fallback");
+	}
+
+	/** Settle owed auditors from the reports pi-teams logged on the branch. */
+	private collectReports(ctx: ExtensionContext): void {
+		if (this.auditors.size === 0) return;
+		const branch = ctx.sessionManager.getBranch() as unknown as Array<Record<string, unknown>>;
+		let changed = false;
+		for (const entry of branch) {
+			if (entry?.type !== "custom" || entry.customType !== AgentEffortPolicy.TEAMS_LOG) continue;
+			const data = (entry.data ?? {}) as Record<string, unknown>;
+			const from = data.from;
+			if (data.direction !== "received" || data.kind !== "result" || typeof from !== "string") continue;
+			if (!this.auditors.has(from) || !this.owed.has(from)) continue;
+			this.owed.delete(from);
+			const last = AgentEffortPolicy.lines(String(data.payload ?? "")).at(-1) ?? "";
+			const verdict = last.match(AgentEffortPolicy.AUDIT_VERDICT)?.[1];
+			if (verdict === "approved") this.independent.add(from);
+			else if (!verdict) this.auditFailed = true;
+			changed = true;
+		}
+		if (changed) this.persist();
 	}
 
 	private settled(ctx: ExtensionContext): void {
-		this.running = false;
-		if (!this.holding || !this.completed) return;
-		this.completed = false;
-		if (this.outcome !== "completed") return;
-		if (this.owed.size > 0) {
-			this.notify(
-				ctx,
-				`pi-consult: cycle marked complete, but ${[...this.owed].join(", ")} is still running or uncollected; holding low.`,
-				"warning",
-			);
+		const message = this.lastMessage;
+		this.lastMessage = undefined;
+		if (!this.holding || this.outcome !== "completed") return;
+		this.collectReports(ctx);
+		const line = AgentEffortPolicy.finalLine(message);
+		const consultId = line?.match(AgentEffortPolicy.COMPLETE)?.[1];
+		const teammate = consultId ? undefined : line?.match(AgentEffortPolicy.INDEPENDENT)?.[1];
+		if (!consultId && !teammate) return;
+		const refusal = consultId ? this.completionRefusal(consultId) : this.independentRefusal(teammate as string);
+		if (refusal) {
+			this.notify(ctx, `pi-consult: cycle marked complete, but ${refusal}; holding low.`, "warning");
 			return;
 		}
-		this.restore(ctx, "consultation and execution complete");
+		this.restore(ctx, consultId ? "the consultant handed control back" : "the independent audit approved the work");
 	}
 
-	private rehydrate(ctx: ExtensionContext): void {
-		this.owed.clear();
-		this.running = false;
-		this.completed = false;
-		const branch = ctx.sessionManager.getBranch() as unknown as Array<Record<string, unknown>>;
-		for (let i = branch.length - 1; i >= 0; i--) {
-			const entry = branch[i];
-			if (entry.type !== "custom" || entry.customType !== AgentEffortPolicy.ENTRY) continue;
-			const data = (entry.data ?? {}) as EffortEntry;
-			this.holding = data.holding === true;
-			this.previous = this.holding ? data.previous : undefined;
+	private completionRefusal(consultId: string): string | undefined {
+		if (this.owed.size > 0) return `${[...this.owed].join(", ")} is still running or uncollected`;
+		if (!this.approved.has(consultId)) return `${consultId}'s answer does not end with an approved consultant verdict`;
+		if (!this.fresh.has(consultId)) return `${consultId} started before your last edit, write, or command`;
+		return undefined;
+	}
+
+	private independentRefusal(teammate: string): string | undefined {
+		if (this.owed.size > 0) return `${[...this.owed].join(", ")} is still running or uncollected`;
+		if (!this.auditors.has(teammate)) {
+			return `${teammate} is not an independent auditor spawned after every enabled consultant expired`;
+		}
+		if (!this.independent.has(teammate)) return `${teammate} has not reported an approved independent verdict`;
+		if (!this.fresh.has(teammate)) return `${teammate} was spawned before your last edit, write, or command`;
+		return undefined;
+	}
+
+	private fallbackRefusal(): string | undefined {
+		if (this.owed.size > 0) return `${[...this.owed].join(", ")} is still running or uncollected`;
+		const serving = this.serving();
+		return serving.length > 0 ? `${serving.join(", ")} has not expired in this cycle` : undefined;
+	}
+
+	private load(ctx: ExtensionContext, navigated: boolean): void {
+		const pi = this.pi;
+		if (!pi) return;
+		const wasHolding = this.holding;
+		const wasPrevious = this.previous;
+		const data = AgentEffortPolicy.latest(ctx);
+		this.holding = data?.holding === true && this.active();
+		this.previous = this.holding ? data?.previous : undefined;
+		this.owed = new Set(data?.owed ?? []);
+		this.fresh = new Set(data?.fresh ?? []);
+		this.approved = new Set(data?.approved ?? []);
+		this.failures = new Map(Object.entries(data?.failures ?? {}) as Array<[ConsultantName, number]>);
+		this.expired = new Set(data?.expired ?? []);
+		this.unavailable = new Set(data?.unavailable ?? []);
+		this.auditors = new Set(data?.auditors ?? []);
+		this.independent = new Set(data?.independent ?? []);
+		this.auditFailed = data?.auditFailed === true;
+		this.spawning = false;
+		this.unsupported = false;
+		this.lastMessage = undefined;
+		if (this.holding) {
+			this.lower(ctx);
 			return;
 		}
-		this.holding = false;
-		this.previous = undefined;
+		if (navigated && wasHolding && wasPrevious && wasPrevious !== pi.getThinkingLevel()) {
+			pi.setThinkingLevel(wasPrevious);
+			this.notify(ctx, `pi-consult: left a branch inside a consultation cycle; pi's thinking level restored to ${pi.getThinkingLevel()}.`, "info");
+		}
+	}
+
+	private async command(args: string, ctx: ExtensionCommandContext): Promise<void> {
+		if (args.trim() !== "release") {
+			ctx.ui.notify(`pi-consult: ${this.describe()}`, "info");
+			return;
+		}
+		if (!this.holding) {
+			ctx.ui.notify("pi-consult: no consultation hold is active.", "info");
+			return;
+		}
+		this.restore(ctx, "hold released by the user");
 	}
 
 	private persist(): void {
-		const data: EffortEntry = { holding: this.holding, previous: this.previous };
+		const data: EffortEntry = {
+			holding: this.holding,
+			previous: this.previous,
+			owed: [...this.owed],
+			fresh: [...this.fresh],
+			approved: [...this.approved],
+			failures: Object.fromEntries(this.failures),
+			expired: [...this.expired],
+			unavailable: [...this.unavailable],
+			auditors: [...this.auditors],
+			independent: [...this.independent],
+			auditFailed: this.auditFailed,
+		};
 		this.pi?.appendEntry(AgentEffortPolicy.ENTRY, data);
 	}
 
@@ -176,6 +459,66 @@ export class AgentEffortPolicy {
 		if (ctx?.hasUI) ctx.ui.notify(text, type);
 	}
 
+	/** The last persisted entry on the branch, validated; undefined when absent. */
+	private static latest(ctx: ExtensionContext): Partial<EffortEntry> | undefined {
+		const branch = ctx.sessionManager.getBranch() as unknown as Array<Record<string, unknown>>;
+		for (let i = branch.length - 1; i >= 0; i--) {
+			const entry = branch[i];
+			if (entry?.type !== "custom" || entry.customType !== AgentEffortPolicy.ENTRY) continue;
+			const raw = (entry.data ?? {}) as Record<string, unknown>;
+			const strings = (value: unknown): string[] =>
+				Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+			const names = (value: unknown): ConsultantName[] =>
+				strings(value).filter((name): name is ConsultantName => name === "claude" || name === "codex");
+			const failures: Partial<Record<ConsultantName, number>> = {};
+			const rawFailures = (typeof raw.failures === "object" && raw.failures !== null ? raw.failures : {}) as Record<string, unknown>;
+			for (const name of AgentEffortPolicy.NAMES) {
+				const count = rawFailures[name];
+				if (typeof count === "number" && Number.isFinite(count) && count > 0) failures[name] = Math.floor(count);
+			}
+			return {
+				holding: raw.holding === true,
+				previous: typeof raw.previous === "string" && AgentEffortPolicy.LEVELS.has(raw.previous) ? (raw.previous as Level) : undefined,
+				owed: strings(raw.owed),
+				fresh: strings(raw.fresh),
+				approved: strings(raw.approved),
+				failures,
+				expired: names(raw.expired),
+				unavailable: names(raw.unavailable),
+				auditors: strings(raw.auditors),
+				independent: strings(raw.independent),
+				auditFailed: raw.auditFailed === true,
+			};
+		}
+		return undefined;
+	}
+
+	private static isAudit(task: unknown): boolean {
+		if (typeof task !== "string") return false;
+		const first = task.split("\n").find((line) => line.trim() !== "")?.trim() ?? "";
+		return AgentEffortPolicy.AUDIT_HEADER.test(first);
+	}
+
+	private static teammateId(event: ToolResultView): string | undefined {
+		const id = (event.details as { id?: unknown } | undefined)?.id;
+		if (typeof id === "string" && id.trim()) return id.trim();
+		const text = (event.content ?? []).map((part) => part?.text ?? "").join("\n");
+		return text.match(AgentEffortPolicy.SPAWNED)?.[1];
+	}
+
+	private static approves(answer: string | undefined): boolean {
+		if (!answer) return false;
+		return AgentEffortPolicy.VERDICT.test(AgentEffortPolicy.lines(answer).at(-1) ?? "");
+	}
+
+	/** The last plain line of a final, tool-free assistant message. */
+	private static finalLine(message: unknown): string | undefined {
+		const record = message as { role?: string; content?: unknown };
+		if (record?.role !== "assistant" || !Array.isArray(record.content)) return undefined;
+		if (record.content.some((part) => (part as { type?: string })?.type === "toolCall")) return undefined;
+		return AgentEffortPolicy.lines(AgentEffortPolicy.assistantText(message)).at(-1);
+	}
+
 	private static assistantText(message: unknown): string {
 		const record = message as { role?: string; content?: unknown };
 		if (record?.role !== "assistant" || !Array.isArray(record.content)) return "";
@@ -183,5 +526,21 @@ export class AgentEffortPolicy {
 			.filter((part): part is { type: "text"; text: string } => part?.type === "text" && typeof part.text === "string")
 			.map((part) => part.text)
 			.join("\n");
+	}
+
+	/** Trimmed non-empty lines outside code fences and blockquotes. */
+	private static lines(text: string): string[] {
+		const lines: string[] = [];
+		let fenced = false;
+		for (const raw of text.split("\n")) {
+			const line = raw.trim();
+			if (line.startsWith("```") || line.startsWith("~~~")) {
+				fenced = !fenced;
+				continue;
+			}
+			if (fenced || line === "" || line.startsWith(">")) continue;
+			lines.push(line);
+		}
+		return lines;
 	}
 }

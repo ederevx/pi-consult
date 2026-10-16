@@ -1,6 +1,6 @@
 {
   "name": "pi-consult",
-  "version": "0.12.0",
+  "version": "0.12.1",
   "type": "module",
   "description": "Offload thinking work from the pi coding agent to external consultants (Claude Code, Codex) behind an acknowledgement gate with a stated consultation judgment.",
   "license": "MIT",

@@ -99,8 +99,10 @@ export class ConsultTool {
 				"The answer is the plan of record: verify its claims rather than repeating " +
 				"its investigation, and carry every doubt and every roadblock back with " +
 				"continue instead of working around it. The consultant also verifies the " +
-				"finished work: send the evidence back with continue; never audit " +
-				"consultant work yourself. The " +
+				"finished work and ends with a verdict line: send the evidence back " +
+				"with continue. Never audit consultant work yourself: when every " +
+				"consultant has expired, a fresh pi-teams teammate audits it, and you " +
+				"audit only on the user's explicit request, saying so. " +
 				"consultants advise only; pi executes every change. Use `files` to " +
 				"point a consultant at paths it should read itself instead of pasting " +
 				"contents. Pass the returned consult id as `continue` to keep talking to " +
@@ -269,7 +271,7 @@ export class ConsultTool {
 		}
 
 		const receipt: ConsultReceipt = await this.deps.supervisor.receipt(invocation);
-		this.deps.effort?.settle(consultId);
+		this.deps.effort?.settle(consultId, receipt.details, receipt.answers);
 		return {
 			content: [
 				{
