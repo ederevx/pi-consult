@@ -120,5 +120,7 @@ test("gate: the compaction reminder keeps the roadblock and cycle obligations", 
 	const reminder = new ConsultContract().compactionReminder({ acknowledged: true } as never);
 	assertIncludes(reminder, "every roadblock goes back to it");
 	assertIncludes(reminder, "never to you");
-	assertIncludes(reminder, "Write the Consultation cycle: complete line only after");
+	assertIncludes(reminder, "when every enabled consultant has ");
+	assertIncludes(reminder, "a fresh pi-teams independent auditor");
+	assertIncludes(reminder, "only after an approved");
 });

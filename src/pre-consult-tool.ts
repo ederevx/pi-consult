@@ -5,8 +5,9 @@
  * what the gate accepts. It returns the catalogue of tools, the full
  * consultation workflow the agent commits to (judge the task, consultant-
  * owned design and verification, roadblocks and audits back to a
- * consultant), and consultant availability. A probe that finds no available
- * consultant restores the thinking level the cycle had lowered.
+ * consultant), and consultant availability. A probe that finds consultants
+ * unavailable records that, and restores the thinking level the cycle had
+ * lowered when no enabled consultant can serve it.
  */
 
 import type {
@@ -53,8 +54,9 @@ export class PreConsultTool {
 				"Verify a consultant's claims without redoing its investigation; carry every doubt back through consult continuation, and send every roadblock (a failed check, a step the plan does not cover, an unexpected result, an ambiguity) back the same way before working around it - never improvise a workaround.",
 				"Prefer a single consultant for most tasks; use target 'both' only when the task demands two independent perspectives.",
 				'Offload thinking work: for evaluation tasks (judging a diff, plan, design, result, or options against criteria), audit tasks (checking every member of a set for a property), and investigative tasks (research, root-cause diagnosis, feasibility, behavior you cannot observe here), lean toward consulting one consultant; run local execution yourself and consult on its interpretation, and evaluate a consultant\'s own answer through its continuation; "not needed" fits a short lookup already settled by the evidence in view or a check a local command decides, and the decision line gives that reason.',
-				'Consultant mode: the consultant owns design and verification, you own implementation and execution at low thinking effort from your first consult until the cycle is complete; rely on the plan as written, report existence and test evidence as it came out, return finished consultant-derived work with continue for the consultant\'s verdict, and only then end your reply with "Consultation cycle: complete - <consult id> verified.".',
-				'Never audit consultant-derived work yourself; audit it through a consultant. Only if no consultant is available, state "Consultant fallback: no consultant available - <reason>."; only on a direct user request, state "Audit by pi at the user\'s request - <request>."; never present either as consultant verification.',
+				'Consultant mode: the consultant owns design and verification, you own implementation and execution at low thinking effort from your first consult until the cycle is complete (only the user can release it early); rely on the plan as written, report existence and test evidence as it came out, return finished consultant-derived work with continue and ask for its verdict line, and only after "Consultant verdict: approved - <reason>." end your final reply with the line "Consultation cycle: complete - <consult id> verified.".',
+				'Audits climb a ladder and never skip a rung: a consultant; when every enabled consultant has expired (probe unavailable, an auth, quota, or unavailable run, or a consult and one retry failed), a fresh pi-teams teammate spawned with team_spawn whose task starts "pi-consult independent audit - <scope>." and carries the evidence, never the verdict; you only when the user explicitly asks, stating "Audit by pi at the user\'s request - <request>.". Without pi-teams or after a failed audit, stop and state "Independent audit unavailable - <reason>."; never audit it yourself. "Consultant fallback: no consultant available - <reason>." covers roadblocks only.',
+				'If your task starts with "pi-consult independent audit - ", you are the independent auditor: audit read-only, do not delegate, and end your report with "Independent audit verdict: approved - <reason>." or "Independent audit verdict: changes needed - <reason>.".',
 			],
 			parameters: Type.Object({
 				acknowledge: Type.Literal(true, {
@@ -84,9 +86,7 @@ export class PreConsultTool {
 					);
 				}
 				const availability = await this.probe();
-				if (!availability.some((item) => item.available)) {
-					this.effort?.restore(ctx, "no consultant available");
-				}
+				this.effort?.observeAvailability(ctx, availability);
 				const details: PreConsultDetails = {
 					schema: 1,
 					ack: {

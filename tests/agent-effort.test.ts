@@ -1,68 +1,39 @@
 /**
  * pi-consult — pi's own thinking level in consultant mode.
  *
- * Drives the real AgentEffortPolicy over a fake pi that records handlers,
- * appendEntry calls, and every setThinkingLevel with an injectable clamp,
- * plus a FakeContext with a UI so the notifications are captured.
+ * Drives the real AgentEffortPolicy over pi 1.0.4's faked host: an upward
+ * clamp over configurable levels, `thinking_level_select` through a
+ * microtask only on a real change, a shared session branch, and a model
+ * switch that sets the level before `model_select`.
  */
 
 import { ConsultConfig } from "../src/consult-config.ts";
 import { AgentEffortPolicy } from "../src/agent-effort-policy.ts";
 import type { BranchEntry } from "../src/receipt-ledger.ts";
 import {
+	APPROVED_VERDICT,
 	FakeContext,
+	FakeEffortHost,
+	THINKING_LEVELS,
 	assert,
 	assertEq,
 	assertIncludes,
+	assistantMessage,
+	assistantWithToolCall,
+	consultDetails,
+	consultRun,
 	customEntry,
 	scratchDir,
 	test,
+	tick,
+	verdictAnswers,
 } from "./harness.ts";
 
-type Handler = (event: unknown, ctx: unknown) => unknown;
-
-/** A fake pi surface for the effort owner, with a model clamp. */
-class FakeEffortPi {
-	readonly entries: Array<{ customType: string; data?: unknown }> = [];
-	readonly handlers = new Map<string, Handler[]>();
-	readonly setCalls: string[] = [];
-	private level: string;
-
-	constructor(
-		level = "high",
-		private readonly clamp: (level: string) => string = (level) => level,
-	) {
-		this.level = level;
-	}
-
-	on(event: string, handler: Handler): () => void {
-		const list = this.handlers.get(event) ?? [];
-		list.push(handler);
-		this.handlers.set(event, list);
-		return () => undefined;
-	}
-
-	getThinkingLevel(): string {
-		return this.level;
-	}
-
-	setThinkingLevel(level: string): void {
-		this.setCalls.push(level);
-		this.level = this.clamp(level);
-	}
-
-	/** A manual raise: the host changes the level and emits the select itself. */
-	forceLevel(level: string): void {
-		this.level = level;
-	}
-
-	appendEntry(customType: string, data?: unknown): void {
-		this.entries.push({ customType, data });
-	}
-
-	emit(event: string, payload?: unknown, ctx?: unknown): void {
-		for (const handler of this.handlers.get(event) ?? []) handler(payload, ctx);
-	}
+interface Setup {
+	host: FakeEffortHost;
+	ctx: FakeContext;
+	policy: AgentEffortPolicy;
+	config: ConsultConfig;
 }
 
 /** An effective config; both consultants on unless overridden. */
@@ -73,31 +44,34 @@ function config(overrides: Record<string, unknown> = {}): ConsultConfig {
 	);
 }
 
-interface Setup {
-	pi: FakeEffortPi;
-	ctx: FakeContext;
-	policy: AgentEffortPolicy;
-}
-
-/** Register the policy on a fresh fake pi and UI context. */
+/** Register a policy on a fresh host and UI context. */
 function setup(
 	options: {
 		level?: string;
-		clamp?: (level: string) => string;
+		available?: readonly string[];
 		branch?: BranchEntry[];
 		config?: ConsultConfig;
 	} = {},
 ): Setup {
-	const pi = new FakeEffortPi(options.level ?? "high", options.clamp);
-	const ctx = new FakeContext(options.branch ?? [], "session-effort", scratchDir(), true);
-	const policy = new AgentEffortPolicy(options.config ?? config());
-	policy.register(pi as never);
-	return { pi, ctx, policy };
+	const chosen = options.config ?? config();
+	const host = new FakeEffortHost(options.level ?? "high", options.available ?? THINKING_LEVELS, options.branch);
+	const ctx = new FakeContext(host.branch, "session-effort", scratchDir(), true);
+	host.attachContext(ctx);
+	const policy = new AgentEffortPolicy(chosen);
+	policy.register(host as never);
+	host.emit("session_start", {});
+	return { host, ctx, policy, config: chosen };
 }
 
-/** The persisted state of the entry recorded last. */
-function lastEntry(pi: FakeEffortPi): { holding?: boolean; previous?: string } {
-	return (pi.entries.at(-1)?.data ?? {}) as { holding?: boolean; previous?: string };
+/** The persisted state of the last pi-consult-effort entry on the branch. */
+function lastEntry(host: FakeEffortHost): Record<string, unknown> {
+	for (let i = host.branch.length - 1; i >= 0; i--) {
+		const entry = host.branch[i] as Record<string, unknown>;
+		if (entry.type === "custom" && entry.customType === "pi-consult-effort") {
+			return (entry.data ?? {}) as Record<string, unknown>;
+		}
+	}
+	return {};
 }
 
 /** Every notification text, joined for substring assertions. */
@@ -105,231 +79,471 @@ function notices(ctx: FakeContext): string {
 	return ctx.notifyCalls.map((call) => call.message).join("\n");
 }
 
-/** The assistant text part pi scans at turn_end. */
-function assistant(text: string): unknown {
-	return { role: "assistant", content: [{ type: "text", text }] };
+/** A setup whose only enabled consultant has already expired. */
+function expired(overrides: Record<string, unknown> = { codex: { enabled: false } }): Setup {
+	const state = setup({ config: config(overrides) });
+	state.policy.engage(state.ctx as never, "c-e001");
+	state.policy.settle("c-e001", consultDetails("c-e001", [consultRun("claude", "unavailable")], false));
+	return state;
 }
-
-/** One complete run: agent_start, a turn, the settle boundary, agent_settled. */
-function run(pi: FakeEffortPi, ctx: FakeContext, text: string, outcome = "completed"): void {
-	pi.emit("agent_start", {}, ctx);
-	pi.emit("turn_end", { message: assistant(text) }, ctx);
-	pi.emit("agent_before_settle", { outcome }, ctx);
-	pi.emit("agent_settled", {}, ctx);
-}
-
-test("agent effort: session_start with nothing persisted never sets a level", () => {
-	const { pi, ctx } = setup({ level: "high" });
-	pi.emit("session_start", {}, ctx);
-	assertEq(pi.setCalls.length, 0, "there is no hold at session start");
-	assertEq(pi.entries.length, 0, "nothing is persisted");
-});
 
 test("agent effort: engage at high lowers to low and records the previous level", () => {
-	const { pi, ctx, policy } = setup({ level: "high" });
+	const { host, ctx, policy } = setup({ level: "high" });
 	policy.engage(ctx as never, "c-000001");
-	assertEq(pi.getThinkingLevel(), "low");
-	assertEq(pi.setCalls.length, 1);
-	assertEq(pi.setCalls[0], "low");
-	assertEq(pi.entries.length, 1);
-	assertEq(pi.entries[0].customType, "pi-consult-effort");
-	assertEq(lastEntry(pi).holding, true);
-	assertEq(lastEntry(pi).previous, "high");
+	assertEq(host.getThinkingLevel(), "low");
+	assertEq(lastEntry(host).holding, true);
+	assertEq(lastEntry(host).previous, "high");
+	assertEq(host.setCalls[0], "low");
 });
 
 test("agent effort: medium lowers to low; off, minimal and low hold unchanged", () => {
 	for (const level of ["medium", "off", "minimal", "low"]) {
-		const { pi, ctx, policy } = setup({ level });
+		const { host, ctx, policy } = setup({ level });
 		policy.engage(ctx as never, `c-000002-${level}`);
 		if (level === "medium") {
-			assertEq(pi.getThinkingLevel(), "low", "medium is lowered");
-			assertEq(pi.setCalls.length, 1);
+			assertEq(host.getThinkingLevel(), "low", "medium is lowered");
 		} else {
-			assertEq(pi.getThinkingLevel(), level, `${level} is left alone`);
-			assertEq(pi.setCalls.length, 0, `${level} causes no set call`);
+			assertEq(host.getThinkingLevel(), level, `${level} is left alone`);
+			assertEq(host.setCalls.length, 0, `${level} causes no set`);
 		}
-		assertEq(lastEntry(pi).holding, true, `the hold still begins at ${level}`);
+		assertEq(lastEntry(host).holding, true, `the hold still begins at ${level}`);
 	}
 });
 
-test("agent effort: a model without low falls through to medium", () => {
-	const { pi, ctx, policy } = setup({
+test("agent effort: a model without low clamps to medium and reports unsupported", () => {
+	const { host, ctx, policy } = setup({
 		level: "high",
-		clamp: (level) => (level === "medium" ? "medium" : "high"),
+		available: ["medium", "high", "xhigh", "max"],
 	});
 	policy.engage(ctx as never, "c-000003");
-	assertEq(pi.getThinkingLevel(), "medium", "low is clamped up to medium");
-	assertEq(pi.setCalls.length, 2, "low, then medium");
-	assertIncludes(notices(ctx), "held at medium", "the start notice names the clamped level");
+	assertEq(host.getThinkingLevel(), "medium", "low is clamped up to medium");
+	assertIncludes(notices(ctx), "consultation hold", "the clamped hold is disclosed");
 });
 
-test("agent effort: a model that only allows high warns and does not throw", () => {
-	const { pi, ctx, policy } = setup({ level: "high", clamp: () => "high" });
+test("agent effort: a high-only model warns once and describes unsupported", () => {
+	const { host, ctx, policy } = setup({ level: "high", available: ["high"] });
 	policy.engage(ctx as never, "c-000004");
-	assertEq(pi.getThinkingLevel(), "high");
-	assertEq(pi.setCalls.length, 2, "both attempts were clamped away");
-	assertIncludes(notices(ctx), "cannot run below high");
-	assertEq(ctx.notifyCalls.at(-1)?.type, "warning", "the clamp is a warning");
+	const warnings = () =>
+		ctx.notifyCalls.filter((call) => call.type === "warning" && call.message.includes("unsupported")).length;
+	assertEq(warnings(), 1, "the first clamp warns");
+	host.forceLevel("high");
+	host.emit("model_select", {});
+	assertEq(warnings(), 1, "a repeated lowering does not warn again");
+	assertIncludes(policy.describe(), "unsupported");
 });
 
 test("agent effort: both consultants disabled never holds", () => {
-	const { pi, ctx, policy } = setup({
+	const { host, ctx, policy } = setup({
 		config: config({ claude: { enabled: false }, codex: { enabled: false } }),
 	});
 	policy.engage(ctx as never, "c-000005");
-	assertEq(pi.setCalls.length, 0);
-	assertEq(pi.entries.length, 0, "no cycle is persisted");
-	assertEq(pi.getThinkingLevel(), "high");
+	assertEq(host.setCalls.length, 0);
+	assertEq(host.getThinkingLevel(), "high");
+	assertEq(lastEntry(host).holding, undefined, "no cycle is persisted");
 });
 
-test("agent effort: a second engage joins the cycle without a new entry", () => {
-	const { pi, ctx, policy } = setup({ level: "high" });
+test("agent effort: a second engage joins the cycle and keeps the previous level", () => {
+	const { host, ctx, policy } = setup({ level: "high" });
 	policy.engage(ctx as never, "c-000006");
 	policy.engage(ctx as never, "c-000007");
-	assertEq(pi.entries.length, 1, "the cycle is persisted once");
-	assertEq(pi.setCalls.length, 1);
-	assertEq(lastEntry(pi).previous, "high", "the previous level is unchanged");
+	assertEq(lastEntry(host).previous, "high", "the previous level is unchanged");
+	assert((lastEntry(host).owed as string[]).includes("c-000007"), "the second consult is owed");
 });
 
-test("agent effort: the completion line with nothing owed restores the level", () => {
-	const { pi, ctx, policy } = setup({ level: "high" });
+test("agent effort: an approved consult and the completion line restore the level", async () => {
+	const { host, ctx, policy } = setup({ level: "high" });
 	policy.engage(ctx as never, "c-000008");
-	policy.settle("c-000008");
-	run(pi, ctx, "Done. Consultation cycle: complete - c-000008 verified.");
-	assertEq(pi.getThinkingLevel(), "high");
-	assertEq(pi.setCalls.length, 2);
-	assertEq(pi.setCalls[1], "high");
-	assertEq(lastEntry(pi).holding, false, "the closed cycle is persisted");
-	assertIncludes(notices(ctx), "restored to high");
+	policy.settle(
+		"c-000008",
+		consultDetails("c-000008", [consultRun("claude", "ok")]),
+		verdictAnswers({ claude: APPROVED_VERDICT }),
+	);
+	await host.run("Consultation cycle: complete - c-000008 verified.");
+	assertEq(host.getThinkingLevel(), "high");
+	assertEq(lastEntry(host).holding, false, "the closed cycle is persisted");
+	assertIncludes(notices(ctx), "the consultant handed control back");
 });
 
-test("agent effort: the same sequence without the line keeps the hold", () => {
-	const { pi, ctx, policy } = setup({ level: "high" });
+test("agent effort: the same sequence without the line keeps the hold", async () => {
+	const { host, ctx, policy } = setup({ level: "high" });
 	policy.engage(ctx as never, "c-000009");
-	policy.settle("c-000009");
-	run(pi, ctx, "Still working; nothing is verified yet.");
-	assertEq(pi.getThinkingLevel(), "low", "the hold survives agent_settled");
-	assertEq(pi.entries.length, 1, "no closed-cycle entry");
+	policy.settle(
+		"c-000009",
+		consultDetails("c-000009", [consultRun("claude", "ok")]),
+		verdictAnswers({ claude: APPROVED_VERDICT }),
+	);
+	await host.run("Still working; nothing is verified yet.");
+	assertEq(host.getThinkingLevel(), "low", "the hold survives agent_settled");
 });
 
-test("agent effort: a completion line with a consult still owed warns and holds", () => {
-	const { pi, ctx, policy } = setup({ level: "high" });
+test("agent effort: a completion line with a consult still owed warns and holds", async () => {
+	const { host, ctx, policy } = setup({ level: "high" });
 	policy.engage(ctx as never, "c-000010");
-	run(pi, ctx, "Consultation cycle: complete - c-000010 verified.");
-	assertEq(pi.getThinkingLevel(), "low");
+	await host.run("Consultation cycle: complete - c-000010 verified.");
+	assertEq(host.getThinkingLevel(), "low");
 	assertIncludes(notices(ctx), "still running or uncollected");
 	assertIncludes(notices(ctx), "holding low");
-	assertEq(pi.entries.length, 1, "the hold is not released");
 
-	policy.settle("c-000010");
-	run(pi, ctx, "Consultation cycle: complete - c-000010 verified.");
-	assertEq(pi.getThinkingLevel(), "high", "the later settled run restores");
-	assertEq(lastEntry(pi).holding, false);
+	policy.settle(
+		"c-000010",
+		consultDetails("c-000010", [consultRun("claude", "ok")]),
+		verdictAnswers({ claude: APPROVED_VERDICT }),
+	);
+	await host.run("Consultation cycle: complete - c-000010 verified.");
+	assertEq(host.getThinkingLevel(), "high", "the later settled run restores");
 });
 
-test("agent effort: an aborted outcome does not restore", () => {
-	const { pi, ctx, policy } = setup({ level: "high" });
-	policy.engage(ctx as never, "c-000011");
-	policy.settle("c-000011");
-	run(pi, ctx, "Consultation cycle: complete - c-000011 verified.", "aborted");
-	assertEq(pi.getThinkingLevel(), "low", "an aborted run is not a completion");
-	assertEq(pi.entries.length, 1);
-});
-
-test("agent effort: the line inside a tool result or non-assistant message is ignored", () => {
-	const line = "Consultation cycle: complete - c-000012 verified.";
-	const { pi, ctx, policy } = setup({ level: "high" });
-	policy.engage(ctx as never, "c-000012");
-	policy.settle("c-000012");
-	pi.emit("agent_start", {}, ctx);
-	pi.emit("turn_end", { message: { role: "toolResult", content: [{ type: "text", text: line }] } }, ctx);
-	pi.emit("turn_end", { message: { role: "user", content: [{ type: "text", text: line }] } }, ctx);
-	pi.emit("turn_end", { message: { role: "assistant", content: line } }, ctx);
-	pi.emit("agent_before_settle", { outcome: "completed" }, ctx);
-	pi.emit("agent_settled", {}, ctx);
-	assertEq(pi.getThinkingLevel(), "low", "only assistant text parts count");
-	assertEq(pi.entries.length, 1);
-});
-
-test("agent effort: a fallback line restores immediately, before any settle", () => {
-	const lines = [
-		"Consultant fallback: no consultant available - every probe failed.",
-		"Audit by pi at the user's request - recheck the diff yourself.",
+test("agent effort: a quoted fallback marker never restores", async () => {
+	const markers = [
+		"See Consultant fallback: no consultant available - quoted.",
+		"`Consultant fallback: no consultant available - quoted.`",
+		"> Consultant fallback: no consultant available - quoted.",
+		"```\nConsultant fallback: no consultant available - quoted.\n```",
 	];
-	for (const line of lines) {
-		const { pi, ctx, policy } = setup({ level: "high" });
-		policy.engage(ctx as never, "c-000013");
-		pi.emit("agent_start", {}, ctx);
-		pi.emit("turn_end", { message: assistant(line) }, ctx);
-		assertEq(pi.getThinkingLevel(), "high", "restored at the turn, not at the settle");
-		assertEq(pi.setCalls.length, 2);
-		assertEq(lastEntry(pi).holding, false);
+	for (const marker of markers) {
+		const state = expired();
+		await state.host.run(marker);
+		assertEq(state.host.getThinkingLevel(), "low", `held for ${JSON.stringify(marker)}`);
 	}
 });
 
-test("agent effort: the restore's own select event does not re-lower", () => {
-	const { pi, ctx, policy } = setup({ level: "high" });
+test("agent effort: a standalone fallback line restores once a consultant is expired", async () => {
+	const state = expired();
+	state.host.emit("agent_start", {});
+	state.host.emit("turn_end", {
+		message: assistantMessage("Consultant fallback: no consultant available - the CLI is gone."),
+	});
+	assertEq(state.host.getThinkingLevel(), "high", "the fallback restores at the turn, before any settle");
+	assertEq(lastEntry(state.host).holding, false);
+});
+
+test("agent effort: a standalone fallback while codex can still serve warns and holds", async () => {
+	const { host, ctx, policy } = setup({ config: config({ codex: { enabled: false } }) });
+	policy.engage(ctx as never, "c-000011");
+	policy.settle("c-000011", consultDetails("c-000011", [consultRun("claude", "ok")]));
+	await host.run("Consultant fallback: no consultant available - nothing was probed.");
+	assertEq(host.getThinkingLevel(), "low");
+	assertIncludes(notices(ctx), "has not expired in this cycle");
+	assertIncludes(notices(ctx), "holding low");
+});
+
+test("agent effort: claude unavailable plus two codex failures restore on the probe", () => {
+	const { host, ctx, policy } = setup();
+	policy.engage(ctx as never, "c-000012");
+	policy.settle(
+		"c-000012",
+		consultDetails("c-000012", [consultRun("claude", "ok"), consultRun("codex", "error", "boom")], false),
+	);
+	policy.engage(ctx as never, "c-000013");
+	policy.settle(
+		"c-000013",
+		consultDetails("c-000013", [consultRun("claude", "ok"), consultRun("codex", "error", "boom")], false),
+	);
+	policy.observeAvailability(ctx as never, [
+		{ name: "claude", available: false, error: "missing" },
+		{ name: "codex", available: true },
+	]);
+	assertEq(host.getThinkingLevel(), "high");
+	assertIncludes(notices(ctx), "no consultant available");
+});
+
+test("agent effort: a fallback line while a detached consult is owed is refused", async () => {
+	const { host, ctx, policy } = setup({ config: config({ codex: { enabled: false } }) });
 	policy.engage(ctx as never, "c-000014");
-	policy.settle("c-000014");
-	run(pi, ctx, "Consultation cycle: complete - c-000014 verified.");
-	assertEq(pi.setCalls.length, 2, "one lower, one restore");
-	pi.emit("thinking_level_select", { level: "high" }, ctx);
-	assertEq(pi.setCalls.length, 2, "the restore's own event is ignored");
-	assertEq(pi.getThinkingLevel(), "high");
+	policy.observeAvailability(ctx as never, [{ name: "claude", available: false, error: "missing" }]);
+	assertEq(host.getThinkingLevel(), "low", "the owed consult blocks the probe restore");
+	await host.run("Consultant fallback: no consultant available - roadblock.");
+	assertEq(host.getThinkingLevel(), "low");
+	assertIncludes(notices(ctx), "still running or uncollected");
 });
 
-test("agent effort: a manual raise is re-lowered while running and honoured while idle", () => {
-	const running = setup({ level: "high" });
-	running.policy.engage(running.ctx as never, "c-000015");
-	running.pi.emit("agent_start", {}, running.ctx);
-	running.pi.forceLevel("high");
-	running.pi.emit("thinking_level_select", { level: "high" }, running.ctx);
-	assertEq(running.pi.getThinkingLevel(), "low", "a run's manual raise is re-lowered");
-
-	const idle = setup({ level: "high" });
-	idle.policy.engage(idle.ctx as never, "c-000016");
-	const setsAfterEngage = idle.pi.setCalls.length;
-	idle.pi.forceLevel("high");
-	idle.pi.emit("thinking_level_select", { level: "high" }, idle.ctx);
-	assertEq(idle.pi.getThinkingLevel(), "high", "an idle manual raise is honoured");
-	assertEq(idle.pi.setCalls.length, setsAfterEngage, "the manual raise sets nothing itself");
-	assertEq(lastEntry(idle.pi).holding, false, "the hold ends");
-	assertIncludes(notices(idle.ctx), "raised to high by hand");
-
-	idle.policy.engage(idle.ctx as never, "c-000017");
-	assertEq(lastEntry(idle.pi).previous, "high", "the next cycle captures the raised level");
-	assertEq(idle.pi.getThinkingLevel(), "low");
+test("agent effort: a disabled codex plus two claude failures accept the fallback", async () => {
+	const { host, ctx, policy } = setup({ config: config({ codex: { enabled: false } }) });
+	policy.engage(ctx as never, "c-000015");
+	policy.settle("c-000015", consultDetails("c-000015", [consultRun("claude", "error", "boom")], false));
+	policy.engage(ctx as never, "c-000016");
+	policy.settle("c-000016", consultDetails("c-000016", [consultRun("claude", "error", "boom")], false));
+	await host.run("Consultant fallback: no consultant available - claude is down.");
+	assertEq(host.getThinkingLevel(), "high");
 });
 
-test("agent effort: model_select re-lowers while holding and is ignored while idle", () => {
-	const holding = setup({ level: "high" });
-	holding.policy.engage(holding.ctx as never, "c-000018");
-	holding.pi.forceLevel("high");
-	holding.pi.emit("model_select", {}, holding.ctx);
-	assertEq(holding.pi.getThinkingLevel(), "low", "a switch back to a deep model is lowered");
+test("agent effort: collecting the same failed consult three times counts as one failure", async () => {
+	const { host, ctx, policy } = setup({ config: config({ codex: { enabled: false } }) });
+	policy.engage(ctx as never, "c-000017");
+	policy.settle("c-000017", consultDetails("c-000017", [consultRun("claude", "error", "boom")], false));
+	policy.settle("c-000017");
+	policy.settle("c-000017");
+	await host.run("Consultant fallback: no consultant available - one failure only.");
+	assertEq(host.getThinkingLevel(), "low", "one failure is not two");
 
-	const idle = setup({ level: "high" });
-	idle.pi.forceLevel("high");
-	idle.pi.emit("model_select", {}, idle.ctx);
-	assertEq(idle.pi.getThinkingLevel(), "high", "an idle switch is left alone");
-	assertEq(idle.pi.setCalls.length, 0);
+	policy.engage(ctx as never, "c-000018");
+	policy.settle("c-000018", consultDetails("c-000018", [consultRun("claude", "error", "boom")], false));
+	await host.run("Consultant fallback: no consultant available - now twice.");
+	assertEq(host.getThinkingLevel(), "high");
 });
 
-test("agent effort: rehydrate restores the level from the last effort entry", () => {
+test("agent effort: the user-audit line restores; a quoted one does not", async () => {
+	const live = setup({ level: "high" });
+	live.policy.engage(live.ctx as never, "c-000019");
+	await live.host.run("Audit by pi at the user's request - recheck the diff.");
+	assertEq(live.host.getThinkingLevel(), "high");
+	assertIncludes(notices(live.ctx), "audit by pi at the user's request");
+
+	const quoted = setup({ level: "high" });
+	quoted.policy.engage(quoted.ctx as never, "c-000020");
+	await quoted.host.run("`Audit by pi at the user's request - quoted.`");
+	assertEq(quoted.host.getThinkingLevel(), "low");
+});
+
+test("agent effort: a completion line observed early does not latch", () => {
+	const { host, ctx, policy } = setup({ level: "high" });
+	policy.engage(ctx as never, "c-000021");
+	policy.settle(
+		"c-000021",
+		consultDetails("c-000021", [consultRun("claude", "ok")]),
+		verdictAnswers({ claude: APPROVED_VERDICT }),
+	);
+	host.emit("agent_start", {});
+	host.emit("turn_end", { message: assistantMessage("Consultation cycle: complete - c-000021 verified.") });
+	host.emit("turn_end", { message: assistantMessage("One more thought before I stop.") });
+	host.emit("agent_before_settle", { outcome: "completed" });
+	host.emit("agent_settled", {});
+	assertEq(host.getThinkingLevel(), "low", "only the final message counts");
+});
+
+test("agent effort: a completion line followed by text, or with a tool call, does not restore", async () => {
+	const trailing = setup({ level: "high" });
+	trailing.policy.engage(trailing.ctx as never, "c-000022");
+	trailing.policy.settle(
+		"c-000022",
+		consultDetails("c-000022", [consultRun("claude", "ok")]),
+		verdictAnswers({ claude: APPROVED_VERDICT }),
+	);
+	await trailing.host.run("Consultation cycle: complete - c-000022 verified.\nbut wait, there is more");
+	assertEq(trailing.host.getThinkingLevel(), "low", "the line must be last");
+
+	const tool = setup({ level: "high" });
+	tool.policy.engage(tool.ctx as never, "c-000023");
+	tool.policy.settle(
+		"c-000023",
+		consultDetails("c-000023", [consultRun("claude", "ok")]),
+		verdictAnswers({ claude: APPROVED_VERDICT }),
+	);
+	tool.host.emit("agent_start", {});
+	tool.host.emit("turn_end", { message: assistantWithToolCall("Consultation cycle: complete - c-000023 verified.") });
+	tool.host.emit("agent_before_settle", { outcome: "completed" });
+	tool.host.emit("agent_settled", {});
+	assertEq(tool.host.getThinkingLevel(), "low", "a message with a tool call is not final");
+});
+
+test("agent effort: an unknown, unapproved or terminated consult is refused", async () => {
+	const unknown = setup({ level: "high" });
+	unknown.policy.engage(unknown.ctx as never, "c-000024");
+	unknown.policy.settle(
+		"c-000024",
+		consultDetails("c-000024", [consultRun("claude", "ok")]),
+		verdictAnswers({ claude: APPROVED_VERDICT }),
+	);
+	await unknown.host.run("Consultation cycle: complete - c-deadbe verified.");
+	assertIncludes(notices(unknown.ctx), "does not end with an approved consultant verdict");
+
+	const unapproved = setup({ level: "high" });
+	unapproved.policy.engage(unapproved.ctx as never, "c-000025");
+	unapproved.policy.settle("c-000025", consultDetails("c-000025", [consultRun("claude", "ok")], false));
+	await unapproved.host.run("Consultation cycle: complete - c-000025 verified.");
+	assertEq(unapproved.host.getThinkingLevel(), "low");
+
+	const terminated = setup({ level: "high" });
+	terminated.policy.engage(terminated.ctx as never, "c-000026");
+	terminated.policy.settle("c-000026");
+	await terminated.host.run("Consultation cycle: complete - c-000026 verified.");
+	assertEq(terminated.host.getThinkingLevel(), "low", "a terminated consult never verified");
+});
+
+test("agent effort: an edit ages out a completion; a later approved consult restores", async () => {
+	const { host, ctx, policy } = setup({ level: "high" });
+	policy.engage(ctx as never, "c-000027");
+	policy.settle(
+		"c-000027",
+		consultDetails("c-000027", [consultRun("claude", "ok")]),
+		verdictAnswers({ claude: APPROVED_VERDICT }),
+	);
+	host.toolCall("edit", {});
+	await host.run("Consultation cycle: complete - c-000027 verified.");
+	assertEq(host.getThinkingLevel(), "low");
+	assertIncludes(notices(ctx), "started before your last edit");
+
+	policy.engage(ctx as never, "c-000028");
+	policy.settle(
+		"c-000028",
+		consultDetails("c-000028", [consultRun("claude", "ok")]),
+		verdictAnswers({ claude: APPROVED_VERDICT }),
+	);
+	await host.run("Consultation cycle: complete - c-000028 verified.");
+	assertEq(host.getThinkingLevel(), "high");
+});
+
+test("agent effort: an aborted or errored run never restores", async () => {
+	for (const outcome of ["aborted", "error"]) {
+		const { host, ctx, policy } = setup({ level: "high" });
+		policy.engage(ctx as never, `c-000029-${outcome}`);
+		policy.settle(
+			`c-000029-${outcome}`,
+			consultDetails(`c-000029-${outcome}`, [consultRun("claude", "ok")]),
+			verdictAnswers({ claude: APPROVED_VERDICT }),
+		);
+		await host.run(`Consultation cycle: complete - c-000029-${outcome} verified.`, outcome);
+		assertEq(host.getThinkingLevel(), "low", `${outcome} is not a completion`);
+	}
+});
+
+test("agent effort: reload restores owed consults and the persisted level", async () => {
+	const shared = config();
+	const first = setup({ config: shared });
+	first.policy.engage(first.ctx as never, "c-000030");
+
+	const host2 = new FakeEffortHost(first.host.getThinkingLevel(), THINKING_LEVELS, first.host.branch);
+	const ctx2 = new FakeContext(first.host.branch, "session-effort-2", scratchDir(), true);
+	host2.attachContext(ctx2);
+	const policy2 = new AgentEffortPolicy(shared);
+	policy2.register(host2 as never);
+	host2.emit("session_start", {});
+	await host2.run("Consultation cycle: complete - c-000030 verified.");
+	assertEq(host2.getThinkingLevel(), "low");
+	assertIncludes(notices(ctx2), "still running or uncollected");
+
+	policy2.settle(
+		"c-000030",
+		consultDetails("c-000030", [consultRun("claude", "ok")]),
+		verdictAnswers({ claude: APPROVED_VERDICT }),
+	);
+	await host2.run("Consultation cycle: complete - c-000030 verified.");
+	assertEq(host2.getThinkingLevel(), "high", "the persisted previous level comes back");
+});
+
+test("agent effort: reload with a persisted hold lowers the level", () => {
+	const branch = [customEntry("e1", "pi-consult-effort", { holding: true, previous: "high" })];
+	const { host } = setup({ level: "high", branch });
+	assertEq(host.getThinkingLevel(), "low");
+});
+
+test("agent effort: malformed entries do not throw and fall back to defaults", () => {
 	const branch = [
-		customEntry("e1", "pi-consult-effort", { holding: false }),
-		customEntry("e2", "pi-consult-effort", { holding: true, previous: "high" }),
+		customEntry("e1", "pi-consult-effort", {
+			holding: "yes",
+			previous: "bogus",
+			owed: 3,
+			fresh: null,
+			approved: "x",
+			failures: { codex: "x" },
+			expired: ["bogus"],
+			unavailable: ["bogus"],
+			auditors: 3,
+			independent: "x",
+			auditFailed: "yes",
+		}),
 	];
-	const { pi, ctx, policy } = setup({ level: "low", branch });
-	pi.emit("session_start", {}, ctx);
-	policy.restore(ctx as never, "test restore");
-	assertEq(pi.getThinkingLevel(), "high", "the persisted previous level comes back");
-	assertEq(pi.setCalls.length, 1);
-	assertEq(pi.setCalls[0], "high");
+	const { policy } = setup({ level: "high", branch });
+	assertIncludes(policy.describe(), "effort hold: off");
+});
 
-	const idle = setup({ level: "high", branch: [customEntry("e3", "pi-consult-effort", { holding: false })] });
-	idle.pi.emit("session_start", {}, idle.ctx);
-	idle.policy.restore(idle.ctx as never, "nothing to restore");
-	assertEq(idle.pi.setCalls.length, 0, "an idle branch has nothing to restore");
-	assertEq(idle.pi.entries.length, 0, "a restore without a hold writes nothing");
+test("agent effort: a mid-cycle model switch to a deep default still holds low", async () => {
+	const { host, ctx, policy } = setup({ level: "high" });
+	policy.engage(ctx as never, "c-000031");
+	host.switchModel(["low", "medium", "high"], "high");
+	await tick();
+	await tick();
+	assertEq(host.getThinkingLevel(), "low");
+	assertIncludes(policy.describe(), "effort hold: on");
+});
+
+test("agent effort: a manual raise is lowered again while the hold is active", () => {
+	const raised = setup({ level: "high" });
+	raised.policy.engage(raised.ctx as never, "c-000032");
+	raised.host.forceLevel("high");
+	raised.host.emit("thinking_level_select", { level: "high" });
+	assertEq(raised.host.getThinkingLevel(), "low", "a manual high is lowered again");
+
+	const medium = setup({ level: "high" });
+	medium.policy.engage(medium.ctx as never, "c-000033");
+	medium.host.forceLevel("medium");
+	medium.host.emit("thinking_level_select", { level: "medium" });
+	assertEq(medium.host.getThinkingLevel(), "low", "a manual medium on a low-capable model becomes low");
+});
+
+test("agent effort: a manual medium on a model without low settles at medium", () => {
+	const { host, ctx, policy } = setup({ level: "high", available: ["medium", "high"] });
+	policy.engage(ctx as never, "c-000034");
+	assertEq(host.getThinkingLevel(), "medium");
+	const sets = host.setCalls.length;
+	host.forceLevel("medium");
+	host.emit("thinking_level_select", { level: "medium" });
+	assertEq(host.getThinkingLevel(), "medium", "one round settles it");
+	assertEq(host.setCalls.length, sets, "no further set is recorded");
+});
+
+test("agent effort: /consult-effort release restores and describe() reports the state", async () => {
+	const { host, ctx, policy } = setup({ level: "high" });
+	policy.engage(ctx as never, "c-000035");
+	const handler = host.commands.get("consult-effort")?.handler as (
+		args: string,
+		commandCtx: unknown,
+	) => Promise<void>;
+	await handler("release", ctx);
+	assertEq(host.getThinkingLevel(), "high");
+	assertEq(lastEntry(host).holding, false);
+	assertIncludes(notices(ctx), "released by the user");
+
+	policy.engage(ctx as never, "c-000036");
+	assertEq(lastEntry(host).previous, "high", "the next consult captures the restored level");
+
+	await handler("", ctx);
+	assertIncludes(notices(ctx), "effort hold:");
+});
+
+test("agent effort: navigate before the cycle restores; navigating back lowers again", () => {
+	const { host, ctx, policy } = setup({ level: "high" });
+	policy.engage(ctx as never, "c-000037");
+	host.navigate(0);
+	assertEq(host.getThinkingLevel(), "high");
+	assertIncludes(policy.describe(), "effort hold: off");
+
+	host.branch.push(customEntry("h1", "pi-consult-effort", { holding: true, previous: "high" }));
+	host.navigate(1);
+	assertEq(host.getThinkingLevel(), "low");
+});
+
+test("agent effort: a probe with nothing available restores only when nothing is owed", () => {
+	const { host, ctx, policy } = setup();
+	policy.engage(ctx as never, "c-000038");
+	policy.observeAvailability(ctx as never, [
+		{ name: "claude", available: false },
+		{ name: "codex", available: false },
+	]);
+	assertEq(host.getThinkingLevel(), "low", "an owed consult blocks the probe");
+
+	policy.settle("c-000038");
+	policy.observeAvailability(ctx as never, [
+		{ name: "claude", available: false },
+		{ name: "codex", available: false },
+	]);
+	assertEq(host.getThinkingLevel(), "high");
+	assertIncludes(notices(ctx), "no consultant available");
+});
+
+test("agent effort: a completion from a non-assistant or inline message is ignored", () => {
+	const { host, ctx, policy } = setup({ level: "high" });
+	policy.engage(ctx as never, "c-000039");
+	policy.settle(
+		"c-000039",
+		consultDetails("c-000039", [consultRun("claude", "ok")]),
+		verdictAnswers({ claude: APPROVED_VERDICT }),
+	);
+	const line = "Consultation cycle: complete - c-000039 verified.";
+	host.emit("agent_start", {});
+	host.emit("turn_end", { message: { role: "toolResult", content: [{ type: "text", text: line }] } });
+	host.emit("turn_end", { message: { role: "assistant", content: line } });
+	host.emit("agent_before_settle", { outcome: "completed" });
+	host.emit("agent_settled", {});
+	assertEq(host.getThinkingLevel(), "low", "only assistant text parts count");
 });

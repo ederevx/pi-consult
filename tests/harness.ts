@@ -12,6 +12,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+import type { ConsultDetails, ConsultRun, ConsultantName, RunStatus } from "../src/contracts.ts";
 import type { BranchEntry } from "../src/receipt-ledger.ts";
 
 export type TestFn = () => void | Promise<void>;
@@ -233,4 +234,207 @@ export class FakeContext {
 	}
 
 	pending = false;
+}
+
+/** Build a user-message branch entry carrying text content. */
+export function textUserEntry(id: string, text: string): BranchEntry {
+	return { type: "message", id, message: { role: "user", content: [{ type: "text", text }] } };
+}
+
+/** pi's thinking levels, in the order the host clamps upward through them. */
+export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+
+type FakeHandler = (event: unknown, ctx: unknown) => unknown;
+
+/** Await one microtask turn, so a queued host event has run. */
+export async function tick(): Promise<void> {
+	await Promise.resolve();
+}
+
+/** An assistant message with one text part. */
+export function assistantMessage(text: string): unknown {
+	return { role: "assistant", content: [{ type: "text", text }] };
+}
+
+/** An assistant message mixing a tool call with its text. */
+export function assistantWithToolCall(text: string): unknown {
+	return {
+		role: "assistant",
+		content: [{ type: "toolCall", name: "edit", arguments: {} }, { type: "text", text }],
+	};
+}
+
+/**
+ * pi 1.0.4's thinking-level and session-branch surface, faked.
+ *
+ * `setThinkingLevel` clamps upward over `available` first, records a
+ * changed level, and fires `thinking_level_select` through queueMicrotask
+ * only when the level actually changed. `switchModel` sets the level
+ * before `model_select`. `appendEntry` pushes onto the branch
+ * `getBranch()` returns; `navigate` truncates that branch and fires
+ * `session_tree`.
+ */
+export class FakeEffortHost {
+	readonly handlers = new Map<string, FakeHandler[]>();
+	readonly commands = new Map<string, Record<string, unknown>>();
+	readonly tools: Array<{ name: string }> = [];
+	/** Each accepted (level-changing) set, in host order. */
+	readonly setCalls: string[] = [];
+	readonly branch: BranchEntry[];
+	private level: string;
+	private available: readonly string[];
+	private seq = 0;
+	private ctx: unknown;
+
+	constructor(level = "high", available: readonly string[] = THINKING_LEVELS, branch?: BranchEntry[]) {
+		this.level = level;
+		this.available = available;
+		this.branch = branch ?? [];
+	}
+
+	/** The context queued events carry; set by the test that owns the host. */
+	attachContext(ctx: unknown): void {
+		this.ctx = ctx;
+	}
+
+	on(event: string, handler: FakeHandler): () => void {
+		const list = this.handlers.get(event) ?? [];
+		list.push(handler);
+		this.handlers.set(event, list);
+		return () => undefined;
+	}
+
+	registerCommand(name: string, options: Record<string, unknown>): void {
+		this.commands.set(name, options);
+	}
+
+	getThinkingLevel(): string {
+		return this.level;
+	}
+
+	getAllTools(): Array<{ name: string }> {
+		return this.tools;
+	}
+
+	addTool(name: string): void {
+		if (!this.tools.some((tool) => tool.name === name)) this.tools.push({ name });
+	}
+
+	setThinkingLevel(level: string): void {
+		const applied = this.clamp(level);
+		if (applied === this.level) return;
+		this.setCalls.push(level);
+		this.level = applied;
+		queueMicrotask(() => this.emit("thinking_level_select", { level: applied }));
+	}
+
+	/** The real order: the level is set, then `model_select` fires. */
+	switchModel(levels: readonly string[], defaultLevel: string): void {
+		this.available = levels;
+		this.setThinkingLevel(defaultLevel);
+		this.emit("model_select", { model: "fake-model" });
+	}
+
+	/** A manual raise: the level changes with no set record of its own. */
+	forceLevel(level: string): void {
+		this.level = level;
+	}
+
+	appendEntry(customType: string, data?: unknown): void {
+		this.branch.push({ type: "custom", id: `e${++this.seq}`, customType, data });
+	}
+
+	getBranch(): BranchEntry[] {
+		return this.branch;
+	}
+
+	navigate(length: number): void {
+		this.branch.length = length;
+		this.emit("session_tree", {});
+	}
+
+	/** Append a pi-teams report entry the way pi-teams logs one. */
+	pushTeamsLog(data: Record<string, unknown>): void {
+		this.branch.push({ type: "custom", id: `e${++this.seq}`, customType: "pi-teams-log", data });
+	}
+
+	toolCall(name: string, input?: Record<string, unknown>): void {
+		this.emit("tool_call", { toolName: name, input });
+	}
+
+	toolResult(
+		name: string,
+		options: {
+			input?: Record<string, unknown>;
+			details?: unknown;
+			content?: Array<{ type?: string; text?: string }>;
+			isError?: boolean;
+		} = {},
+	): void {
+		this.emit("tool_result", {
+			toolName: name,
+			input: options.input,
+			details: options.details,
+			content: options.content,
+			isError: options.isError === true,
+		});
+	}
+
+	emit(event: string, payload?: unknown): void {
+		for (const handler of this.handlers.get(event) ?? []) handler(payload, this.ctx);
+	}
+
+	/** One complete run: agent_start, turn, settle boundary, agent_settled. */
+	async run(text: string, outcome = "completed"): Promise<void> {
+		this.emit("agent_start", {});
+		await tick();
+		this.emit("turn_end", { message: assistantMessage(text) });
+		await tick();
+		this.emit("agent_before_settle", { outcome });
+		await tick();
+		this.emit("agent_settled", {});
+		await tick();
+	}
+
+	private clamp(level: string): string {
+		const order = THINKING_LEVELS as readonly string[];
+		const index = order.indexOf(level);
+		const allowed = order.filter((candidate) => this.available.includes(candidate));
+		if (index < 0 || allowed.length === 0) return level;
+		return allowed.find((candidate) => order.indexOf(candidate) >= index) ?? allowed[allowed.length - 1];
+	}
+}
+
+/** A consultant-verdict line pi-consult accepts as approval. */
+export const APPROVED_VERDICT = "Consultant verdict: approved - the work is correct.";
+
+/** One consultant's run outcome, with the fields the policy reads. */
+export function consultRun(consultant: ConsultantName, status: RunStatus, error?: string): ConsultRun {
+	return {
+		consultant,
+		status,
+		answerBytes: 1,
+		truncated: false,
+		partial: false,
+		durationMs: 1,
+		exitCode: 0,
+		warnings: [],
+		error,
+	};
+}
+
+/** A complete consult receipt over the given runs. */
+export function consultDetails(
+	consultId: string,
+	runs: readonly ConsultRun[],
+	ok = runs.length > 0 && runs.every((run) => run.status === "ok"),
+): ConsultDetails {
+	return { schema: 2, consultId, phase: "complete", ok, cwd: "/cwd", briefPath: "/brief", runs: [...runs] };
+}
+
+/** The answers map a receipt carries, keyed by consultant. */
+export function verdictAnswers(
+	source: Partial<Record<ConsultantName, string>>,
+): Map<ConsultantName, string> {
+	return new Map(Object.entries(source) as Array<[ConsultantName, string]>);
 }

@@ -81,12 +81,30 @@ The catalogue instructs the agent, and the tool's prompt guidelines repeat it:
   ambiguity — **must** go back the same way before the agent works around it.
   Deviations from the recommendation are reported to the user and verified by
   the consultant.
-- An audit of consultant-derived work is itself a consult; pi never audits it.
-  Two disclosed exceptions: no consultant is available
-  (`Consultant fallback: no consultant available - <reason>.`), or the user
-  directly asks pi to audit (`Audit by pi at the user's request - <request>.`).
-  Neither is presented as consultant verification. These are contract terms,
-  not gate checks.
+- An audit of consultant-derived work climbs a ladder and never skips a rung:
+  1. **A consultant**, which ends a verification answer with
+     `Consultant verdict: approved - <reason>.` or `… changes needed - <reason>.`
+  2. **A dedicated independent agent**, only when every enabled consultant
+     has expired: the probe found it unavailable, a run ended `unavailable`,
+     `auth`, or with a quota or billing failure, or a consult and one retry
+     failed with an error or timeout in the cycle. pi spawns a fresh pi-teams
+     teammate with `team_spawn` whose task starts
+     `pi-consult independent audit - <scope>.` and carries the evidence. The
+     teammate runs at pi's pre-cycle thinking level, cannot use `edit`,
+     `write`, or `powershell`, and ends its report with
+     `Independent audit verdict: approved|changes needed - <reason>.`
+     pi-consult reads that verdict from the report pi-teams logs, not from
+     pi's claim. The auditor is independent of the implementing session, not
+     of its model: it runs on pi's model and provider.
+  3. **pi itself**, only on the user's explicit request
+     (`Audit by pi at the user's request - <request>.`).
+
+  Without pi-teams, or after a failed spawn or verdict-less report, pi stops
+  with `Independent audit unavailable - <reason>.` and leaves the work
+  unaudited. `Consultant fallback: no consultant available - <reason>.` covers
+  roadblocks only. These are contract commitments, not gate checks; pi-consult
+  verifies the markers, the expiry records, and the teammate report, not the
+  quality of a brief.
 - Most tasks consult **one** consultant; `target: "both"` is reserved for
   tasks that genuinely demand two independent perspectives (cross-validating
   a high-stakes design, comparing incompatible approaches), never as a
@@ -95,19 +113,37 @@ The catalogue instructs the agent, and the tool's prompt guidelines repeat it:
 ### pi's thinking level
 
 From the first consult of a task, pi-consult holds pi's own thinking level at
-`low` (`medium` where the model has no `low`; never `high`, `xhigh`, or `max`):
-the consultant owns the plan, so pi implements and executes it and consults
-again at a roadblock. The hold lasts until the consultation cycle is complete:
-pi ends a reply with `Consultation cycle: complete - <consult id> verified.`
-after the consultant has verified the finished work, the run settles cleanly,
-and no consult is still running or uncollected. pi-consult then restores the
-level pi had when the cycle began. A `Consultant fallback:` or
-`Audit by pi at the user's request` line, or a `pre_consult` probe that finds no
-consultant, restores it at once. During a run a manual raise is lowered again;
-between runs a manual raise ends the hold until the next consult. The hold
-survives reload and compaction, `off`, `minimal`, and `low` are left alone,
-and the configured default for new sessions is not changed. Consultant
-`effort` settings are unaffected.
+`low` (`medium` where the model has no `low`). On a model that offers nothing
+below `high`, it warns and reports the hold as unsupported instead of claiming
+a lower level. During a hold any raise, including the automatic one a model
+switch makes, is lowered again; only the user can end a hold early, with
+`/consult-effort release` (`/consult-effort` alone shows its state). The hold
+ends, and the level pi had when the cycle began comes back, when one of these
+happens:
+
+- pi's final reply of a cleanly settled run ends with
+  `Consultation cycle: complete - <consult id> verified.`, **the cited
+  consult's answer ends with the approved verdict**, it started after pi's last
+  `edit`, `write`, `bash`, or `powershell` call, and no consult is running or
+  uncollected;
+- or, once every enabled consultant has expired, it ends with
+  `Consultation cycle: complete - <teammate id> independently verified.`,
+  that teammate was spawned as the independent auditor after the expiry, its
+  logged report ends with the approved verdict, and pi has not edited,
+  written, or run a command since spawning it;
+- pi states `Consultant fallback: no consultant available - <reason>.` on its
+  own line and pi-consult's records agree: every enabled consultant has
+  expired (see the audit ladder), and nothing is owed (a `pre_consult` probe
+  with the same result restores too);
+- pi states `Audit by pi at the user's request - <request>.` on its own line.
+
+Markers inside code fences or blockquotes, or quoted mid-sentence, are
+ignored. The cycle is recorded on the session branch, so reload, compaction,
+and `/tree` navigation carry it; leaving a branch mid-cycle restores the level.
+`off`, `minimal`, and `low` are left alone, the configured default for new
+sessions is not changed, and consultant `effort` settings are unaffected.
+`/consult-status` and `/consult-effort` also report the current rung of the
+audit ladder.
 
 ### Live output
 
@@ -151,7 +187,7 @@ consultation is announced and collected with `consult_collect`. Only
 ## Install
 
 ```bash
-pi install git:github.com/ederevx/pi-consult@v0.12.0
+pi install git:github.com/ederevx/pi-consult@v0.12.1
 ```
 
 The package has no runtime dependencies; it uses the host-provided

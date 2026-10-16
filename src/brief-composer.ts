@@ -18,6 +18,12 @@ export class BriefComposer {
 		"decision. Prefer specifics over prose. State assumptions explicitly and",
 		"flag anything you could not verify. When the brief asks a question, answer",
 		"it directly first, then the supporting detail.",
+		"",
+		"When the brief asks you to verify finished work, end your answer with one",
+		"of these lines, alone and as its last line:",
+		"  Consultant verdict: approved - <one-line reason>.",
+		"  Consultant verdict: changes needed - <one-line reason>.",
+		"Approved hands control back to pi; give it only when nothing remains.",
 	].join("\n");
 
 	/** The consultant role text. */

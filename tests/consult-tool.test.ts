@@ -225,6 +225,8 @@ test("consult tool: the description carries no NaN concatenation artifact", asyn
 	assertIncludes(description, "plan of record", "verify-not-repeat guidance is in the description");
 	assertIncludes(description, "Prefer a single consultant", "the singular-consultant preference is in the description");
 	assertIncludes(description, "Offload thinking work", "the offload default is in the description");
+	assertIncludes(description, "verdict line", "the consultant-verdict requirement is in the description");
+	assertIncludes(description, "pi-teams teammate audits it", "the independent-audit rung is in the description");
 });
 
 test("consult tool: continue is refused when the target has no saved session", async () => {
@@ -271,10 +273,10 @@ test("consult tool: continue is refused when the target has no saved session", a
 
 test("consult tool: engage starts the cycle and settle fires only on a foreground receipt", async () => {
 	const engages: string[] = [];
-	const settles: string[] = [];
+	const settles: Array<{ id: string; details?: unknown; answers?: unknown }> = [];
 	const effort = {
 		engage: (_ctx: unknown, id: string) => engages.push(id),
-		settle: (id: string) => settles.push(id),
+		settle: (id: string, details?: unknown, answers?: unknown) => settles.push({ id, details, answers }),
 	};
 	const { tool } = buildConsultFixture(
 		configFile(fakeClaude(), fakeCodex()),
@@ -292,7 +294,13 @@ test("consult tool: engage starts the cycle and settle fires only on a foregroun
 	assertEq(engages.length, 1, "engage runs for the started consult");
 	assertEq(engages[0], result.details.consultId);
 	assertEq(settles.length, 1, "a foreground receipt settles the consult");
-	assertEq(settles[0], result.details.consultId);
+	assertEq(settles[0].id, result.details.consultId);
+	assertEq(
+		(settles[0].details as { consultId?: string }).consultId,
+		result.details.consultId,
+		"settle receives the receipt details",
+	);
+	assert(settles[0].answers instanceof Map, "settle receives the receipt answers");
 
 	const detachedEngages: string[] = [];
 	const detachedSettles: string[] = [];
