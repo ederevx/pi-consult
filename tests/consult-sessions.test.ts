@@ -13,6 +13,43 @@ function context(): FakeContext {
 	return new FakeContext([], "sess-int", scratchDir(), false);
 }
 
+test("consult sessions: the consultant cards are written only in TUI mode", async () => {
+	const config = configFile(fakeClaude(0, true), fakeCodex());
+	const tui = buildConsultFixture(config);
+	tui.tool.register(tui.pi as never);
+	const tuiCtx = new FakeContext([], "sess-tui", scratchDir(), true);
+	tuiCtx.mode = "tui";
+	const tuiRun = await tui.tool.execute(
+		"call-steps-tui",
+		{ target: "claude", brief: "Steps.", contains_no_secrets: true },
+		undefined,
+		undefined,
+		tuiCtx as never,
+	);
+	assertEq(tuiRun.details.ok, true);
+	assert(
+		tui.pi.entries.some((entry) => entry.customType === "pi-consult-step"),
+		"a TUI consult writes its step cards",
+	);
+
+	const rpc = buildConsultFixture(configFile(fakeClaude(0, true), fakeCodex()));
+	rpc.tool.register(rpc.pi as never);
+	const rpcCtx = new FakeContext([], "sess-rpc", scratchDir(), true);
+	rpcCtx.mode = "rpc";
+	await rpc.tool.execute(
+		"call-steps-rpc",
+		{ target: "claude", brief: "Steps.", contains_no_secrets: true },
+		undefined,
+		undefined,
+		rpcCtx as never,
+	);
+	assertEq(
+		rpc.pi.entries.filter((entry) => entry.customType === "pi-consult-step").length,
+		0,
+		"an rpc consult writes no step cards",
+	);
+});
+
 test("consult sessions: a steered call detaches and keeps running", async () => {
 	const fixture = buildConsultFixture(configFile(fakeClaude(600), fakeCodex()));
 	const ctx = context();
@@ -69,14 +106,16 @@ test("consult sessions: collect reports a running consult, then its receipt", as
 		ctx as never,
 	);
 	const consultId = started.details.consultId;
-	const pending = await fixture.collect.execute({ id: consultId }, ctx as never);
+	const pending = await fixture.collect.execute(
+		"collect-pending", { id: consultId }, undefined, undefined, ctx as never);
 	assertEq(pending.details.phase, "running");
 	assertIncludes(pending.content[0].text, "still running");
 
 	const invocation = fixture.supervisor.get(consultId);
 	assert(invocation !== undefined, "tracked");
 	await invocation.done();
-	const final = await fixture.collect.execute({ id: consultId }, ctx as never);
+	const final = await fixture.collect.execute(
+		"collect-final", { id: consultId }, undefined, undefined, ctx as never);
 	assertEq(final.details.phase, "complete");
 	assertEq(final.details.collected, true);
 	assertEq(final.details.ok, true);
@@ -252,14 +291,16 @@ test("consult sessions: a non-live collect settles the consult; a live one does 
 		ctx as never,
 	);
 	const consultId = started.details.consultId;
-	const live = await fixture.collect.execute({ id: consultId }, ctx as never);
+	const live = await fixture.collect.execute(
+		"collect-live", { id: consultId }, undefined, undefined, ctx as never);
 	assertEq(live.details.phase, "running", "the live consult reports its state");
 	assertEq(settles.length, 0, "a live collect settles nothing");
 
 	const invocation = fixture.supervisor.get(consultId);
 	assert(invocation !== undefined, "tracked");
 	await invocation.done();
-	const final = await fixture.collect.execute({ id: consultId }, ctx as never);
+	const final = await fixture.collect.execute(
+		"collect-settled", { id: consultId }, undefined, undefined, ctx as never);
 	assertEq(final.details.phase, "complete");
 	assertEq(settles.length, 1, "a non-live collect settles once");
 	assertEq(settles[0].id, consultId);
@@ -269,7 +310,8 @@ test("consult sessions: a non-live collect settles the consult; a live one does 
 	// 'last' resolves through the ledger, so give it a recorded receipt.
 	const receipt = toolEntry("t-collect-last", "consult", final.details);
 	fixture.ledger.rebuild([receipt], [receipt]);
-	const byLast = await fixture.collect.execute({ id: "last" }, ctx as never);
+	const byLast = await fixture.collect.execute(
+		"collect-last", { id: "last" }, undefined, undefined, ctx as never);
 	assertEq(byLast.details.phase, "complete");
 	assertEq(settles.length, 2, "a non-live 'last' collect settles too");
 	assertEq(settles[1].id, final.details.consultId);

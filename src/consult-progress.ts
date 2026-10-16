@@ -4,31 +4,15 @@
  * Owns a bounded, per-consultant transcript of what the consultants are
  * doing while a `consult` call runs, and delivers the complete snapshot to
  * the tool's update callback at a throttled rate. `snapshot()` is the text
- * the model-facing result and `consult_collect` embed; `sections()` is the
- * typed view the live cards draw, so a reported tool use and streamed
- * answer text stay different things. The final tool result replaces this
- * text.
+ * the model-facing result and `consult_collect` embed; the live transcript
+ * cards are fed separately by the invocation's step observers. The final
+ * tool result replaces this text.
  */
 
 import type { ConsultantName } from "./contracts.ts";
 
-/** One live line: a tool use the consultant reported, or streamed answer
- *  text. */
-export type LiveItemKind = "event" | "text";
-
-export interface LiveItem {
-	kind: LiveItemKind;
-	text: string;
-}
-
-/** One consultant's live lines, typed for the card view. */
-export interface ConsultLiveSection {
-	name: ConsultantName;
-	items: LiveItem[];
-}
-
 interface Section {
-	items: LiveItem[];
+	events: string[];
 	partial: string;
 }
 
@@ -38,7 +22,7 @@ export class ConsultProgressFeed {
 	private static readonly MAX_PARTIAL_BYTES = 2 * 1024;
 	private static readonly MAX_LINE_BYTES = 400;
 
-	private readonly byConsultant = new Map<ConsultantName, Section>();
+	private readonly sections = new Map<ConsultantName, Section>();
 	private readonly order: ConsultantName[] = [];
 	private readonly deliver: (snapshot: string) => void;
 	private timer: NodeJS.Timeout | undefined;
@@ -49,29 +33,29 @@ export class ConsultProgressFeed {
 		this.deliver = deliver;
 		for (const name of names) {
 			this.order.push(name);
-			this.byConsultant.set(name, { items: [], partial: "" });
+			this.sections.set(name, { events: [], partial: "" });
 		}
 	}
 
 	/** Append a completed activity line for one consultant. */
 	event(name: ConsultantName, line: string): void {
-		const section = this.byConsultant.get(name);
+		const section = this.sections.get(name);
 		if (!section || this.closed) return;
 		const clean = line.replace(/\s+/g, " ").trim();
 		if (!clean) return;
 		const partial = section.partial.trim();
 		if (partial) {
-			section.items.push({ kind: "text", text: this.clip(partial, ConsultProgressFeed.MAX_LINE_BYTES) });
+			section.events.push(this.clip(partial, ConsultProgressFeed.MAX_LINE_BYTES));
 			section.partial = "";
 		}
-		section.items.push({ kind: "event", text: this.clip(clean, ConsultProgressFeed.MAX_LINE_BYTES) });
+		section.events.push(this.clip(clean, ConsultProgressFeed.MAX_LINE_BYTES));
 		this.trim();
 		this.schedule();
 	}
 
 	/** Replace the in-progress answer text for one consultant. */
 	partial(name: ConsultantName, text: string): void {
-		const section = this.byConsultant.get(name);
+		const section = this.sections.get(name);
 		if (!section || this.closed || !text) return;
 		section.partial = this.tail(
 			section.partial + text,
@@ -85,26 +69,13 @@ export class ConsultProgressFeed {
 	snapshot(): string {
 		const parts: string[] = [];
 		for (const name of this.order) {
-			const section = this.byConsultant.get(name);
+			const section = this.sections.get(name);
 			if (!section) continue;
 			parts.push(`=== ${name} ===`);
-			for (const item of section.items) parts.push(item.text);
+			for (const line of section.events) parts.push(line);
 			if (section.partial) parts.push(section.partial);
 		}
 		return parts.join("\n");
-	}
-
-	/** The typed sections the live cards draw. */
-	sections(): ConsultLiveSection[] {
-		const out: ConsultLiveSection[] = [];
-		for (const name of this.order) {
-			const section = this.byConsultant.get(name);
-			if (!section) continue;
-			const items = section.items.map((item) => ({ ...item }));
-			if (section.partial) items.push({ kind: "text", text: section.partial });
-			out.push({ name, items });
-		}
-		return out;
 	}
 
 	/** Deliver the final snapshot and stop. Later calls are no-ops. */
@@ -145,18 +116,18 @@ export class ConsultProgressFeed {
 		while (this.bytes() > ConsultProgressFeed.MAX_BYTES) {
 			const longest = this.longest();
 			if (!longest) break;
-			const section = this.byConsultant.get(longest);
-			if (!section || section.items.length === 0) break;
-			section.items.shift();
+			const section = this.sections.get(longest);
+			if (!section || section.events.length === 0) break;
+			section.events.shift();
 		}
 	}
 
 	private bytes(): number {
 		let total = 0;
 		for (const name of this.order) {
-			const section = this.byConsultant.get(name);
+			const section = this.sections.get(name);
 			if (!section) continue;
-			for (const item of section.items) total += Buffer.byteLength(item.text, "utf8") + 1;
+			for (const line of section.events) total += Buffer.byteLength(line, "utf8") + 1;
 			total += Buffer.byteLength(section.partial, "utf8");
 		}
 		return total;
@@ -166,7 +137,7 @@ export class ConsultProgressFeed {
 		let best: ConsultantName | undefined;
 		let bestLength = 0;
 		for (const name of this.order) {
-			const length = this.byConsultant.get(name)?.items.length ?? 0;
+			const length = this.sections.get(name)?.events.length ?? 0;
 			if (length > bestLength) {
 				bestLength = length;
 				best = name;
