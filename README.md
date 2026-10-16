@@ -200,7 +200,7 @@ consultation is announced and collected with `consult_collect`. Only
 ## Install
 
 ```bash
-pi install git:github.com/ederevx/pi-consult@v0.13.0
+pi install git:github.com/ederevx/pi-consult@v0.13.1
 ```
 
 The package has no runtime dependencies; it uses the host-provided
