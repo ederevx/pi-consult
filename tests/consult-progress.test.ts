@@ -16,6 +16,31 @@ test("progress feed: renders per-consultant sections and delivers on flush", () 
 	assertIncludes(last, "$ rg foo");
 });
 
+test("progress feed: snapshot output is unchanged by the typed sections", () => {
+	const feed = new ConsultProgressFeed(["claude"], () => {});
+	feed.event("claude", "Read src/x.ts");
+	feed.partial("claude", "thinking");
+	feed.event("claude", "Bash ls");
+	assertEq(feed.snapshot(), "=== claude ===\nRead src/x.ts\nthinking\nBash ls");
+});
+
+test("progress feed: sections type a flushed partial and report streamed text", () => {
+	const feed = new ConsultProgressFeed(["claude"], () => {});
+	feed.event("claude", "Read src/x.ts");
+	feed.partial("claude", "thinking");
+	feed.event("claude", "Bash ls");
+	feed.partial("claude", "done");
+	const section = feed.sections()[0];
+	assertEq(section.name, "claude");
+	assertEq(section.items.length, 4, "two events plus the flushed and live text");
+	assertEq(section.items[0].kind, "event");
+	assertEq(section.items[1].kind, "text");
+	assertEq(section.items[1].text, "thinking");
+	assertEq(section.items[2].kind, "event");
+	assertEq(section.items[3].kind, "text");
+	assertEq(section.items[3].text, "done");
+});
+
 test("progress feed: is a no-op after close", () => {
 	const snapshots: string[] = [];
 	const feed = new ConsultProgressFeed(["claude"], (text) => snapshots.push(text));

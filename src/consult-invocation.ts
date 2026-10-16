@@ -9,7 +9,7 @@
 
 import type { ConsultPaths } from "./artifact-store.ts";
 import type { ConsultantSettings } from "./consult-config.ts";
-import { ConsultProgressFeed } from "./consult-progress.ts";
+import { ConsultProgressFeed, type ConsultLiveSection } from "./consult-progress.ts";
 import type { ConsultRunner } from "./consult-runner.ts";
 import type {
 	AttachmentState,
@@ -137,6 +137,11 @@ export class ConsultInvocation {
 	/** The current bounded progress transcript. */
 	snapshot(): string {
 		return this.feed.snapshot();
+	}
+
+	/** The typed live sections the tool's cards draw. */
+	sections(): ConsultLiveSection[] {
+		return this.feed.sections();
 	}
 
 	/** Watch progress; the returned function stops only this subscription. */

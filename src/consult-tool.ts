@@ -31,6 +31,8 @@ import type { BridgeLauncher } from "./bridge-launcher.ts";
 import type { BriefComposer } from "./brief-composer.ts";
 import type { ConsultConfig } from "./consult-config.ts";
 import type { ConsultForeground } from "./consult-foreground.ts";
+import { ConsultCallView } from "./consult-call-view.ts";
+import { ConsultLiveRegistry } from "./consult-live-registry.ts";
 import type { ConsultIndex } from "./consult-index.ts";
 import type { InvocationRequestSpec, InvocationSpec } from "./consult-invocation.ts";
 import type { ConsultSupervisor } from "./consult-supervisor.ts";
@@ -77,7 +79,9 @@ export class ConsultTool {
 	private static readonly MAX_SCREEN_BYTES = 512 * 1024;
 	private readonly deps: ConsultToolDeps;
 	private readonly confirmedSessions = new Set<string>();
-	private readonly resultView = new ConsultResultView();
+	private readonly live = new ConsultLiveRegistry();
+	private readonly callView = new ConsultCallView();
+	private readonly resultView = new ConsultResultView(this.live);
 
 	constructor(deps: ConsultToolDeps) {
 		this.deps = deps;
@@ -155,6 +159,9 @@ export class ConsultTool {
 				ctx: ExtensionToolContext,
 			): Promise<AgentToolResult<ConsultDetails>> =>
 				this.execute(toolCallId, params, signal, onUpdate, ctx),
+			renderShell: "self",
+			renderCall: (args, theme, context) =>
+				this.callView.render(args, theme, context),
 			renderResult: (result, options, theme, context) =>
 				this.resultView.render(result, options, theme, context),
 		});
@@ -256,12 +263,15 @@ export class ConsultTool {
 			await this.spec(consultId, sessionId, params, targets, composed, continuation, paths, ctx),
 		);
 		this.deps.effort?.engage(ctx, consultId);
-		const outcome = await this.deps.foreground.wait(
-			invocation,
-			signal ?? ctx.signal,
-			() => ctx.hasPendingMessages(),
-			onUpdate,
-		);
+		this.live.attach(toolCallId, invocation);
+		const outcome = await this.deps.foreground
+			.wait(
+				invocation,
+				signal ?? ctx.signal,
+				() => ctx.hasPendingMessages(),
+				onUpdate,
+			)
+			.finally(() => this.live.release(toolCallId));
 		if (outcome.status === "detached") {
 			const details = this.deps.supervisor.pending(invocation);
 			return {
