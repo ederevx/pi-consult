@@ -182,10 +182,10 @@ naming the target, model, timeout, file count, and continuation; expanded, it
 adds the working directory, the saved brief's path, the files, and the brief.
 The consultant's stream follows as one card per tool-use burst or block of
 prose, every activity card tagged `claude` or `codex`; tool cards keep their
-success or error background. All cards are collapsed by default, with their
-expand hint on a line outside the card's background, opened with pi's
-standard expand toggle, TUI-only, out of the model context, bounded per
-consultant, and stop for good if pi switches to another session.
+success or error background. All cards are collapsed by default, their
+expand hint covered by the same background so the card stays one block,
+opened with pi's standard expand toggle, TUI-only, out of the model context,
+bounded per consultant, and stop for good if pi switches to another session.
 
 ### When the agent stops
 

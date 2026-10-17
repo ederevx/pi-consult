@@ -176,9 +176,11 @@ test("step renderer: the collapsed hint uses the single-column ellipsis", () => 
 		const collapsed = rendered.join("\n");
 		assertIncludes(collapsed, "… (", `the ${kind} hint opens with the ellipsis`);
 		assertNotIncludes(collapsed, "... (", `the ${kind} hint does not use three ASCII dots`);
-		const hint = rendered.find((line) => line.includes("more lines,"));
-		assert(hint !== undefined, `the ${kind} hint is its own line`);
-		assertNotIncludes(hint ?? "", "{", `the ${kind} hint carries no background`);
+		const background = kind === "tool" ? "{toolSuccessBg:" : "{customMessageBg:";
+		assert(
+			rendered.every((line) => line.startsWith(background)),
+			`the ${kind} hint stays inside the card's background`,
+		);
 	}
 });
 
@@ -240,14 +242,8 @@ test("step renderer: the invocation card is a summary collapsed, the brief expan
 	const collapsedLines = startCard(START, false);
 	const collapsed = collapsedLines.join("\n");
 	assert(
-		collapsedLines.filter((line) => !line.includes("more lines,"))
-			.every((line) => line.startsWith("{customMessageBg:")),
-		"the invocation card is pi's message box",
-	);
-	assertNotIncludes(
-		collapsedLines.find((line) => line.includes("more lines,")) ?? "",
-		"{",
-		"the collapsed invocation hint carries no background",
+		collapsedLines.every((line) => line.startsWith("{customMessageBg:")),
+		"every collapsed invocation line, hint included, is pi's message box",
 	);
 	assertIncludes(collapsed, "[consult c-1]");
 	assertIncludes(collapsed, "<accent:claude>");
