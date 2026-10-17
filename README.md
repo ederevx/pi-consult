@@ -8,7 +8,7 @@ and execution, at low thinking effort, and consults again at any roadblock.
 
 ## How it works
 
-`pi-consult` registers two tools and one gate:
+`pi-consult` registers four tools and one gate:
 
 - **`pre_consult`** — call once per session. Returns the catalogue and records
   the acknowledgement that briefs, and any files a consultant reads, leave the
@@ -23,9 +23,9 @@ and execution, at low thinking effort, and consults again at any roadblock.
   concurrently and returns their answers plus a continuation id. The agent
   chooses which consultant(s) and how many consults to run — preferring a
   single consultant, with `both` only when the task demands two independent
-  perspectives — and repeats or continues as useful. The answer renders expanded in the tool window regardless of the
-  global tool-expansion setting (a live stream tails until expanded); the
-  model-facing result text is unchanged. Escape or a queued user message
+  perspectives — and repeats or continues as useful. The result uses pi's
+  standard preview and expand toggle, with live activity in cards below it;
+  the model-facing result text is unchanged. Escape or a queued user message
   **detaches** the call rather than cancelling it: the tool returns a pending
   receipt naming the consult id and the consultants keep working. When it
   finishes, its full result is delivered into that session as a
@@ -182,8 +182,9 @@ pi's standard expand toggle. They are TUI-only, stay out of the model context,
 and are bounded per consultant; the row and the cards are views, so the
 model-facing snapshot is unchanged. Steering or Escape detaches the call but
 not its stream: the cards keep arriving until the background run settles. The
-stream then closes with any trailing prose, because the detached result does
-not carry the answer. Cards stop for good if pi switches to another session.
+stream then closes with any trailing prose. The pending tool receipt does not
+carry the answer; the later `pi-consult-result` message does. Cards stop for
+good if pi switches to another session.
 
 ### When the agent stops
 
@@ -255,15 +256,19 @@ own settings writes.
 file and `PI_CONSULT_CONFIG` are no longer read or written. Move the old
 object under `piConsult` without replacing pi's other settings, `/reload`, then
 remove the old file and unset the variable. pi-consult warns once per session
-while a retired source is still present.
+when the retired file exists and `piConsult` is absent, and separately when
+`PI_CONSULT_CONFIG` is still set.
 
 - `confirmFirstConsult` is off by default, so briefs are granted without a
   prompt. When on, it shows a UI confirmation before the first brief of a
   session; with approval on and no interactive UI, `consult` refuses instead
   of sending silently.
 - `isolation: "clean"` runs the consultant without the user's own hooks and
-  instructions (`claude --safe-mode --restricted`, `codex --ignore-user-config
-  --ignore-rules`). `"inherit"` keeps them.
+  instructions. With the bridge on (the default) Claude gets
+  `--setting-sources "" --restricted --strict-mcp-config --mcp-config …` and
+  may call `drive_pi`; Codex gets `--ignore-user-config --ignore-rules`. A
+  bridge-disabled Claude run uses `--safe-mode --restricted` instead.
+  `"inherit"` keeps the user's configuration.
 - `gate.allow`/`gate.block` shape **pre-acknowledgement** classification only.
   The allow list exempts other extensions' onboarding tools (`pre_memory`,
   `pre_daemon`, ...); it can never exempt pi's built-in mutations. `gate.block`
@@ -278,10 +283,11 @@ and `..` are rejected, obvious secret-bearing names (`.env*`, `*.pem`, `*.key`,
 `id_*`, `.ssh`, `.aws`) are refused, and each listed file's contents are
 screened before anything is sent.
 
-Both consultants run read-only: Claude is restricted to `Read,Grep,Glob` with
-denied reads for common secret paths, and Codex runs with `-s read-only` (on a
-continuation, `-c sandbox_mode="read-only"`). A report of file changes from
-Codex is surfaced as a warning.
+Both consultants run read-only: Claude is restricted to `Read,Grep,Glob` plus
+`mcp__pi_consult__drive_pi` when the bridge is attached, with denied reads for
+common secret paths, and Codex runs with `-s read-only` (on a continuation,
+`-c sandbox_mode="read-only"`). A report of file changes from Codex is
+surfaced as a warning.
 
 ## The `consult` tool
 
@@ -324,6 +330,8 @@ spawned; a suspected secret is refused, never sent.
 ## Commands
 
 - `/consult-status` — show acknowledgement state and consultation history.
+- `/consult-effort` — show the thinking-level hold; `/consult-effort release`
+  ends it.
 - `/consult-settings` — open pi's settings dock: the same two-column
   `SettingsList` as pi's own `/settings`, where flags and enums cycle in place,
   every other value opens an editor seeded with the current one, and a trailing
@@ -343,9 +351,7 @@ spawned; a suspected secret is refused, never sent.
 npm test    # or: node --experimental-strip-types --experimental-transform-types tests/run.ts
 ```
 
-Tests run a static OOP/format lint first, then the unit suite. `node_modules` is
-a symlink to the local pi install for `typebox` and `@earendil-works/*`; it is
-gitignored.
+Tests run a static OOP/format lint first, then the unit suite.
 
 ## License
 
