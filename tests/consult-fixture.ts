@@ -2,7 +2,7 @@
  * pi-consult — integration fixture.
  *
  * Builds the real consult owners over fake consultant CLIs, so a test can
- * exercise detachment, collection, termination, and record reconciliation
+ * exercise detachment, delivery, termination, and record reconciliation
  * without a provider.
  */
 
@@ -13,7 +13,6 @@ import { AnswerFormatter } from "../src/answer-formatter.ts";
 import { ArtifactStore } from "../src/artifact-store.ts";
 import { BridgeLauncher } from "../src/bridge-launcher.ts";
 import { BriefComposer } from "../src/brief-composer.ts";
-import { ConsultCollectTool } from "../src/consult-collect-tool.ts";
 import { ConsultConfig } from "../src/consult-config.ts";
 import { ConsultControlServer } from "../src/consult-control-server.ts";
 import { ConsultDelivery } from "../src/consult-delivery.ts";
@@ -37,9 +36,10 @@ import { SecretScreen } from "../src/secret-screen.ts";
 import { SessionIdentity } from "../src/session-identity.ts";
 import { FakePi, scratchDir } from "./harness.ts";
 
-/** Write an executable fake Claude that answers after `delayMs`, and
- *  optionally reports one tool use so a card-writing path can be tested. */
-export function fakeClaude(delayMs = 0, toolUse = false): string {
+/** Write an executable fake Claude that answers after `delayMs`,
+ *  optionally reporting one tool use before the delay and a second after
+ *  it, so a card-writing path can be tested. */
+export function fakeClaude(delayMs = 0, toolUse = false, lateToolUse = false): string {
 	const path = join(scratchDir(), `fake-claude-${Math.random().toString(16).slice(2)}.mjs`);
 	const body = [
 		'import { readFileSync, writeFileSync } from "node:fs";',
@@ -51,6 +51,9 @@ export function fakeClaude(delayMs = 0, toolUse = false): string {
 			'process.stdout.write(JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id: "tool-1", name: "Read", input: { file_path: "src/x.ts" } }] } }) + "\\n");',
 		] : []),
 		`await new Promise((resolve) => setTimeout(resolve, ${delayMs}));`,
+		...(lateToolUse ? [
+			'process.stdout.write(JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id: "tool-2", name: "Grep", input: { pattern: "late-step" } }] } }) + "\\n");',
+		] : []),
 		'const sessionId = "fake-claude-session";',
 		'process.stdout.write(JSON.stringify({ type: "system", subtype: "init", session_id: sessionId }) + "\\n");',
 		'process.stdout.write(JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "FAKE ANSWER " + brief.length, session_id: sessionId, usage: { input_tokens: 1, output_tokens: 2 } }) + "\\n");',
@@ -117,7 +120,8 @@ export interface ConsultFixture {
 	control: ConsultControlServer;
 	bridge: BridgeLauncher;
 	tool: ConsultTool;
-	collect: ConsultCollectTool;
+	identity: SessionIdentity;
+	delivery: ConsultDelivery;
 	terminate: ConsultTerminateTool;
 	reply: ConsultReplyTool;
 }
@@ -141,12 +145,11 @@ export function buildConsultFixture(
 	const artifacts = new ArtifactStore(config.artifactDir);
 	const records = new ConsultRecordStore(artifacts);
 	const pi = new FakePi();
-	const supervisor = new ConsultSupervisor(
-		runner,
-		records,
-		new ConsultDelivery(pi as never, new SessionIdentity(sessionId)),
-	);
+	const identity = new SessionIdentity(sessionId);
 	const formatter = new AnswerFormatter(config.output);
+	const delivery = new ConsultDelivery(
+		pi as never, identity, formatter, effort as never);
+	const supervisor = new ConsultSupervisor(runner, records, delivery);
 	const broker = new ConsultRequestBroker(
 		new ConsultDriveDispatcher({ pi: pi as never, supervisor }),
 		config.drive.deadlineMs,
@@ -164,12 +167,16 @@ export function buildConsultFixture(
 		processes,
 		broker,
 		control,
+		identity,
+		delivery,
 		bridge: new BridgeLauncher(control, artifacts, config.drive),
 		tool: new ConsultTool({
 			config,
 			ledger,
 			index,
 			artifacts,
+			identity,
+			records,
 			screen,
 			composer: new BriefComposer(),
 			formatter,
@@ -178,7 +185,6 @@ export function buildConsultFixture(
 			bridge: new BridgeLauncher(control, artifacts, config.drive),
 			effort: effort as never,
 		}),
-		collect: new ConsultCollectTool({ supervisor, records, index, formatter, effort: effort as never }),
 		terminate: new ConsultTerminateTool(supervisor, effort as never),
 		reply: new ConsultReplyTool(broker, screen),
 	};

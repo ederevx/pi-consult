@@ -1,11 +1,11 @@
 /**
- * pi-consult — the foreground attachment and the bounded collect wait.
+ * pi-consult — the foreground attachment.
  *
  * `watch` owns one caller's wait on an invocation: it races completion
  * against the host's interrupt paths — the abort signal (Escape) and queued
- * user messages (steer) — and a consult request, plus an optional bound,
- * and never touches the run. `wait` is the `consult` call's wait: no bound,
- * and an interrupt detaches so the tool returns while the run continues.
+ * user messages (steer) — and a consultant request, and never touches the
+ * run. `wait` is the `consult` call's wait: an interrupt detaches so the
+ * tool returns while the run continues.
  */
 
 import type { AgentToolUpdateCallback } from "@earendil-works/pi-coding-agent";
@@ -19,27 +19,24 @@ export interface ForegroundOutcome {
 	reason?: DetachReason;
 }
 
-/** How a bounded watch ended: `interrupted` covers every non-completion,
- *  including the bound. */
+/** How a watch ended: `interrupted` covers every non-completion. */
 export interface WatchOutcome {
 	status: "complete" | "interrupted";
-	reason?: DetachReason | "timeout";
+	reason?: DetachReason;
 }
 
 export class ConsultForeground {
 	private static readonly POLL_MS = 250;
 
 	/**
-	 * Wait for the invocation, streaming its progress, until it finishes,
-	 * the caller is interrupted, or the bound elapses. Never aborts or
-	 * detaches the invocation.
+	 * Wait for the invocation, streaming its progress, until it finishes or
+	 * the caller is interrupted. Never aborts or detaches the invocation.
 	 */
 	async watch(
 		invocation: ConsultInvocation,
 		signal: AbortSignal | undefined,
 		hasPendingMessages: () => boolean,
 		onUpdate: AgentToolUpdateCallback<ConsultDetails> | undefined,
-		boundMs = Infinity,
 	): Promise<WatchOutcome> {
 		return new Promise<WatchOutcome>((resolve) => {
 			let settled = false;
@@ -71,19 +68,12 @@ export class ConsultForeground {
 				finish({ status: "interrupted", reason: "pi_request" }),
 			);
 			const onAbort = (): void => finish({ status: "interrupted", reason: "escape" });
-			let bound: NodeJS.Timeout | undefined;
 			const cleanup = (): void => {
-				if (bound) clearTimeout(bound);
 				clearInterval(poll);
 				signal?.removeEventListener("abort", onAbort);
 				unsubscribe();
 				unsubscribeAttention();
 			};
-			if (Number.isFinite(boundMs)) {
-				bound = setTimeout(
-					() => finish({ status: "interrupted", reason: "timeout" }), boundMs);
-				bound.unref?.();
-			}
 			if (signal) {
 				if (signal.aborted) {
 					finish({ status: "interrupted", reason: "escape" });
@@ -107,8 +97,7 @@ export class ConsultForeground {
 		const outcome = await this.watch(
 			invocation, signal, hasPendingMessages, onUpdate);
 		if (outcome.status === "complete") return { status: "complete" };
-		const reason = outcome.reason === "timeout" ? undefined : outcome.reason;
-		if (reason) invocation.detach(reason);
-		return { status: "detached", reason };
+		if (outcome.reason) invocation.detach(outcome.reason);
+		return { status: "detached", reason: outcome.reason };
 	}
 }
