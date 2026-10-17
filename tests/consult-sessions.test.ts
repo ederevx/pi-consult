@@ -5,6 +5,7 @@ import { ArtifactStore } from "../src/artifact-store.ts";
 import { ConsultRecordStore } from "../src/consult-record-store.ts";
 import { ConsultIndex } from "../src/consult-index.ts";
 import { ConsultContract } from "../src/consult-contract.ts";
+import { ConsultSupervisor } from "../src/consult-supervisor.ts";
 import { ReceiptLedger } from "../src/receipt-ledger.ts";
 import type { ConsultDetails, ConsultReceipt } from "../src/contracts.ts";
 import { buildConsultFixture, configFile, fakeClaude, fakeCodex } from "./consult-fixture.ts";
@@ -595,4 +596,127 @@ test("consult sessions: a detached Codex consult flushes its answer as prose", a
 	assert(steps(fixture.pi).some((card) => card.kind === "text" &&
 		card.lines?.some((line) => line.includes("FAKE CODEX"))),
 		"a detached run flushes its answer as an attributed prose card");
+});
+
+/** A minimal spec for a supervisor started over stub records. */
+function raceSpec(): unknown {
+	return {
+		consultId: "c-race",
+		sessionId: "s-race",
+		cwd: "/w",
+		targets: ["codex"],
+		brief: "b",
+		paths: { lastMessage: (name: string) => `/tmp/${name}.md` },
+		requests: [{ consultant: "codex", settings: {}, cwd: "/w", timeoutMs: 1000 }],
+		providerSessions: {},
+	};
+}
+
+function finishedReceipt(): unknown {
+	return {
+		details: {
+			schema: 2, consultId: "c-race", phase: "complete", ok: true,
+			cwd: "/w", briefPath: "/b", runs: [],
+		},
+		answers: new Map(),
+	};
+}
+
+test("consult sessions: the manifest is recorded before the run starts", async () => {
+	const log: string[] = [];
+	let releaseManifest!: () => void;
+	const held = new Promise<void>((resolve) => {
+		releaseManifest = resolve;
+	});
+	const records = {
+		saveRun: async () => {
+			log.push("manifest");
+			await held;
+		},
+		saveResult: async () => {
+			log.push("result");
+			return finishedReceipt();
+		},
+	};
+	const runner = {
+		run: async () => {
+			log.push("run");
+			return [];
+		},
+	};
+	const supervisor = new ConsultSupervisor(
+		runner as never, records as never, { announce: () => undefined } as never);
+	const started = supervisor.start(raceSpec() as never);
+	assertEq(log.join(","), "manifest", "the run waits for the manifest");
+	releaseManifest();
+	const invocation = await started;
+	await invocation.done();
+	await delay(10);
+	assertEq(log.join(","), "manifest,run,result");
+});
+
+test("consult sessions: a rejected manifest write never blocks the consult", async () => {
+	const log: string[] = [];
+	const records = {
+		saveRun: async () => {
+			throw new Error("no disk");
+		},
+		saveResult: async () => {
+			log.push("result");
+			return finishedReceipt();
+		},
+	};
+	const runner = {
+		run: async () => {
+			log.push("run");
+			return [];
+		},
+	};
+	const supervisor = new ConsultSupervisor(
+		runner as never, records as never, { announce: () => undefined } as never);
+	const invocation = await supervisor.start(raceSpec() as never);
+	await invocation.done();
+	await delay(10);
+	assertEq(log.join(","), "run,result", "the consult ran and was recorded");
+});
+
+test("consult sessions: reconcile keeps a valid receipt and repairs the manifest", async () => {
+	const root = scratchDir();
+	const artifacts = new ArtifactStore(root);
+	const records = new ConsultRecordStore(artifacts);
+	const paths = await artifacts.prepare("s4", "c-dddddd123456");
+	await artifacts.write(
+		paths.run,
+		JSON.stringify({
+			schema: 1,
+			consultId: "c-dddddd123456",
+			sessionId: "s4",
+			cwd: "/x",
+			briefPath: paths.brief,
+			targets: ["codex"],
+			state: "queued",
+			startedAt: Date.now(),
+			providerSessions: { codex: "tid-1" },
+		}),
+	);
+	const receipt = {
+		schema: 2,
+		consultId: "c-dddddd123456",
+		phase: "complete",
+		ok: true,
+		cwd: "/x",
+		briefPath: paths.brief,
+		runs: [{
+			consultant: "codex", status: "ok", sessionId: "tid-1", answerBytes: 0,
+			truncated: false, partial: false, durationMs: 1, exitCode: 0, warnings: [],
+		}],
+	};
+	await artifacts.write(paths.result, JSON.stringify(receipt));
+
+	await records.reconcile(new Set());
+	const loaded = await records.load("c-dddddd123456");
+	assert(loaded !== undefined, "the valid receipt survives reconciliation");
+	assertEq(loaded.details.runs[0].sessionId, "tid-1", "the provider session survives");
+	const manifest = JSON.parse(await artifacts.read(paths.run)) as { state: string };
+	assertEq(manifest.state, "completed", "the manifest is repaired to completed");
 });
