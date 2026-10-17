@@ -206,7 +206,7 @@ is the only way to end one early.
 ## Install
 
 ```bash
-pi install git:github.com/ederevx/pi-consult@v0.13.0
+pi install git:github.com/ederevx/pi-consult@v0.14.0
 ```
 
 The package has no runtime dependencies; it uses the host-provided
