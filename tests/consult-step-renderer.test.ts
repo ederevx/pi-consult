@@ -172,9 +172,13 @@ test("step renderer: the collapsed hint uses the single-column ellipsis", () => 
 		["tool", ["one", "two", "three", "four"]],
 		["text", ["a\nb\nc\nd\ne"]],
 	] as const) {
-		const collapsed = card(kind, [...lines], false).join("\n");
+		const rendered = card(kind, [...lines], false);
+		const collapsed = rendered.join("\n");
 		assertIncludes(collapsed, "… (", `the ${kind} hint opens with the ellipsis`);
 		assertNotIncludes(collapsed, "... (", `the ${kind} hint does not use three ASCII dots`);
+		const hint = rendered.find((line) => line.includes("more lines,"));
+		assert(hint !== undefined, `the ${kind} hint is its own line`);
+		assertNotIncludes(hint ?? "", "{", `the ${kind} hint carries no background`);
 	}
 });
 
@@ -233,10 +237,17 @@ test("step renderer: a failed MCP line keeps its author and turns the card red",
 });
 
 test("step renderer: the invocation card is a summary collapsed, the brief expanded", () => {
-	const collapsed = startCard(START, false).join("\n");
+	const collapsedLines = startCard(START, false);
+	const collapsed = collapsedLines.join("\n");
 	assert(
-		startCard(START, false).every((line) => line.startsWith("{customMessageBg:")),
+		collapsedLines.filter((line) => !line.includes("more lines,"))
+			.every((line) => line.startsWith("{customMessageBg:")),
 		"the invocation card is pi's message box",
+	);
+	assertNotIncludes(
+		collapsedLines.find((line) => line.includes("more lines,")) ?? "",
+		"{",
+		"the collapsed invocation hint carries no background",
 	);
 	assertIncludes(collapsed, "[consult c-1]");
 	assertIncludes(collapsed, "<accent:claude>");

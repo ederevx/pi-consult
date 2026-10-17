@@ -11,8 +11,10 @@
  * pi draws a message that was not written by the agent: the `[claude]`
  * custom-message box. That keeps the stream native-looking while never being
  * mistaken for the agent's own tool rows or prose. Collapsed shows a short
- * preview with the standard expand hint; the global expand toggle shows the
- * rest. The host adds the leading spacer, so a card renders only its own
+ * preview with the standard expand hint on a line outside the card's
+ * background, so the ellipsis stays without a background of its own; the
+ * global expand toggle shows the rest. The host adds the leading spacer, so
+ * a card renders only its own
  * content.
  */
 
@@ -23,6 +25,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import {
 	Box,
+	Container,
 	Markdown,
 	Spacer,
 	Text,
@@ -78,7 +81,7 @@ export class ConsultStepRenderer {
 		data: ConsultStartData,
 		expanded: boolean,
 		theme: Theme,
-	): Box {
+	): Container {
 		const box = new Box(1, 1, (text) => theme.bg("customMessageBg", text));
 		box.addChild(new Text(
 			theme.fg("customMessageLabel", `\x1b[1m[consult ${data.consultId}]\x1b[22m`),
@@ -90,15 +93,14 @@ export class ConsultStepRenderer {
 		const details = this.details(data.start, theme);
 		const brief = data.start.brief.split("\n");
 		if (!expanded) {
-			box.addChild(this.hint(details.length + brief.length, theme));
-			return box;
+			return this.assemble(box, details.length + brief.length, theme);
 		}
 		for (const line of details) box.addChild(new Text(line, 0, 0));
 		box.addChild(new Spacer(1));
 		box.addChild(new Markdown(data.start.brief, 0, 0, getMarkdownTheme(), {
 			color: (value) => theme.fg("customMessageText", value),
 		}));
-		return box;
+		return this.assemble(box, 0, theme);
 	}
 
 	/** consultant, model, timeout per run; then files and continuation. */
@@ -131,7 +133,7 @@ export class ConsultStepRenderer {
 		data: RenderActivityData,
 		expanded: boolean,
 		theme: Theme,
-	): Box {
+	): Container {
 		const lines = data.lines
 			.map((line) => this.unprefixed(data.consultant, line));
 		const background = lines.some((line) => this.failed(line))
@@ -144,10 +146,7 @@ export class ConsultStepRenderer {
 		for (const line of shown) {
 			box.addChild(new Text(this.toolLine(line, theme), 0, 0));
 		}
-		if (!expanded && lines.length > shown.length) {
-			box.addChild(this.hint(lines.length - shown.length, theme));
-		}
-		return box;
+		return this.assemble(box, lines.length - shown.length, theme);
 	}
 
 	/** A prose card: pi's custom-message box, always labelled with its author. */
@@ -155,7 +154,7 @@ export class ConsultStepRenderer {
 		data: RenderActivityData,
 		expanded: boolean,
 		theme: Theme,
-	): Box {
+	): Container {
 		const box = new Box(1, 1, (text) => theme.bg("customMessageBg", text));
 		box.addChild(new Text(
 			theme.fg("customMessageLabel", `\x1b[1m[${this.author(data)}]\x1b[22m`),
@@ -169,10 +168,7 @@ export class ConsultStepRenderer {
 		box.addChild(new Markdown(shown.join("\n"), 0, 0, getMarkdownTheme(), {
 			color: (value) => theme.fg("customMessageText", value),
 		}));
-		if (!expanded && lines.length > shown.length) {
-			box.addChild(this.hint(lines.length - shown.length, theme));
-		}
-		return box;
+		return this.assemble(box, lines.length - shown.length, theme);
 	}
 
 	/** The overflow notice: one muted status line naming its consultant. */
@@ -215,14 +211,22 @@ export class ConsultStepRenderer {
 		return line.startsWith(prefix) ? line.slice(prefix.length) : line;
 	}
 
-	private hint(remaining: number, theme: Theme): Text {
-		return new Text(
-			theme.fg("muted", `… (${remaining} more lines, `) +
-				keyHint("app.tools.expand", "to expand") +
-				theme.fg("muted", ")"),
-			0,
-			0,
-		);
+	/** Assemble a card: the background box, then — when lines are hidden —
+	 *  the expand hint on its own line outside that background, keeping the
+	 *  ellipsis without a background of its own. */
+	private assemble(box: Box, remaining: number, theme: Theme): Container {
+		const card = new Container();
+		card.addChild(box);
+		if (remaining > 0) {
+			card.addChild(new Text(this.hint(remaining, theme), 1, 0));
+		}
+		return card;
+	}
+
+	private hint(remaining: number, theme: Theme): string {
+		return theme.fg("muted", `… (${remaining} more lines, `) +
+			keyHint("app.tools.expand", "to expand") +
+			theme.fg("muted", ")");
 	}
 
 	/** v2 data as is; a saved v1 card always named its consultant. */
