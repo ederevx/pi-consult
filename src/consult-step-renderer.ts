@@ -5,7 +5,8 @@
  * consultant, and one written before attribution shows the consult id and
  * "author unavailable". A tool card is drawn the way pi draws a finished
  * tool row, opened by a bold `<author> · tool` header: a success/error
- * background, a bold tool name with muted arguments, and pi's expand hint. A
+ * background, a bold tool name with muted arguments, and the standard expand
+ * hint, whose ellipsis is the single-column character. A
  * prose card is drawn the way
  * pi draws a message that was not written by the agent: the `[claude]`
  * custom-message box. That keeps the stream native-looking while never being
@@ -216,7 +217,7 @@ export class ConsultStepRenderer {
 
 	private hint(remaining: number, theme: Theme): Text {
 		return new Text(
-			theme.fg("muted", `... (${remaining} more lines, `) +
+			theme.fg("muted", `… (${remaining} more lines, `) +
 				keyHint("app.tools.expand", "to expand") +
 				theme.fg("muted", ")"),
 			0,
