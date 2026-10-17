@@ -147,8 +147,9 @@ From the first consult of a task, pi-consult holds pi's thinking level at
 `high` it warns and reports the hold unsupported. During a hold any raise,
 including the automatic one a model switch makes, is lowered again; only
 `/consult-effort release` ends a hold early (`/consult-effort` alone shows its
-state). The hold ends, and pi's previous level comes back, when one of these
-plain last lines earns it:
+state). The hold ends, and pi's previous level returns, when one of these
+markers qualifies. Completion markers must be the final non-blank line;
+fallback and user-request markers must appear on their own plain lines.
 
 - `Consultation cycle: complete - <consult id> verified.` - the cited
   consult's answer ends with the approved verdict, it started after pi's last
