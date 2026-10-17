@@ -155,7 +155,10 @@ processor emits `item.updated` only for plan changes and renders agent
 messages on completion — so a Codex window shows the live activity Codex does
 report: commands as they start, MCP calls, searches, reasoning summaries,
 plan updates, file changes, non-fatal warnings, and a non-zero exit. Its
-answer text arrives as one event at the end. Token-level Codex streaming
+answer text arrives as one event at the end. Codex's messages arrive
+complete: each one becomes a prose card, and the final message, the answer,
+is left to the result unless the call was detached. A failed MCP call is
+shown as an error on its own tool line; that is not a failure of the consult. Token-level Codex streaming
 exists only on the experimental `codex app-server` JSON-RPC transport
 (`item/agentMessage/delta`), which this extension does not use.
 
@@ -166,10 +169,15 @@ with one `[consult <id>]` card. Collapsed, it shows a single summary line: each
 consultant with its model and timeout, the file count, and any continuation.
 Expanded, it adds the working directory, the saved brief's path, the files, and
 the brief itself. The consultant's own stream follows as one card per tool-use
-burst or block of prose. A tool card renders as a pi tool row (a success or
-error background, the tool name in bold, its argument muted); a prose card
-renders in pi's custom-message box. The cards name their consultant only when
-`both` share the stream. All cards are collapsed by default and opened with
+burst or block of prose. Every activity card identifies its consultant,
+including single-target calls. A tool card starts with a bold `claude · tool`
+or `codex · tool` header and retains the success or error background, the
+bold tool name, and the muted argument. A prose card uses pi's
+custom-message box with an always-visible `[claude]` or `[codex]` label.
+Overflow notices name their consultant, for example
+`claude: +3 more steps not shown`. Saved v1 cards retain their attribution;
+older v2 cards without a recorded author show the consult id and "author
+unavailable". All cards are collapsed by default and opened with
 pi's standard expand toggle. They are TUI-only, stay out of the model context,
 and are bounded per consultant; the row and the cards are views, so the
 model-facing snapshot is unchanged. Steering or Escape detaches the call but

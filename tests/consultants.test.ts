@@ -2,7 +2,8 @@ import { ClaudeConsultant } from "../src/consultants/claude-consultant.ts";
 import { CodexConsultant } from "../src/consultants/codex-consultant.ts";
 import type { ConsultRequest } from "../src/contracts.ts";
 import { ProcessRunner } from "../src/process-runner.ts";
-import { assert, assertEq, test } from "./harness.ts";
+import { fakeCodex } from "./consult-fixture.ts";
+import { assert, assertEq, scratchDir, test } from "./harness.ts";
 
 const runner = new ProcessRunner();
 
@@ -96,4 +97,26 @@ test("codex adapter: isolation inherit keeps the user's own configuration", () =
 	const args = consultant.buildArgs({ ...request(), consultant: "codex" });
 	assert(!args.includes("--ignore-user-config"), "user config kept");
 	assert(!args.includes("--ignore-rules"), "user rules kept");
+});
+
+test("codex adapter: an agent message is prose, not progress", async () => {
+	const consultant = new CodexConsultant(
+		{ enabled: true, command: fakeCodex(0, true), timeoutMs: 5000, isolation: "clean" },
+		runner,
+	);
+	const progress: string[] = [];
+	const messages: Array<{ text: string; summary: string }> = [];
+	const result = await consultant.consult({
+		...request(),
+		consultant: "codex",
+		cwd: scratchDir(),
+		onProgress: (line) => progress.push(line),
+		onMessage: (text, summary) => messages.push({ text, summary }),
+	});
+	assert(result.answer.includes("FAKE CODEX"), "the last message is the answer");
+	assert(progress.some((line) => line.includes("$ rg foo")), "the command is progress");
+	assert(!progress.some((line) => line.includes("Second line")), "prose is not progress");
+	assertEq(messages[0].text, "Looking at the parser.\nSecond line of commentary.");
+	assertEq(messages[0].summary, "codex: Looking at the parser.");
+	assertEq(messages.at(-1)?.text, "FAKE CODEX");
 });

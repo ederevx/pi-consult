@@ -157,6 +157,10 @@ export interface ConsultRequest {
 	onProgress?: (line: string) => void;
 	/** A chunk of streamed answer text. */
 	onPartial?: (text: string) => void;
+	/** A complete prose message (e.g. a Codex agent message): `summary` is the
+	 *  prefixed activity line the progress transcript records; `text` is the
+	 *  whole message, for the transcript cards only. */
+	onMessage?: (text: string, summary: string) => void;
 }
 
 /** One consultant's parsed answer, before it is stored or formatted. */

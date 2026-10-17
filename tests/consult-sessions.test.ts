@@ -550,3 +550,49 @@ test("consult sessions: continue falls back to the saved record for an exact id"
 	assertEq(missing.isError, true);
 	assertIncludes(missing.content[0].text, "unknown consult id");
 });
+
+test("consult sessions: a Codex TUI consult shows commentary as prose", async () => {
+	const fixture = buildConsultFixture(
+		configFile(fakeClaude(), fakeCodex(0, true)), "sess-codex");
+	fixture.tool.register(fixture.pi as never);
+	const ctx = new FakeContext([], "sess-codex", scratchDir(), true);
+	ctx.mode = "tui";
+	const result = await fixture.tool.execute(
+		"call-codex-tui",
+		{ target: "codex", brief: "Codex.", contains_no_secrets: true },
+		undefined, undefined, ctx as never);
+	assertEq(result.details.ok, true);
+	const cards = steps(fixture.pi);
+	assertEq(cards[0].kind, "start", "the invocation card comes first");
+	assert(cards.some((card) => card.kind === "text" &&
+		card.lines?.some((line) => line.includes("Second line of commentary"))),
+		"the whole commentary is a prose card");
+	assert(cards.some((card) => card.kind === "tool" &&
+		card.lines?.some((line) => line.includes("$ rg foo"))), "the command is a tool card");
+	assert(!cards.some((card) => card.lines?.some((line) => line.includes("FAKE CODEX"))),
+		"the foreground result carries the answer, not the cards");
+	assertIncludes(result.content[0].text, "FAKE CODEX");
+	assert(cards.every((card) => card.kind === "start" || card.consultant === "codex"),
+		"every activity card names its consultant");
+});
+
+test("consult sessions: a detached Codex consult flushes its answer as prose", async () => {
+	const fixture = buildConsultFixture(
+		configFile(fakeClaude(), fakeCodex(600, true)), "sess-codex-detach");
+	fixture.tool.register(fixture.pi as never);
+	const ctx = new FakeContext([], "sess-codex-detach", scratchDir(), true);
+	ctx.mode = "tui";
+	ctx.pending = true;
+	const result = await fixture.tool.execute(
+		"call-codex-detach",
+		{ target: "codex", brief: "Codex slow.", contains_no_secrets: true },
+		undefined, undefined, ctx as never);
+	assertEq(result.details.detachedBy, "steer");
+	const invocation = fixture.supervisor.get(result.details.consultId);
+	assert(invocation !== undefined, "tracked");
+	await invocation.done();
+	await delay(50);
+	assert(steps(fixture.pi).some((card) => card.kind === "text" &&
+		card.lines?.some((line) => line.includes("FAKE CODEX"))),
+		"a detached run flushes its answer as an attributed prose card");
+});

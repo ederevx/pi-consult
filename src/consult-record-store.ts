@@ -115,14 +115,21 @@ export class ConsultRecordStore {
 	}
 
 	/**
-	 * Mark every manifest this process does not own as failed, so a later
-	 * start never reports a dead host's invocation as still running.
+	 * Mark every manifest this process does not own as failed, unless a
+	 * receipt already exists, so a later start never reports a dead host's
+	 * invocation as still running and never overwrites a finished one.
 	 */
 	async reconcile(live: ReadonlySet<string>): Promise<void> {
 		for (const paths of await this.artifacts.listConsults()) {
 			if (live.has(basename(paths.dir))) continue;
 			const manifest = await this.readManifest(paths.run);
 			if (!manifest || !ConsultRecordStore.unfinished(manifest.state)) continue;
+			if (await this.readReceipt(paths)) {
+				// A receipt written before the manifest caught up is the truth;
+				// repair the manifest instead of overwriting a finished run.
+				await this.markRun(paths, "completed").catch(() => undefined);
+				continue;
+			}
 			await this.artifacts.write(
 				paths.result,
 				`${JSON.stringify(this.abandoned(manifest), null, 2)}\n`,

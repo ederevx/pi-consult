@@ -7,8 +7,8 @@
  * commands, MCP calls, searches, reasoning summaries, plan updates, file
  * changes, warnings, and failures - is reported to the caller's live-output
  * callback. Codex's protocol carries an agent message only once, complete,
- * so an answer arrives as one event and never as a stream. Unknown events
- * are noise.
+ * so an agent message is reported once, complete, as prose through the
+ * message callback, never as activity. Unknown events are noise.
  */
 
 import type { ConsultantUsage } from "../contracts.ts";
@@ -28,6 +28,7 @@ export class CodexEventParser {
 	private static readonly MAX_LABEL = 160;
 
 	private readonly onEvent?: (line: string) => void;
+	private readonly onMessage?: (text: string, summary: string) => void;
 	private lastPlanLine = "";
 	private threadId?: string;
 	private answer = "";
@@ -37,8 +38,12 @@ export class CodexEventParser {
 	private sawTurnCompleted = false;
 	private noiseLines = 0;
 
-	constructor(onEvent?: (line: string) => void) {
+	constructor(
+		onEvent?: (line: string) => void,
+		onMessage?: (text: string, summary: string) => void,
+	) {
 		this.onEvent = onEvent;
+		this.onMessage = onMessage;
 	}
 
 	/** Feed one line of stdout. */
@@ -139,7 +144,7 @@ export class CodexEventParser {
 				this.handleFileChange(item);
 				return;
 			case "mcp_tool_call":
-				this.onEvent?.(this.mcpLabel(item, this.statusLabel(item)));
+				this.onEvent?.(this.mcpLabel(item, this.statusLabel(item)) + this.mcpError(item));
 				return;
 			case "web_search":
 				this.reportFirstLine("search", item.query);
@@ -161,7 +166,8 @@ export class CodexEventParser {
 	private handleAgentMessage(item: Record<string, unknown>): void {
 		if (typeof item.text !== "string") return;
 		this.answer = item.text;
-		this.reportFirstLine("", item.text);
+		const summary = this.firstLine(item.text);
+		if (summary) this.onMessage?.(item.text, summary);
 	}
 
 	private handleCommandExit(item: Record<string, unknown>): void {
@@ -193,17 +199,31 @@ export class CodexEventParser {
 	}
 
 	private reportFirstLine(prefix: string, value: unknown): void {
-		if (typeof value !== "string") return;
+		const line = this.firstLine(value);
+		if (!line) return;
+		this.onEvent?.(prefix ? `${prefix}: ${line}` : line);
+	}
+
+	/** The first non-blank line, trimmed and clipped: the progress summary a
+	 *  complete prose message keeps. */
+	private firstLine(value: unknown): string | undefined {
+		if (typeof value !== "string") return undefined;
 		const first = value.split("\n").find((line) => line.trim());
-		if (!first) return;
-		const label = this.clip(first.trim());
-		this.onEvent?.(prefix ? `${prefix}: ${label}` : label);
+		return first ? this.clip(first.trim()) : undefined;
 	}
 
 	private mcpLabel(item: Record<string, unknown>, status: string): string {
 		const server = typeof item.server === "string" ? item.server : "mcp";
 		const tool = typeof item.tool === "string" ? item.tool : "tool";
 		return `${server}/${tool} ${status}`;
+	}
+
+	/** A failed call's reason, appended to its own line; a tool failure is not
+	 *  a failure of the whole consult. */
+	private mcpError(item: Record<string, unknown>): string {
+		if (item.status !== "failed") return "";
+		const message = this.errorMessage(item.error);
+		return message ? `: ${this.clip(message)}` : "";
 	}
 
 	private statusLabel(item: Record<string, unknown>): string {

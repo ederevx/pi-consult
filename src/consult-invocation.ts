@@ -39,6 +39,7 @@ export interface InvocationRequestSpec {
 export interface StepObserver {
 	event(name: ConsultantName, line: string): void;
 	partial(name: ConsultantName, text: string): void;
+	message(name: ConsultantName, text: string): void;
 }
 
 /** Everything one invocation needs before it starts. */
@@ -188,14 +189,15 @@ export class ConsultInvocation {
 	/** Fans one step out to the progress feed and every live observer. An
 	 *  observer that throws must never break the run. */
 	private publishStep(
-		kind: "event" | "partial",
+		kind: "event" | "partial" | "message",
 		name: ConsultantName,
 		text: string,
 	): void {
 		for (const observer of [...this.stepObservers]) {
 			try {
 				if (kind === "event") observer.event(name, text);
-				else observer.partial(name, text);
+				else if (kind === "partial") observer.partial(name, text);
+				else observer.message(name, text);
 			} catch {
 				// A failing observer is not the run's problem.
 			}
@@ -221,6 +223,10 @@ export class ConsultInvocation {
 			onPartial: (text: string) => {
 				this.feed.partial(request.consultant, text);
 				this.publishStep("partial", request.consultant, text);
+			},
+			onMessage: (text: string, summary: string) => {
+				this.feed.event(request.consultant, summary);
+				this.publishStep("message", request.consultant, text);
 			},
 		}));
 	}

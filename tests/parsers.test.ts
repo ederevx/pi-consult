@@ -138,6 +138,40 @@ test("codex parser: reasoning, search, mcp, plan, and warnings are live events",
 	assertEq(events.length, 7, "one live event per reported item");
 });
 
+test("codex parser: an agent message is prose, not activity", () => {
+	const events: string[] = [];
+	const messages: Array<{ text: string; summary: string }> = [];
+	const parser = new CodexEventParser(
+		(line) => events.push(line),
+		(text, summary) => messages.push({ text, summary }),
+	);
+	parser.push('{"type":"item.completed","item":{"type":"agent_message","text":"Line one.\\nLine two."}}');
+	assertEq(events.length, 0, "a message is not an activity line");
+	assertEq(messages.length, 1);
+	assertEq(messages[0].text, "Line one.\nLine two.");
+	assertEq(messages[0].summary, "Line one.");
+	assertEq(parser.finish().answer, "Line one.\nLine two.");
+
+	parser.push(JSON.stringify({
+		type: "item.completed",
+		item: { type: "agent_message", text: `${"x".repeat(300)}\nnext` },
+	}));
+	assertEq(messages.at(-1)?.summary.length, 160, "the summary is clipped");
+	assertEq(messages.at(-1)?.text.length, 305, "the whole message is kept");
+});
+
+test("codex parser: a failed MCP call carries its reason on its own line", () => {
+	const events: string[] = [];
+	const parser = new CodexEventParser((line) => events.push(line));
+	parser.push('{"type":"item.completed","item":{"type":"mcp_tool_call","server":"srv","tool":"read","status":"failed","error":{"message":"denied"}}}');
+	parser.push('{"type":"item.completed","item":{"type":"mcp_tool_call","server":"srv","tool":"read","status":"failed"}}');
+	parser.push('{"type":"item.completed","item":{"type":"mcp_tool_call","server":"srv","tool":"read","status":"completed"}}');
+	assertEq(events[0], "srv/read failed: denied");
+	assertEq(events[1], "srv/read failed");
+	assertEq(events[2], "srv/read completed");
+	assertEq(parser.finish().failed, undefined, "a tool failure is not a consult failure");
+});
+
 test("codex parser: an unchanged plan step is reported once", () => {
 	const events: string[] = [];
 	const parser = new CodexEventParser((line) => events.push(line));

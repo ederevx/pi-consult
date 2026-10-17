@@ -38,11 +38,11 @@ export interface ConsultStartData {
 	start: ConsultStartInfo;
 }
 
-/** One activity card; the consultant is named only when two share the stream. */
+/** One activity card, always naming its consultant. */
 export interface ConsultActivityData {
 	v: 2;
 	consultId: string;
-	consultant?: ConsultantName;
+	consultant: ConsultantName;
 	kind: "tool" | "text" | "more";
 	lines: string[];
 }
@@ -82,7 +82,6 @@ export class ConsultStepCards implements StepObserver {
 	private readonly append: AppendFn;
 	private readonly coalesceMs: number;
 	private readonly states = new Map<ConsultantName, ConsultantState>();
-	private tagged = false;
 	private closed = false;
 
 	constructor(
@@ -95,11 +94,10 @@ export class ConsultStepCards implements StepObserver {
 		this.coalesceMs = coalesceMs;
 	}
 
-	/** Open the stream with the invocation's card; a consult with two
-	 *  consultants names the author on every later card. */
+	/** Open the stream with the invocation's card; activity cards always name
+	 *  their author. */
 	start(info: ConsultStartInfo): void {
 		if (this.closed) return;
-		this.tagged = info.runs.length > 1;
 		this.write({
 			v: 2,
 			consultId: this.consultId,
@@ -134,6 +132,16 @@ export class ConsultStepCards implements StepObserver {
 		const state = this.stateFor(name);
 		this.flushTool(name);
 		state.text += text;
+	}
+
+	/** A complete prose message: its own card, and the trailing answer if
+	 *  nothing follows it. */
+	message(name: ConsultantName, text: string): void {
+		if (this.closed || !text.trim()) return;
+		const state = this.stateFor(name);
+		this.flushTool(name);
+		this.flushText(name);
+		state.text = text;
 	}
 
 	/** The call finished: flush the open tool cards and drop the trailing
@@ -202,20 +210,19 @@ export class ConsultStepCards implements StepObserver {
 		this.write(this.card(name, kind, lines));
 	}
 
-	/** One activity card, naming its author only in a shared stream. */
+	/** One activity card, always naming its author. */
 	private card(
 		name: ConsultantName,
 		kind: ConsultActivityData["kind"],
 		lines: string[],
 	): ConsultActivityData {
-		const data: ConsultActivityData = {
+		return {
 			v: 2,
 			consultId: this.consultId,
+			consultant: name,
 			kind,
 			lines,
 		};
-		if (this.tagged) data.consultant = name;
-		return data;
 	}
 
 	/** Write one card; a host that cannot take it closes the stream
