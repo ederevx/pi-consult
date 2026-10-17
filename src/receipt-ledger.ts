@@ -10,7 +10,7 @@
  * what this branch actually recorded.
  */
 
-import type { ConsultDetails } from "./contracts.ts";
+import { RESULT_MESSAGE, type ConsultDetails } from "./contracts.ts";
 
 /** The structural subset of a session entry this module reads. */
 export interface BranchEntry {
@@ -25,6 +25,7 @@ export interface BranchEntry {
 	};
 	customType?: string;
 	data?: unknown;
+	details?: unknown;
 }
 
 /** The gate's derived view: acknowledgement is the only admission left. */
@@ -89,19 +90,31 @@ export class ReceiptLedger {
 	}
 
 	/**
-	 * A finished consultation receipt: a direct `consult` result or the
-	 * `consult_collect` receipt that reports one. Pending receipts carry no
-	 * provider session to resume and are not history.
+	 * A finished consultation receipt: a direct `consult` result, the
+	 * delivered background result, or the legacy `consult_collect` receipt
+	 * that reports one. Pending receipts carry no provider session to resume
+	 * and are not history.
 	 */
 	private consultReceipt(entry: BranchEntry): ConsultDetails | undefined {
-		const toolName = entry.message?.toolName;
-		if (toolName !== "consult" && toolName !== "consult_collect") return undefined;
-		const details = this.toolDetails(entry);
+		const details = this.receiptDetails(entry);
 		if (!details) return undefined;
 		if (typeof details.consultId !== "string" || details.consultId === "-") return undefined;
 		if (!Array.isArray(details.runs) || details.runs.length === 0) return undefined;
 		if (details.schema === 2 && details.phase !== "complete") return undefined;
 		return details as unknown as ConsultDetails;
+	}
+
+	/** The structured details of a finished-receipt entry: a delivered
+	 *  background result, or a successful `consult`/`consult_collect`
+	 *  tool result. */
+	private receiptDetails(entry: BranchEntry): Record<string, unknown> | undefined {
+		if (entry.type === "custom_message" && entry.customType === RESULT_MESSAGE) {
+			const details = entry.details as Record<string, unknown> | undefined;
+			return details?.schema === 2 ? details : undefined;
+		}
+		const toolName = entry.message?.toolName;
+		if (toolName !== "consult" && toolName !== "consult_collect") return undefined;
+		return this.toolDetails(entry);
 	}
 
 	/** The structured `schema` details of a successful tool-result entry. */

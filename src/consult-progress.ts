@@ -4,7 +4,7 @@
  * Owns a bounded, per-consultant transcript of what the consultants are
  * doing while a `consult` call runs, and delivers the complete snapshot to
  * the tool's update callback at a throttled rate. `snapshot()` is the text
- * the model-facing result and `consult_collect` embed; the live transcript
+ * the model-facing result embeds; the live transcript
  * cards are fed separately by the invocation's step observers. The final
  * tool result replaces this text.
  */
