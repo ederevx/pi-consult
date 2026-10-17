@@ -1,17 +1,32 @@
 /**
  * pi-consult — the step-card stream.
  *
- * The collector must merge a burst of tool uses, close a card when prose
- * starts, bound how many cards one consult can write, and never write after
- * it stops. Everything here is durable session data, so the bounds matter.
+ * The collector opens the stream with the invocation card, merges a burst of
+ * tool uses, closes a card when prose starts, names the consultant only when
+ * two share the stream, bounds how many cards one consult can write, and
+ * never writes after it stops.
  */
 
-import { ConsultStepCards, type ConsultStepData } from "../src/consult-step-cards.ts";
+import {
+	ConsultStepCards,
+	type ConsultActivityData,
+	type ConsultStartInfo,
+	type ConsultStepData,
+} from "../src/consult-step-cards.ts";
 import { assert, assertEq, assertIncludes, test } from "./harness.ts";
 
 function delay(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+const START: ConsultStartInfo = {
+	target: "claude",
+	cwd: "/work/project",
+	briefPath: "/art/c-1/brief.md",
+	brief: "# Goal\nDo the thing.",
+	files: ["src/a.ts"],
+	runs: [{ consultant: "claude", model: "opus", timeoutS: 600 }],
+};
 
 class Sink {
 	readonly entries: ConsultStepData[] = [];
@@ -21,8 +36,14 @@ class Sink {
 		this.entries.push(data);
 	};
 
-	lines(kind: ConsultStepData["kind"]): string[][] {
-		return this.entries.filter((entry) => entry.kind === kind)
+	activity(): ConsultActivityData[] {
+		return this.entries.filter(
+			(entry): entry is ConsultActivityData => entry.kind !== "start");
+	}
+
+	lines(kind: ConsultActivityData["kind"]): string[][] {
+		return this.activity()
+			.filter((entry) => entry.kind === kind)
 			.map((entry) => entry.lines);
 	}
 }
@@ -30,16 +51,16 @@ class Sink {
 test("step cards: a tool step becomes one card on finish", () => {
 	const sink = new Sink();
 	const cards = new ConsultStepCards("c-1", sink.append);
-	cards.event("claude", "Read src/x.ts");
+	cards.event("claude", "claude: Read src/x.ts");
 	assertEq(sink.entries.length, 0, "nothing is written before the window closes");
 	cards.finish();
 	assertEq(sink.entries.length, 1);
-	assertEq(sink.entries[0].v, 1);
-	assertEq(sink.entries[0].kind, "tool");
-	assertEq(sink.entries[0].consultant, "claude");
-	assertEq(sink.entries[0].consultId, "c-1");
-	assertEq(sink.entries[0].lines.length, 1);
-	assertIncludes(sink.entries[0].lines[0], "Read src/x.ts");
+	const card = sink.activity()[0];
+	assertEq(card.v, 2);
+	assertEq(card.kind, "tool");
+	assertEq(card.consultant, undefined, "a single target names no consultant");
+	assertEq(card.consultId, "c-1");
+	assertEq(card.lines[0], "Read src/x.ts", "the stream prefix is stripped");
 });
 
 test("step cards: a burst merges and separated steps split", async () => {
@@ -50,7 +71,7 @@ test("step cards: a burst merges and separated steps split", async () => {
 	burst.event("claude", "three");
 	burst.finish();
 	assertEq(merged.entries.length, 1, "a burst is one card");
-	assertEq(merged.entries[0].lines.length, 3);
+	assertEq(merged.lines("tool")[0].length, 3);
 
 	const split = new Sink();
 	const spaced = new ConsultStepCards("c-1", split.append, 20);
@@ -61,8 +82,8 @@ test("step cards: a burst merges and separated steps split", async () => {
 	spaced.event("claude", "third");
 	spaced.finish();
 	assertEq(split.entries.length, 3, "a closed window starts a new card");
-	assertEq(split.entries[0].lines[0], "first");
-	assertEq(split.entries[2].lines[0], "third");
+	assertEq(split.lines("tool")[0][0], "first");
+	assertEq(split.lines("tool")[2][0], "third");
 });
 
 test("step cards: prose closes the tool card and is written before the next tool step", () => {
@@ -73,7 +94,7 @@ test("step cards: prose closes the tool card and is written before the next tool
 	cards.event("claude", "Bash ls");
 	assertEq(sink.entries.length, 1, "the text card flushes when the tool step arrives");
 	assertEq(sink.entries[0].kind, "text");
-	assertEq(sink.entries[0].lines.join("\n"), "ab");
+	assertEq(sink.activity()[0].lines.join("\n"), "ab");
 	cards.finish();
 	assertEq(sink.entries.length, 2);
 	assertEq(sink.entries[1].kind, "tool");
@@ -94,19 +115,61 @@ test("step cards: finish drops trailing prose, detach keeps it", () => {
 	assertEq(detached.entries[0].kind, "text");
 });
 
+test("step cards: start opens the stream with the invocation card", () => {
+	const sink = new Sink();
+	const cards = new ConsultStepCards("c-1", sink.append);
+	cards.start({
+		...START,
+		brief: "x".repeat(5_000),
+		files: ["src/a.ts"],
+	});
+	cards.event("claude", "claude: Read src/x.ts");
+	cards.finish();
+	const first = sink.entries[0];
+	assertEq(first.kind, "start");
+	if (first.kind !== "start") return;
+	assertEq(first.v, 2);
+	assert(Buffer.byteLength(first.start.brief, "utf8") <= 4096 + 3, "the brief is clipped");
+	assert(first.start.brief.endsWith("…"), "the cut is marked");
+	assertEq(first.start.files[0], "src/a.ts", "the files survive");
+	assertEq(first.start.runs[0].model, "opus", "the run settings survive");
+});
+
 test("step cards: the card cap folds the rest onto one more card", async () => {
 	const sink = new Sink();
 	const cards = new ConsultStepCards("c-1", sink.append, 1);
+	cards.start(START);
 	for (let index = 0; index < 100; index += 1) {
 		cards.event("claude", `step ${index}`);
 		await delay(4);
 	}
 	cards.finish();
-	const tools = sink.lines("tool");
-	assertEq(tools.length, 40, "the per-consultant cap holds");
-	const more = sink.entries.filter((entry) => entry.kind === "more");
+	assertEq(sink.lines("tool").length, 40, "the per-consultant cap holds");
+	assertEq(sink.entries.filter((entry) => entry.kind === "start").length, 1,
+		"the start card does not count against the cap");
+	const more = sink.lines("more");
 	assertEq(more.length, 1, "one closing card");
-	assertIncludes(more[0].lines[0], "+60 more steps not shown");
+	assertEq(more[0][0], "+60 more steps not shown");
+});
+
+test("step cards: a shared stream names the author on every card", () => {
+	const sink = new Sink();
+	const cards = new ConsultStepCards("c-1", sink.append);
+	cards.start({ ...START, target: "both", runs: [...START.runs, { consultant: "codex", timeoutS: 300 }] });
+	cards.event("claude", "claude: Read a");
+	cards.event("codex", "codex: Read b");
+	cards.finish();
+	const tools = sink.activity().filter((entry) => entry.kind === "tool");
+	assert(tools.every((entry) => entry.consultant !== undefined), "every card is tagged");
+	assertEq(new Set(tools.map((entry) => entry.consultant)).size, 2, "both streams are told apart");
+});
+
+test("step cards: only a consultant's own prefix is stripped", () => {
+	const sink = new Sink();
+	const cards = new ConsultStepCards("c-1", sink.append, 1);
+	cards.event("codex", "claude: x");
+	cards.finish();
+	assertEq(sink.lines("tool")[0][0], "claude: x", "another consultant's prefix stays");
 });
 
 test("step cards: a closed stream writes nothing more", () => {
@@ -117,6 +180,7 @@ test("step cards: a closed stream writes nothing more", () => {
 	const count = sink.entries.length;
 	cards.event("claude", "late");
 	cards.partial("claude", "later");
+	cards.start(START);
 	cards.finish();
 	cards.detach();
 	assertEq(sink.entries.length, count, "no writes after close");
@@ -128,6 +192,7 @@ test("step cards: a throwing append closes the stream without raising", async ()
 		calls += 1;
 		throw new Error("no host");
 	}, 1);
+	cards.start(START);
 	cards.event("claude", "one");
 	await delay(10);
 	cards.event("claude", "two");
@@ -143,5 +208,5 @@ test("step cards: streamed text is clipped to its budget", () => {
 	cards.detach();
 	const text = sink.lines("text")[0][0];
 	assert(Buffer.byteLength(text, "utf8") <= 2048 + 3, "the head is kept within budget");
-	assert(text.endsWith("…"), "the cut is marked");
+	assertIncludes(text, "…");
 });

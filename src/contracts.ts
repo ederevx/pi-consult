@@ -10,6 +10,9 @@ export type ConsultantName = "claude" | "codex";
 /** A consult request's audience: one consultant, or both concurrently. */
 export type ConsultTarget = ConsultantName | "both";
 
+/** The custom-message type a delivered background result uses. */
+export const RESULT_MESSAGE = "pi-consult-result";
+
 /** How one consultant run ended. */
 export type RunStatus =
 	| "ok"
@@ -76,8 +79,6 @@ export interface ConsultDetails {
 	continuedFrom?: string;
 	/** Set when the foreground caller detached instead of waiting. */
 	detachedBy?: DetachReason;
-	/** Set once `consult_collect` has reported a finished consultation. */
-	collected?: boolean;
 	/** The live invocation's state, when the receipt is a running one. */
 	state?: InvocationState;
 	runs: ConsultRun[];

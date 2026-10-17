@@ -19,10 +19,12 @@ import { ConsultConfig } from "../src/consult-config.ts";
 import { ConsultIndex } from "../src/consult-index.ts";
 import { ConsultResultView, type ResultRenderSlot } from "../src/consult-result-view.ts";
 import { ConsultRunner } from "../src/consult-runner.ts";
+import { ConsultRecordStore } from "../src/consult-record-store.ts";
 import { ConsultStepCards } from "../src/consult-step-cards.ts";
 import { ConsultTool } from "../src/consult-tool.ts";
 import { ReceiptLedger } from "../src/receipt-ledger.ts";
 import { SecretScreen } from "../src/secret-screen.ts";
+import { SessionIdentity } from "../src/session-identity.ts";
 import { FakePi, assert, assertEq, assertIncludes, assertNotIncludes, scratchDir, test } from "./harness.ts";
 
 const theme = {
@@ -71,6 +73,8 @@ test("result view: the consult tool uses pi's shell and registers an entry rende
 		index: new ConsultIndex(ledger),
 		runner: new ConsultRunner([], config.maxConcurrent),
 		artifacts: new ArtifactStore(scratchDir()),
+		records: new ConsultRecordStore(new ArtifactStore(scratchDir())),
+		identity: new SessionIdentity(),
 		screen: new SecretScreen(),
 		composer: new BriefComposer(),
 		formatter: new AnswerFormatter(config.output),

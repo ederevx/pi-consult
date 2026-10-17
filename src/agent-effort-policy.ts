@@ -141,7 +141,8 @@ export class AgentEffortPolicy {
 		this.lower(ctx);
 	}
 
-	/** The model received this consult's final receipt (or it was terminated). */
+	/** The model received this consult's final receipt (delivered or returned)
+	 *  or it was terminated. */
 	settle(consultId: string, details?: ConsultDetails, answers?: ReadonlyMap<ConsultantName, string>): void {
 		if (!this.owed.delete(consultId)) return;
 		if (details?.phase === "complete") {
@@ -403,14 +404,14 @@ export class AgentEffortPolicy {
 	}
 
 	private completionRefusal(consultId: string): string | undefined {
-		if (this.owed.size > 0) return `${[...this.owed].join(", ")} is still running or uncollected`;
+		if (this.owed.size > 0) return `${[...this.owed].join(", ")} is still running or undelivered`;
 		if (!this.approved.has(consultId)) return `${consultId}'s answer does not end with an approved consultant verdict`;
 		if (!this.fresh.has(consultId)) return `${consultId} started before your last edit, write, or command`;
 		return undefined;
 	}
 
 	private independentRefusal(teammate: string): string | undefined {
-		if (this.owed.size > 0) return `${[...this.owed].join(", ")} is still running or uncollected`;
+		if (this.owed.size > 0) return `${[...this.owed].join(", ")} is still running or undelivered`;
 		if (!this.auditors.has(teammate)) {
 			return `${teammate} is not an independent auditor spawned after every enabled consultant expired`;
 		}
@@ -420,7 +421,7 @@ export class AgentEffortPolicy {
 	}
 
 	private fallbackRefusal(): string | undefined {
-		if (this.owed.size > 0) return `${[...this.owed].join(", ")} is still running or uncollected`;
+		if (this.owed.size > 0) return `${[...this.owed].join(", ")} is still running or undelivered`;
 		const serving = this.serving();
 		return serving.length > 0 ? `${serving.join(", ")} has not expired in this cycle` : undefined;
 	}

@@ -181,7 +181,7 @@ test("agent effort: a completion line with a consult still owed warns and holds"
 	policy.engage(ctx as never, "c-000010");
 	await host.run("Consultation cycle: complete - c-000010 verified.");
 	assertEq(host.getThinkingLevel(), "low");
-	assertIncludes(notices(ctx), "still running or uncollected");
+	assertIncludes(notices(ctx), "still running or undelivered");
 	assertIncludes(notices(ctx), "holding low");
 
 	policy.settle(
@@ -254,7 +254,7 @@ test("agent effort: a fallback line while a detached consult is owed is refused"
 	assertEq(host.getThinkingLevel(), "low", "the owed consult blocks the probe restore");
 	await host.run("Consultant fallback: no consultant available - roadblock.");
 	assertEq(host.getThinkingLevel(), "low");
-	assertIncludes(notices(ctx), "still running or uncollected");
+	assertIncludes(notices(ctx), "still running or undelivered");
 });
 
 test("agent effort: a disabled codex plus two claude failures accept the fallback", async () => {
@@ -267,7 +267,7 @@ test("agent effort: a disabled codex plus two claude failures accept the fallbac
 	assertEq(host.getThinkingLevel(), "high");
 });
 
-test("agent effort: collecting the same failed consult three times counts as one failure", async () => {
+test("agent effort: settling the same failed consult three times counts as one failure", async () => {
 	const { host, ctx, policy } = setup({ config: config({ codex: { enabled: false } }) });
 	policy.engage(ctx as never, "c-000017");
 	policy.settle("c-000017", consultDetails("c-000017", [consultRun("claude", "error", "boom")], false));
@@ -410,7 +410,7 @@ test("agent effort: reload restores owed consults and the persisted level", asyn
 	host2.emit("session_start", {});
 	await host2.run("Consultation cycle: complete - c-000030 verified.");
 	assertEq(host2.getThinkingLevel(), "low");
-	assertIncludes(notices(ctx2), "still running or uncollected");
+	assertIncludes(notices(ctx2), "still running or undelivered");
 
 	policy2.settle(
 		"c-000030",

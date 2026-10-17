@@ -12,6 +12,7 @@ import type { ArtifactStore } from "./artifact-store.ts";
 import type { BridgeLauncher } from "./bridge-launcher.ts";
 import type { ConsultConfig } from "./consult-config.ts";
 import type { ConsultContract } from "./consult-contract.ts";
+import type { ConsultDelivery } from "./consult-delivery.ts";
 import type { ConsultRecordStore } from "./consult-record-store.ts";
 import type { ConsultSupervisor } from "./consult-supervisor.ts";
 import type { ProcessRunner } from "./process-runner.ts";
@@ -26,6 +27,7 @@ export class SessionLifecycle {
 	private readonly artifacts: ArtifactStore;
 	private readonly records: ConsultRecordStore;
 	private readonly identity: SessionIdentity;
+	private readonly delivery: ConsultDelivery;
 	private readonly bridge: BridgeLauncher;
 	private readonly contract: ConsultContract;
 	private readonly config: ConsultConfig;
@@ -37,6 +39,7 @@ export class SessionLifecycle {
 		artifacts: ArtifactStore,
 		records: ConsultRecordStore,
 		identity: SessionIdentity,
+		delivery: ConsultDelivery,
 		bridge: BridgeLauncher,
 		contract: ConsultContract,
 		config: ConsultConfig,
@@ -47,6 +50,7 @@ export class SessionLifecycle {
 		this.artifacts = artifacts;
 		this.records = records;
 		this.identity = identity;
+		this.delivery = delivery;
 		this.bridge = bridge;
 		this.contract = contract;
 		this.config = config;
@@ -56,10 +60,12 @@ export class SessionLifecycle {
 	register(pi: ExtensionAPI): void {
 		pi.on("session_start", async (_event, ctx: ExtensionContext) => {
 			this.identity.observe(ctx);
+			this.delivery.redeliver();
 			await this.start(ctx);
 		});
 		pi.on("session_tree", (_event, ctx: ExtensionContext) => {
 			this.identity.observe(ctx);
+			this.delivery.redeliver();
 			this.rebuild(ctx);
 		});
 		pi.on("session_compact", async (_event, ctx: ExtensionContext) => {

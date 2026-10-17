@@ -50,7 +50,7 @@ import "./gate.test.ts";
 import "./result-view.test.ts";
 import "./consult-step-cards.test.ts";
 import "./consult-step-renderer.test.ts";
-import "./consult-collect-wait.test.ts";
+import "./consult-foreground.test.ts";
 import "./availability.test.ts";
 import "./mcp-bridge.test.ts";
 import "./bridge-e2e.test.ts";

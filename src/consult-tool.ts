@@ -4,7 +4,8 @@
  * Orchestrates one consultation: validate the request, screen the brief,
  * persist it, start the invocation under the supervisor, and watch it in the
  * foreground. Escape or a queued user message detaches the call — the tool
- * returns immediately and the consultation keeps running, collectible later.
+ * returns immediately and the consultation keeps running, delivered when it
+ * finishes.
  */
 
 import type {
@@ -32,14 +33,16 @@ import type { BriefComposer } from "./brief-composer.ts";
 import type { ConsultConfig } from "./consult-config.ts";
 import type { ConsultForeground, ForegroundOutcome } from "./consult-foreground.ts";
 import { ConsultCallView } from "./consult-call-view.ts";
-import { ConsultStepCards, type ConsultStepData } from "./consult-step-cards.ts";
+import { ConsultStepCards, type ConsultStartInfo, type ConsultStepData } from "./consult-step-cards.ts";
 import { ConsultStepRenderer } from "./consult-step-renderer.ts";
 import type { ConsultIndex } from "./consult-index.ts";
-import type { InvocationRequestSpec, InvocationSpec } from "./consult-invocation.ts";
+import type { ConsultRecordStore } from "./consult-record-store.ts";
+import type { ConsultInvocation, InvocationRequestSpec, InvocationSpec } from "./consult-invocation.ts";
 import type { ConsultSupervisor } from "./consult-supervisor.ts";
 import { ConsultResultView } from "./consult-result-view.ts";
 import type { BranchEntry, ReceiptLedger } from "./receipt-ledger.ts";
 import type { SecretScreen } from "./secret-screen.ts";
+import type { SessionIdentity } from "./session-identity.ts";
 
 /** The `consult` tool's parameters. */
 export interface ConsultParams {
@@ -58,6 +61,9 @@ export interface ConsultToolDeps {
 	ledger: ReceiptLedger;
 	index: ConsultIndex;
 	artifacts: ArtifactStore;
+	/** The session in effect; cards outliving the call never land in another one. */
+	identity?: SessionIdentity;
+	records: ConsultRecordStore;
 	screen: SecretScreen;
 	composer: BriefComposer;
 	formatter: AnswerFormatter;
@@ -116,8 +122,9 @@ export class ConsultTool {
 				"point a consultant at paths it should read itself instead of pasting " +
 				"contents. Pass the returned consult id as `continue` to keep talking to " +
 				"the same consultant session. Escape or a queued message detaches the " +
-				"call instead of cancelling it: the consultation keeps running and is " +
-				"collected with consult_collect. Never include secrets in a brief.",
+				"call instead of cancelling it: the consultation keeps running and its " +
+				"full result is delivered to you as a message when it finishes; do not " +
+				"poll for it. Never include secrets in a brief.",
 			parameters: Type.Object({
 				target: Type.Union(
 					[Type.Literal("claude"), Type.Literal("codex"), Type.Literal("both")],
@@ -228,7 +235,9 @@ export class ConsultTool {
 		}
 
 		this.deps.ledger.rebuild(this.entries(ctx), this.branch(ctx));
-		const continuation = this.resolveContinuation(params.continue);
+		const resolved = await this.resolveContinuation(params.continue);
+		if (resolved && "refused" in resolved) return this.failure(ctx, resolved.refused);
+		const continuation: Continuation | undefined = resolved;
 		if (params.continue && !continuation) {
 			return this.failure(ctx, `unknown consult id: ${params.continue}`);
 		}
@@ -244,13 +253,6 @@ export class ConsultTool {
 					);
 				}
 			}
-			if (this.deps.supervisor.get(continuation.consultId)?.live) {
-				return this.failure(
-					ctx,
-					`consult ${continuation.consultId} is still running; collect it with ` +
-						`consult_collect {id: "${continuation.consultId}"} before continuing.`,
-				);
-			}
 		}
 
 		const consultId = this.deps.index.nextId();
@@ -263,14 +265,15 @@ export class ConsultTool {
 			return this.failure(ctx, `could not persist the brief: ${this.message(error)}`);
 		}
 
-		const invocation = this.deps.supervisor.start(
-			await this.spec(consultId, sessionId, params, targets, composed, continuation, paths, ctx),
-		);
+		const spec = await this.spec(
+			consultId, sessionId, params, targets, composed, continuation, paths, ctx);
+		const invocation = this.deps.supervisor.start(spec);
 		this.deps.effort?.engage(ctx, consultId);
 		const steps = ctx.mode === "tui" && this.append
-			? new ConsultStepCards(consultId, this.append) : undefined;
+			? new ConsultStepCards(consultId, this.stepAppend(sessionId)) : undefined;
+		steps?.start(this.startInfo(params, spec));
 		const unobserve = steps ? invocation.observeSteps(steps) : () => undefined;
-		let outcome: ForegroundOutcome;
+		let outcome: ForegroundOutcome | undefined;
 		try {
 			outcome = await this.deps.foreground.wait(
 				invocation,
@@ -279,17 +282,20 @@ export class ConsultTool {
 				onUpdate,
 			);
 		} finally {
-			unobserve();
+			if (outcome?.status === "detached") {
+				this.closeOnSettle(invocation, steps, unobserve);
+			} else {
+				unobserve();
+			}
 		}
-		if (outcome.status === "detached") steps?.detach();
-		else steps?.finish();
-		if (outcome.status === "detached") {
+		if (outcome?.status === "detached") {
 			const details = this.deps.supervisor.pending(invocation);
 			return {
 				content: [{ type: "text", text: this.detachedText(details, invocation.snapshot()) }],
 				details,
 			};
 		}
+		steps?.finish();
 
 		const receipt: ConsultReceipt = await this.deps.supervisor.receipt(invocation);
 		this.deps.effort?.settle(consultId, receipt.details, receipt.answers);
@@ -302,6 +308,50 @@ export class ConsultTool {
 			],
 			details: receipt.details,
 			isError: !receipt.details.ok,
+		};
+	}
+
+	/** A detached call no longer waits, but its cards keep flowing until the
+	 *  run settles; then they flush with the trailing text, which the
+	 *  returned result does not carry. */
+	private closeOnSettle(
+		invocation: ConsultInvocation,
+		steps: ConsultStepCards | undefined,
+		unobserve: () => void,
+	): void {
+		if (!steps) return;
+		void invocation.done().then(() => {
+			unobserve();
+			steps.detach();
+		});
+	}
+
+	/** The cards' writer, refusing once pi is in another session; the
+	 *  refusal closes the stream. */
+	private stepAppend(
+		sessionId: string,
+	): (customType: string, data: ConsultStepData) => void {
+		return (customType, data) => {
+			const current = this.deps.identity?.get();
+			if (current && current !== sessionId) throw new Error("session changed");
+			this.append?.(customType, data);
+		};
+	}
+
+	/** The start card's body: what this invocation was asked to do. */
+	private startInfo(params: ConsultParams, spec: InvocationSpec): ConsultStartInfo {
+		return {
+			target: params.target,
+			continuedFrom: spec.continuedFrom,
+			cwd: spec.cwd,
+			briefPath: spec.paths.brief,
+			brief: params.brief,
+			files: params.files ?? [],
+			runs: spec.requests.map((request) => ({
+				consultant: request.consultant,
+				model: request.model,
+				timeoutS: Math.round(request.timeoutMs / 1000),
+			})),
 		};
 	}
 
@@ -354,22 +404,41 @@ export class ConsultTool {
 		const lines = [
 			`pi-consult: consult ${details.consultId} was interrupted (${reason}) and keeps ` +
 				"running in the background.",
-			`Collect it with consult_collect {id: "${details.consultId}", wait: 300}, ` +
-				"or continue it once collected.",
+			`Its full result is delivered to this session as a message when it ` +
+				"finishes; continue it after that.",
 		];
 		if (snapshot) lines.push("", ConsultTool.clip(snapshot, 4_000));
 		return lines.join("\n");
 	}
 
-	private resolveContinuation(handle: string | undefined): Continuation | undefined {
+	private async resolveContinuation(
+		handle: string | undefined,
+	): Promise<Continuation | { refused: string } | undefined> {
 		if (!handle) return undefined;
-		const previous = this.deps.index.resolve(handle);
-		if (!previous) return undefined;
-		const resumeFor = new Map<ConsultantName, { sessionId: string; cwd: string }>();
-		for (const run of previous.runs) {
-			if (run.sessionId) resumeFor.set(run.consultant, { sessionId: run.sessionId, cwd: previous.cwd });
+		const owned = this.deps.supervisor.get(handle);
+		if (owned?.live) {
+			return {
+				refused: `consult ${handle} is still running; its result is delivered ` +
+					"to this session when it finishes - continue it after that.",
+			};
 		}
-		return { consultId: previous.consultId, resumeFor };
+		if (owned) {
+			return this.continuationFrom((await this.deps.supervisor.receipt(owned)).details);
+		}
+		const history = this.deps.index.resolve(handle);
+		if (history) return this.continuationFrom(history);
+		const record = await this.deps.records.load(handle);
+		return record ? this.continuationFrom(record.details) : undefined;
+	}
+
+	private continuationFrom(details: ConsultDetails): Continuation {
+		const resumeFor = new Map<ConsultantName, { sessionId: string; cwd: string }>();
+		for (const run of details.runs) {
+			if (run.sessionId) {
+				resumeFor.set(run.consultant, { sessionId: run.sessionId, cwd: details.cwd });
+			}
+		}
+		return { consultId: details.consultId, resumeFor };
 	}
 
 	private async validateFiles(files: readonly string[], cwd: string): Promise<string | undefined> {

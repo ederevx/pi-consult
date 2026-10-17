@@ -27,14 +27,9 @@ and execution, at low thinking effort, and consults again at any roadblock.
   global tool-expansion setting (a live stream tails until expanded); the
   model-facing result text is unchanged. Escape or a queued user message
   **detaches** the call rather than cancelling it: the tool returns a pending
-  receipt naming the consult id and the consultants keep working.
-- **`consult_collect`** — reports a running consult's state, or returns the
-  final receipt (status, usage, answer path, provider session ids) of one that
-  finished, by consult id or `last`. Pass `wait` (seconds) to block until it
-  finishes; the wait returns early on Escape, a queued message, or a consultant
-  request, and never stops the consult. Collecting is safe to repeat. A
-  finished background consult is announced once, into the session that started
-  it, with a pointer to this tool.
+  receipt naming the consult id and the consultants keep working. When it
+  finishes, its full result is delivered into that session as a
+  `pi-consult-result` message.
 - **`consult_terminate`** — the only path that ends a consultation early: it
   aborts that consult's consultant processes and records the result.
 - **`consult_reply`** — answers a request a consultant made through the local
@@ -131,7 +126,7 @@ happens:
   `Consultation cycle: complete - <consult id> verified.`, **the cited
   consult's answer ends with the approved verdict**, it started after pi's last
   `edit`, `write`, `bash`, or `powershell` call, and no consult is running or
-  uncollected;
+  undelivered;
 - or, once every enabled consultant has expired, it ends with
   `Consultation cycle: complete - <teammate id> independently verified.`,
   that teammate was spawned as the independent auditor after the expiry, its
@@ -164,15 +159,23 @@ answer text arrives as one event at the end. Token-level Codex streaming
 exists only on the experimental `codex app-server` JSON-RPC transport
 (`item/agentMessage/delta`), which this extension does not use.
 
-The consult row uses pi's normal shell: one header line naming the target
-and brief, then one fixed status line per consultant while the call runs,
-and pi's ten-line preview of the answer once it finishes. The consultant's
-own stream appears as separate transcript cards below the row — one per
-tool-use burst or block of prose, each on the custom-message background
-with an author tag (`claude · tool`, `codex · said`), collapsed by default
-and opened with pi's standard expand toggle. The cards are TUI-only, stay
-out of the model context, and are bounded per consultant; the row and the
-cards are views, so the model-facing snapshot is unchanged.
+The consult row uses pi's normal shell: one header line naming the target and
+brief, then one fixed status line per consultant while the call runs, and pi's
+ten-line preview of the answer once it finishes. Below the row, the call opens
+with one `[consult <id>]` card. Collapsed, it shows a single summary line: each
+consultant with its model and timeout, the file count, and any continuation.
+Expanded, it adds the working directory, the saved brief's path, the files, and
+the brief itself. The consultant's own stream follows as one card per tool-use
+burst or block of prose. A tool card renders as a pi tool row (a success or
+error background, the tool name in bold, its argument muted); a prose card
+renders in pi's custom-message box. The cards name their consultant only when
+`both` share the stream. All cards are collapsed by default and opened with
+pi's standard expand toggle. They are TUI-only, stay out of the model context,
+and are bounded per consultant; the row and the cards are views, so the
+model-facing snapshot is unchanged. Steering or Escape detaches the call but
+not its stream: the cards keep arriving until the background run settles. The
+stream then closes with any trailing prose, because the detached result does
+not carry the answer. Cards stop for good if pi switches to another session.
 
 ### When the agent stops
 
@@ -191,9 +194,14 @@ While a `consult` runs, each consultant's live activity appears in the tool
 window (see Live output): Claude's answer streams as it is written, Codex's
 activity is reported as it happens and its answer arrives at the end. Escape
 or a queued user message detaches the call: it returns a pending receipt at
-once, the consultants keep running behind the scenes, and the finished
-consultation is announced and collected with `consult_collect`. Only
-`consult_terminate` ends one early.
+once, the consultants keep running behind the scenes, and their cards keep
+arriving below the conversation. When it finishes, its full result (status,
+answer, answer paths, consult id) is delivered into the session that started
+it as a `pi-consult-result` message. That message continues the agent if the
+call was detached by a steer or a consultant request, and waits for the next
+prompt after Escape or a termination. If pi is in another session when a
+consult finishes, the result is delivered when it returns. `consult_terminate`
+is the only way to end one early.
 
 ## Install
 
@@ -281,7 +289,8 @@ Codex is surfaced as a warning.
 
 Continuing is refused when a selected target has no saved session for that
 consult, instead of silently starting fresh under a `continuedFrom` id; it is
-also refused while the consult is still running (`consult_collect` first).
+also refused while the consult is still running, until its result is
+delivered.
 
 ### The bridge
 

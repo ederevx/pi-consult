@@ -1,11 +1,16 @@
 /**
  * pi-consult — the card a consultant step draws.
  *
- * Every card carries the custom-message background and opens with an author
- * tag, so a consultant's tool use and prose are told apart from the agent's
- * own messages and tool rows. Collapsed shows a short preview with the
- * standard expand hint; the global expand toggle shows the rest. The host
- * adds the leading spacer, so a card renders only its own content.
+ * The invocation opens with a summary card; activity cards name their
+ * consultant only when two share the stream. A tool card is drawn the way pi
+ * draws a finished tool row: a success/error background, a bold tool name
+ * with muted arguments, and pi's expand hint. A prose card is drawn the way
+ * pi draws a message that was not written by the agent: the `[claude]`
+ * custom-message box. That keeps the stream native-looking while never being
+ * mistaken for the agent's own tool rows or prose. Collapsed shows a short
+ * preview with the standard expand hint; the global expand toggle shows the
+ * rest. The host adds the leading spacer, so a card renders only its own
+ * content.
  */
 
 import {
@@ -13,9 +18,21 @@ import {
 	keyHint,
 	type Theme,
 } from "@earendil-works/pi-coding-agent";
-import { Box, Markdown, Text, type Component } from "@earendil-works/pi-tui";
+import {
+	Box,
+	Markdown,
+	Spacer,
+	Text,
+	type Component,
+} from "@earendil-works/pi-tui";
 
-import type { ConsultStepData } from "./consult-step-cards.ts";
+import type {
+	ConsultActivityData,
+	ConsultStartData,
+	ConsultStartInfo,
+	ConsultStepData,
+} from "./consult-step-cards.ts";
+import type { ConsultantName } from "./contracts.ts";
 
 /** One entry's render options and store. */
 export interface StepRenderOptions {
@@ -25,11 +42,6 @@ export interface StepRenderOptions {
 export class ConsultStepRenderer {
 	private static readonly COLLAPSED_TOOL_LINES = 3;
 	private static readonly COLLAPSED_TEXT_LINES = 4;
-	private static readonly KIND_LABEL: Record<ConsultStepData["kind"], string> = {
-		tool: "tool",
-		text: "said",
-		more: "more",
-	};
 
 	/** Draw one step card, or nothing for malformed data. */
 	render(
@@ -37,35 +49,89 @@ export class ConsultStepRenderer {
 		options: StepRenderOptions,
 		theme: Theme,
 	): Component | undefined {
-		const data = entry.data;
-		if (!this.valid(data)) return undefined;
+		const data = this.normalized(entry.data);
+		if (!data) return undefined;
+		switch (data.kind) {
+			case "start":
+				return this.startCard(data, options.expanded, theme);
+			case "tool":
+				return this.toolCard(data, options.expanded, theme);
+			case "text":
+				return this.textCard(data, options.expanded, theme);
+			default:
+				return this.moreCard(data, theme);
+		}
+	}
+
+	/** The invocation card: a one-line summary collapsed; settings and the
+	 *  brief expanded. */
+	private startCard(
+		data: ConsultStartData,
+		expanded: boolean,
+		theme: Theme,
+	): Box {
 		const box = new Box(1, 1, (text) => theme.bg("customMessageBg", text));
-		box.addChild(this.author(data, theme));
-		if (data.kind === "more") {
-			box.addChild(new Text(
-				theme.fg("dim", data.lines[0] ?? ""), 0, 0));
+		box.addChild(new Text(
+			theme.fg("customMessageLabel", `\x1b[1m[consult ${data.consultId}]\x1b[22m`),
+			0,
+			0,
+		));
+		box.addChild(new Spacer(1));
+		box.addChild(new Text(this.summary(data.start, theme), 0, 0));
+		const details = this.details(data.start, theme);
+		const brief = data.start.brief.split("\n");
+		if (!expanded) {
+			box.addChild(this.hint(details.length + brief.length, theme));
 			return box;
 		}
-		if (data.kind === "tool") {
-			this.toolLines(box, data.lines, options.expanded, theme);
-			return box;
-		}
-		this.textBody(box, data.lines.join("\n"), options.expanded, theme);
+		for (const line of details) box.addChild(new Text(line, 0, 0));
+		box.addChild(new Spacer(1));
+		box.addChild(new Markdown(data.start.brief, 0, 0, getMarkdownTheme(), {
+			color: (value) => theme.fg("customMessageText", value),
+		}));
 		return box;
 	}
 
-	/** The consultant and the kind, on every card and in every state. */
-	private author(data: ConsultStepData, theme: Theme): Text {
-		const label = `${data.consultant} · ${ConsultStepRenderer.KIND_LABEL[data.kind]}`;
-		return new Text(theme.fg("customMessageLabel", theme.bold(label)), 0, 0);
+	/** consultant, model, timeout per run; then files and continuation. */
+	private summary(start: ConsultStartInfo, theme: Theme): string {
+		const parts = start.runs.map((run) =>
+			theme.fg("accent", run.consultant) +
+			theme.fg("muted", `${run.model ? ` ${run.model}` : ""} ${run.timeoutS}s`));
+		if (start.files.length > 0) {
+			const count = start.files.length;
+			parts.push(theme.fg("muted", `${count} file${count === 1 ? "" : "s"}`));
+		}
+		if (start.continuedFrom) {
+			parts.push(theme.fg("muted", `← ${start.continuedFrom}`));
+		}
+		return parts.join(theme.fg("muted", " · "));
 	}
 
-	private toolLines(
-		box: Box,
-		lines: readonly string[],
+	private details(start: ConsultStartInfo, theme: Theme): string[] {
+		const row = (key: string, value: string): string =>
+			theme.fg("muted", key.padEnd(7)) + theme.fg("toolOutput", value);
+		return [
+			row("cwd", start.cwd),
+			row("brief", start.briefPath),
+			...start.files.map((file, index) => row(index === 0 ? "files" : "", file)),
+		];
+	}
+
+	/** A tool card: a pi tool row, titled by the consultant when it is known. */
+	private toolCard(
+		data: ConsultActivityData,
 		expanded: boolean,
 		theme: Theme,
-	): void {
+	): Box {
+		const lines = data.lines
+			.map((line) => this.unprefixed(data.consultant, line));
+		const background = lines.some((line) => this.failed(line))
+			? "toolErrorBg" : "toolSuccessBg";
+		const box = new Box(1, 1, (text) => theme.bg(background, text));
+		if (data.consultant) {
+			box.addChild(new Text(
+				theme.fg("accent", theme.bold(data.consultant)), 0, 0));
+		}
 		const shown = expanded
 			? lines : lines.slice(0, ConsultStepRenderer.COLLAPSED_TOOL_LINES);
 		for (const line of shown) {
@@ -74,46 +140,73 @@ export class ConsultStepRenderer {
 		if (!expanded && lines.length > shown.length) {
 			box.addChild(this.hint(lines.length - shown.length, theme));
 		}
+		return box;
 	}
 
-	/** A tool line: its name is bold, its argument muted, and a failure
-	 *  carries a glyph as well as the error color. */
+	/** A prose card: pi's custom-message box for a non-agent author. */
+	private textCard(
+		data: ConsultActivityData,
+		expanded: boolean,
+		theme: Theme,
+	): Box {
+		const box = new Box(1, 1, (text) => theme.bg("customMessageBg", text));
+		if (data.consultant) {
+			box.addChild(new Text(
+				theme.fg("customMessageLabel", `\x1b[1m[${data.consultant}]\x1b[22m`),
+				0,
+				0,
+			));
+			box.addChild(new Spacer(1));
+		}
+		const lines = data.lines.join("\n").split("\n");
+		const shown = expanded
+			? lines : lines.slice(0, ConsultStepRenderer.COLLAPSED_TEXT_LINES);
+		box.addChild(new Markdown(shown.join("\n"), 0, 0, getMarkdownTheme(), {
+			color: (value) => theme.fg("customMessageText", value),
+		}));
+		if (!expanded && lines.length > shown.length) {
+			box.addChild(this.hint(lines.length - shown.length, theme));
+		}
+		return box;
+	}
+
+	/** The overflow notice: one muted status line, like pi's own. */
+	private moreCard(data: ConsultActivityData, theme: Theme): Text {
+		const line = this.unprefixed(data.consultant, data.lines[0] ?? "");
+		const text = data.consultant ? `${data.consultant}: ${line}` : line;
+		return new Text(theme.fg("muted", text), 1, 0);
+	}
+
+	/** One tool line in pi's call style: bold name, muted argument, and a
+	 *  failure color instead of a glyph. */
 	private toolLine(line: string, theme: Theme): string {
-		if (/^(failed:|exit \d+)/.test(line)) {
-			return `${theme.fg("error", "✗")} ${theme.fg("customMessageText", line)}`;
+		if (this.failed(line)) return theme.fg("error", line);
+		if (line.startsWith("$ ")) {
+			return theme.fg("toolTitle", theme.bold(line));
 		}
 		const space = line.indexOf(" ");
 		if (space === -1) {
-			return theme.fg("customMessageText", theme.bold(line));
+			return theme.fg("toolTitle", theme.bold(line));
 		}
-		return `${theme.fg("customMessageText", theme.bold(line.slice(0, space)))} ` +
+		return `${theme.fg("toolTitle", theme.bold(line.slice(0, space)))} ` +
 			theme.fg("muted", line.slice(space + 1));
 	}
 
-	/** Streamed answer text: plain lines collapsed, Markdown expanded. */
-	private textBody(
-		box: Box,
-		text: string,
-		expanded: boolean,
-		theme: Theme,
-	): void {
-		if (expanded) {
-			box.addChild(new Markdown(text, 0, 0, getMarkdownTheme()));
-			return;
-		}
-		const lines = text.split("\n");
-		const shown = lines.slice(0, ConsultStepRenderer.COLLAPSED_TEXT_LINES);
-		for (const line of shown) {
-			box.addChild(new Text(theme.fg("customMessageText", line), 0, 0));
-		}
-		if (lines.length > shown.length) {
-			box.addChild(this.hint(lines.length - shown.length, theme));
-		}
+	private failed(line: string): boolean {
+		return /^(failed:|exit \d+)/.test(line);
+	}
+
+	/** Drop the consultant prefix the streams carry, so saved and new
+	 *  cards render the same. */
+	private unprefixed(consultant: string | undefined, line: string): string {
+		if (!consultant) return line;
+		const prefix = `${consultant}: `;
+		return line.startsWith(prefix) ? line.slice(prefix.length) : line;
 	}
 
 	private hint(remaining: number, theme: Theme): Text {
 		return new Text(
-			theme.fg("muted", `… (${remaining} more lines, `) +
+			theme.fg("muted", `... (${remaining} more lines, `) +
 				keyHint("app.tools.expand", "to expand") +
 				theme.fg("muted", ")"),
 			0,
@@ -121,17 +214,49 @@ export class ConsultStepRenderer {
 		);
 	}
 
-	private valid(data: unknown): data is ConsultStepData {
-		if (typeof data !== "object" || data === null) return false;
+	/** v2 data as is; a saved v1 card always named its consultant. */
+	private normalized(data: unknown): ConsultStepData | undefined {
+		if (typeof data !== "object" || data === null) return undefined;
 		const value = data as Record<string, unknown>;
-		if (value.v !== 1) return false;
-		if (typeof value.consultId !== "string" || typeof value.consultant !== "string") {
-			return false;
+		if (value.v !== 1 && value.v !== 2) return undefined;
+		if (typeof value.consultId !== "string") return undefined;
+		if (value.v === 2 && value.kind === "start") {
+			return this.validStart(value.start) ? (data as ConsultStartData) : undefined;
 		}
 		if (value.kind !== "tool" && value.kind !== "text" && value.kind !== "more") {
-			return false;
+			return undefined;
 		}
-		return Array.isArray(value.lines)
-			&& value.lines.every((line) => typeof line === "string");
+		const consultant = value.consultant;
+		if (value.v === 1
+			? typeof consultant !== "string"
+			: consultant !== undefined && typeof consultant !== "string") {
+			return undefined;
+		}
+		if (!this.strings(value.lines)) return undefined;
+		return {
+			v: 2,
+			consultId: value.consultId,
+			kind: value.kind,
+			consultant: consultant as ConsultantName | undefined,
+			lines: value.lines,
+		};
+	}
+
+	private validStart(start: unknown): start is ConsultStartInfo {
+		if (typeof start !== "object" || start === null) return false;
+		const value = start as Record<string, unknown>;
+		return typeof value.target === "string" && typeof value.cwd === "string"
+			&& typeof value.briefPath === "string" && typeof value.brief === "string"
+			&& (value.continuedFrom === undefined || typeof value.continuedFrom === "string")
+			&& this.strings(value.files)
+			&& Array.isArray(value.runs) && value.runs.every((run) =>
+				typeof run === "object" && run !== null
+				&& typeof run.consultant === "string" && typeof run.timeoutS === "number"
+				&& ((run as Record<string, unknown>).model === undefined
+					|| typeof (run as Record<string, unknown>).model === "string"));
+	}
+
+	private strings(value: unknown): value is string[] {
+		return Array.isArray(value) && value.every((line) => typeof line === "string");
 	}
 }

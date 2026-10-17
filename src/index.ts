@@ -15,7 +15,6 @@ import { AnswerFormatter } from "./answer-formatter.ts";
 import { ArtifactStore } from "./artifact-store.ts";
 import { BridgeLauncher } from "./bridge-launcher.ts";
 import { BriefComposer } from "./brief-composer.ts";
-import { ConsultCollectTool } from "./consult-collect-tool.ts";
 import { ConsultCommands } from "./consult-commands.ts";
 import { ConsultConfig } from "./consult-config.ts";
 import { ConsultContract } from "./consult-contract.ts";
@@ -67,12 +66,10 @@ export class ConsultExtension {
 		const artifacts = new ArtifactStore(config.artifactDir);
 		const records = new ConsultRecordStore(artifacts);
 		const identity = new SessionIdentity();
-		const supervisor = new ConsultSupervisor(
-			runner,
-			records,
-			new ConsultDelivery(pi, identity),
-		);
+		const effort = new AgentEffortPolicy(config);
 		const formatter = new AnswerFormatter(config.output);
+		const delivery = new ConsultDelivery(pi, identity, formatter, effort);
+		const supervisor = new ConsultSupervisor(runner, records, delivery);
 		const broker = new ConsultRequestBroker(
 			new ConsultDriveDispatcher({ pi, supervisor }),
 			config.drive.deadlineMs,
@@ -83,7 +80,6 @@ export class ConsultExtension {
 			config.drive,
 		);
 
-		const effort = new AgentEffortPolicy(config);
 		effort.register(pi);
 		new AuditorSession().register(pi);
 
@@ -94,6 +90,8 @@ export class ConsultExtension {
 			ledger,
 			index,
 			artifacts,
+			identity,
+			records,
 			screen: new SecretScreen(),
 			composer: new BriefComposer(),
 			formatter,
@@ -102,8 +100,6 @@ export class ConsultExtension {
 			bridge,
 			effort,
 		}).register(pi);
-		new ConsultCollectTool({ supervisor, records, index, formatter, foreground, effort })
-			.register(pi);
 		new ConsultTerminateTool(supervisor, effort).register(pi);
 		new ConsultReplyTool(broker, new SecretScreen()).register(pi);
 		new ImplementationGate(ledger, classifier, contract).register(pi);
@@ -115,6 +111,7 @@ export class ConsultExtension {
 			artifacts,
 			records,
 			identity,
+			delivery,
 			bridge,
 			contract,
 			config,

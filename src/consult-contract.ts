@@ -15,7 +15,7 @@ import type { GateSnapshot } from "./receipt-ledger.ts";
 
 export class ConsultContract {
 	/** Bump when the acknowledgement terms change; old receipts stop counting. */
-	static readonly VERSION = 9;
+	static readonly VERSION = 10;
 
 	/** The acknowledgement text the agent accepts by calling `pre_consult`. */
 	contractText(): string {
@@ -35,9 +35,10 @@ export class ConsultContract {
 			"  tree, and pi executes every change itself.",
 			"- Interrupting a consult (Escape, or a queued user message) does not cancel",
 			"  it: the call returns with its consult id and the consultation keeps",
-			"  running in the background. Collect the finished result with",
-			"  consult_collect before continuing it; consult_terminate is the only way",
-			"  to end one early.",
+			"  running in the background. When it finishes, its full result arrives in",
+			"  this session as a pi-consult message carrying the answer and the consult",
+			"  id; do not poll for it, and continue it only after it arrives.",
+			"  consult_terminate is the only way to end one early.",
 			"- A consultant may ask pi a question through a local bridge; the request",
 			"  arrives as a message naming a requestId and pi answers it with",
 			"  consult_reply. That answer leaves the machine, so it is screened for",
@@ -98,7 +99,7 @@ export class ConsultContract {
 			"- When the consultant's verification answer ends with",
 			"    Consultant verdict: approved - <one-line reason>.",
 			"  it has handed control back to you. If no consult is running or",
-			"  uncollected and no step of the plan remains, end your final reply with",
+			"  undelivered and no step of the plan remains, end your final reply with",
 			"  this line, alone and as its last line, naming that consult:",
 			"    Consultation cycle: complete - <consult id> verified.",
 			"  pi-consult then restores your previous thinking level, but only if that",
@@ -154,8 +155,8 @@ export class ConsultContract {
 			"  a run to it ended unavailable or with an auth, quota, or billing",
 			"  failure, or a consult to it and one retry both failed with an error or",
 			"  timeout in this cycle. A slow, detached, or interrupted consult has not",
-			"  expired; collect it. While one enabled consultant has not expired, it is",
-			"  the rung.",
+			"  expired; wait for its delivered result. While one enabled consultant has",
+			"  not expired, it is the rung.",
 			"- The independent agent is a fresh pi-teams teammate spawned with",
 			"  team_spawn for this audit alone, never team_attach and never a session",
 			"  that already holds the task. Start its task with this line, then hand",
@@ -217,10 +218,6 @@ export class ConsultContract {
 				"prefer a single consultant for most tasks and use both only when the " +
 				"task demands two independent perspectives. Returns the answer and a " +
 				"continuation id.",
-		);
-		lines.push(
-			"- consult_collect: collect a running or finished consult by id (or " +
-				"'last'); the receipt carries the provider session ids used by continue.",
 		);
 		lines.push(
 			"- consult_terminate: end a background consult early; nothing else stops one.",
@@ -297,7 +294,7 @@ export class ConsultContract {
 			"the user's explicit request, and you say so. Write the Consultation " +
 			"cycle: complete line, as your final line, only after an approved " +
 			"consultant or independent verdict and with no consult or audit running " +
-			"or uncollected."
+			"or undelivered."
 		);
 	}
 

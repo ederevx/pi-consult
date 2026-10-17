@@ -147,9 +147,9 @@ test("pre_consult: a nested call is rejected", async () => {
 	assertEq(threw, true);
 });
 
-test("pre_consult: contract v9 states the hold, the verdict and the completion line", async () => {
+test("pre_consult: contract v10 states the hold, the verdict and the completion line", async () => {
 	const text = await contractText();
-	assertEq(ConsultContract.VERSION, 9);
+	assertEq(ConsultContract.VERSION, 10);
 	assertIncludes(text, "holds your own thinking effort");
 	assertIncludes(text, "It never leaves you at high, xhigh, or max");
 	assertIncludes(text, "you own the implementation and the\n  execution");
@@ -167,6 +167,7 @@ test("pre_consult: the catalogue names the auditor exception and the marker rule
 	assertIncludes(text, "keeps edit, write, and powershell blocked");
 	assertIncludes(text, "reads every marker line in this contract only as plain text");
 	assertIncludes(text, "never quote, indent, or fence it");
+	assertNotIncludes(text, "consult_collect", "the dropped tool is gone from the catalogue");
 });
 
 test("pre_consult: the contract sends roadblocks back to the consultant", async () => {
@@ -185,7 +186,7 @@ test("pre_consult: the contract routes audits up a ladder", async () => {
 	assertIncludes(text, "Independent audit unavailable - <one-line reason>.");
 	assertIncludes(text, "the fallback never covers an audit");
 	assertIncludes(text, "Consultant fallback: no consultant available - <one-line reason>.");
-	assertIncludes(text, "A slow, detached, or interrupted consult has not\n  expired; collect it.");
+	assertIncludes(text, "A slow, detached, or interrupted consult has not\n  expired; wait for its delivered result.");
 	assertIncludes(text, "Audit by pi at the user's request - <the request, in brief>.");
 	assertIncludes(text, "directly and explicitly asks you to do the");
 	assertIncludes(text, "is a consult. Only a direct request");

@@ -1,18 +1,57 @@
 /**
  * pi-consult — the consultant transcript cards.
  *
- * Owns one foreground `consult` call's stream of step entries: it merges a
- * burst of tool uses into one card, closes a card when the consultant
- * starts writing answer text, and stops once the call ends. Every card is
- * a durable, model-invisible custom entry, so it scrolls with the
+ * Owns one `consult` call's stream of step entries: it opens with the
+ * invocation card, merges a burst of tool uses into one card, closes a card
+ * when the consultant starts writing answer text, and stops when a
+ * foreground call returns or when a detached call's run settles. Every card
+ * is a durable, model-invisible custom entry, so it scrolls with the
  * transcript and collapses with pi's own expand toggle.
  */
 
-import type { ConsultantName } from "./contracts.ts";
+import type { ConsultTarget, ConsultantName } from "./contracts.ts";
 import type { StepObserver } from "./consult-invocation.ts";
 
+/** One run's settings, as the start card shows them. */
+export interface ConsultStartRun {
+	consultant: ConsultantName;
+	model?: string;
+	timeoutS: number;
+}
+
+/** What the invocation was asked to do: the start card's body. */
+export interface ConsultStartInfo {
+	target: ConsultTarget;
+	continuedFrom?: string;
+	cwd: string;
+	briefPath: string;
+	brief: string;
+	files: string[];
+	runs: ConsultStartRun[];
+}
+
+/** The invocation's opening card. */
+export interface ConsultStartData {
+	v: 2;
+	consultId: string;
+	kind: "start";
+	start: ConsultStartInfo;
+}
+
+/** One activity card; the consultant is named only when two share the stream. */
+export interface ConsultActivityData {
+	v: 2;
+	consultId: string;
+	consultant?: ConsultantName;
+	kind: "tool" | "text" | "more";
+	lines: string[];
+}
+
 /** One transcript card's stored data; versioned so it can change later. */
-export interface ConsultStepData {
+export type ConsultStepData = ConsultStartData | ConsultActivityData;
+
+/** A card saved before v2: every card named its consultant. */
+export interface ConsultStepDataV1 {
 	v: 1;
 	consultId: string;
 	consultant: ConsultantName;
@@ -36,12 +75,14 @@ export class ConsultStepCards implements StepObserver {
 	private static readonly MAX_TOOL_LINES = 8;
 	private static readonly MAX_TEXT_BYTES = 2048;
 	private static readonly MAX_LINE_BYTES = 400;
+	private static readonly MAX_BRIEF_BYTES = 4096;
 	private static readonly MAX_CARDS = 40;
 
 	private readonly consultId: string;
 	private readonly append: AppendFn;
 	private readonly coalesceMs: number;
 	private readonly states = new Map<ConsultantName, ConsultantState>();
+	private tagged = false;
 	private closed = false;
 
 	constructor(
@@ -54,10 +95,28 @@ export class ConsultStepCards implements StepObserver {
 		this.coalesceMs = coalesceMs;
 	}
 
+	/** Open the stream with the invocation's card; a consult with two
+	 *  consultants names the author on every later card. */
+	start(info: ConsultStartInfo): void {
+		if (this.closed) return;
+		this.tagged = info.runs.length > 1;
+		this.write({
+			v: 2,
+			consultId: this.consultId,
+			kind: "start",
+			start: {
+				...info,
+				brief: this.clip(info.brief, ConsultStepCards.MAX_BRIEF_BYTES),
+				files: info.files.map((file) =>
+					this.clip(file, ConsultStepCards.MAX_LINE_BYTES)),
+			},
+		});
+	}
+
 	/** A tool use, merged into the open card until its window closes. */
 	event(name: ConsultantName, line: string): void {
 		if (this.closed) return;
-		const clean = line.replace(/\s+/g, " ").trim();
+		const clean = this.unprefixed(name, line.replace(/\s+/g, " ").trim());
 		if (!clean) return;
 		const state = this.stateFor(name);
 		this.flushText(name);
@@ -86,8 +145,8 @@ export class ConsultStepCards implements StepObserver {
 		this.closed = true;
 	}
 
-	/** The call detached: flush tools and the trailing text, because the
-	 *  answer is not in the result. */
+	/** The detached run settled: flush tools and the trailing text, because
+	 *  the answer is not in the result. */
 	detach(): void {
 		if (this.closed) return;
 		for (const name of [...this.states.keys()]) {
@@ -122,13 +181,9 @@ export class ConsultStepCards implements StepObserver {
 	private flushMore(): void {
 		for (const [name, state] of this.states) {
 			if (state.suppressed === 0) continue;
-			this.write({
-				v: 1,
-				consultId: this.consultId,
-				consultant: name,
-				kind: "more",
-				lines: [`+${state.suppressed} more steps not shown`],
-			});
+			this.write(this.card(name, "more", [
+				`+${state.suppressed} more steps not shown`,
+			]));
 		}
 	}
 
@@ -144,13 +199,23 @@ export class ConsultStepCards implements StepObserver {
 			return;
 		}
 		state.cards += 1;
-		this.write({
-			v: 1,
+		this.write(this.card(name, kind, lines));
+	}
+
+	/** One activity card, naming its author only in a shared stream. */
+	private card(
+		name: ConsultantName,
+		kind: ConsultActivityData["kind"],
+		lines: string[],
+	): ConsultActivityData {
+		const data: ConsultActivityData = {
+			v: 2,
 			consultId: this.consultId,
-			consultant: name,
 			kind,
 			lines,
-		});
+		};
+		if (this.tagged) data.consultant = name;
+		return data;
 	}
 
 	/** Write one card; a host that cannot take it closes the stream
@@ -181,6 +246,13 @@ export class ConsultStepCards implements StepObserver {
 			this.states.set(name, state);
 		}
 		return state;
+	}
+
+	/** Drop the consultant prefix the streams carry, so saved and new
+	 *  cards render the same. */
+	private unprefixed(name: ConsultantName, line: string): string {
+		const prefix = `${name}: `;
+		return line.startsWith(prefix) ? line.slice(prefix.length) : line;
 	}
 
 	/** Keep the head of an over-long string, marking the cut. */
