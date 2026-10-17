@@ -151,7 +151,7 @@ test("step renderer: collapsed previews and expanded bodies", () => {
 	assertIncludes(toolCollapsed, "<toolTitle:*one*>");
 	assertIncludes(toolCollapsed, "<toolTitle:*three*>");
 	assertNotIncludes(toolCollapsed, "four");
-	assertIncludes(toolCollapsed, "... (2 more lines,");
+	assertIncludes(toolCollapsed, "… (2 more lines,");
 
 	const toolExpanded = card("tool", toolLines, true).join("\n");
 	assertIncludes(toolExpanded, "five");
@@ -161,10 +161,21 @@ test("step renderer: collapsed previews and expanded bodies", () => {
 	const textCollapsed = card("text", [text], false).join("\n");
 	assertIncludes(textCollapsed, "said 4");
 	assertNotIncludes(textCollapsed, "said 5");
-	assertIncludes(textCollapsed, "... (6 more lines,");
+	assertIncludes(textCollapsed, "… (6 more lines,");
 	const textExpanded = card("text", [text], true).join("\n");
 	assertIncludes(textExpanded, "said 10");
 	assertNotIncludes(textExpanded, "more lines");
+});
+
+test("step renderer: the collapsed hint uses the single-column ellipsis", () => {
+	for (const [kind, lines] of [
+		["tool", ["one", "two", "three", "four"]],
+		["text", ["a\nb\nc\nd\ne"]],
+	] as const) {
+		const collapsed = card(kind, [...lines], false).join("\n");
+		assertIncludes(collapsed, "… (", `the ${kind} hint opens with the ellipsis`);
+		assertNotIncludes(collapsed, "... (", `the ${kind} hint does not use three ASCII dots`);
+	}
 });
 
 test("step renderer: the more card is a muted notice naming its consultant", () => {
