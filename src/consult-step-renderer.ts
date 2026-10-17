@@ -11,10 +11,9 @@
  * pi draws a message that was not written by the agent: the `[claude]`
  * custom-message box. That keeps the stream native-looking while never being
  * mistaken for the agent's own tool rows or prose. Collapsed shows a short
- * preview with the standard expand hint on a line outside the card's
- * background, so the ellipsis stays without a background of its own; the
- * global expand toggle shows the rest. The host adds the leading spacer, so
- * a card renders only its own
+ * preview with the standard expand hint inside the same background, so the
+ * card stays one covered block; the global expand toggle shows the rest. The
+ * host adds the leading spacer, so a card renders only its own
  * content.
  */
 
@@ -25,7 +24,6 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import {
 	Box,
-	Container,
 	Markdown,
 	Spacer,
 	Text,
@@ -81,7 +79,7 @@ export class ConsultStepRenderer {
 		data: ConsultStartData,
 		expanded: boolean,
 		theme: Theme,
-	): Container {
+	): Box {
 		const box = new Box(1, 1, (text) => theme.bg("customMessageBg", text));
 		box.addChild(new Text(
 			theme.fg("customMessageLabel", `\x1b[1m[consult ${data.consultId}]\x1b[22m`),
@@ -133,7 +131,7 @@ export class ConsultStepRenderer {
 		data: RenderActivityData,
 		expanded: boolean,
 		theme: Theme,
-	): Container {
+	): Box {
 		const lines = data.lines
 			.map((line) => this.unprefixed(data.consultant, line));
 		const background = lines.some((line) => this.failed(line))
@@ -154,7 +152,7 @@ export class ConsultStepRenderer {
 		data: RenderActivityData,
 		expanded: boolean,
 		theme: Theme,
-	): Container {
+	): Box {
 		const box = new Box(1, 1, (text) => theme.bg("customMessageBg", text));
 		box.addChild(new Text(
 			theme.fg("customMessageLabel", `\x1b[1m[${this.author(data)}]\x1b[22m`),
@@ -211,16 +209,13 @@ export class ConsultStepRenderer {
 		return line.startsWith(prefix) ? line.slice(prefix.length) : line;
 	}
 
-	/** Assemble a card: the background box, then — when lines are hidden —
-	 *  the expand hint on its own line outside that background, keeping the
-	 *  ellipsis without a background of its own. */
-	private assemble(box: Box, remaining: number, theme: Theme): Container {
-		const card = new Container();
-		card.addChild(box);
+	/** Assemble a card: the background box, with the expand hint added inside
+	 *  it when lines are hidden, so the whole card stays one covered block. */
+	private assemble(box: Box, remaining: number, theme: Theme): Box {
 		if (remaining > 0) {
-			card.addChild(new Text(this.hint(remaining, theme), 1, 0));
+			box.addChild(new Text(this.hint(remaining, theme), 0, 0));
 		}
-		return card;
+		return box;
 	}
 
 	private hint(remaining: number, theme: Theme): string {
