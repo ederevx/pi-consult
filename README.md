@@ -154,12 +154,12 @@ Claude Code streams its answer token by token (`--output-format stream-json
 processor emits `item.updated` only for plan changes and renders agent
 messages on completion — so a Codex window shows the live activity Codex does
 report: commands as they start, MCP calls, searches, reasoning summaries,
-plan updates, file changes, non-fatal warnings, and a non-zero exit. Its
-answer text arrives as one event at the end. Codex's messages arrive
-complete: each one becomes a prose card, and the final message, the answer,
-is left to the result unless the call was detached. A failed MCP call is
-shown as an error on its own tool line; that is not a failure of the consult. Token-level Codex streaming
-exists only on the experimental `codex app-server` JSON-RPC transport
+plan updates, file changes, non-fatal warnings, and a non-zero exit. Codex's
+messages arrive complete: each one becomes a prose card, and the final
+message, the answer, is left to the result unless the call was detached. A
+failed MCP call is shown as an error on its own tool line; that is not a
+failure of the consult. Token-level Codex streaming exists only on the
+experimental `codex app-server` JSON-RPC transport
 (`item/agentMessage/delta`), which this extension does not use.
 
 The consult row uses pi's normal shell: one header line naming the target and
