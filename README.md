@@ -6,212 +6,6 @@ acknowledgement gate with a stated consultation judgment. In consultant mode
 the consultant owns the design and its verification; pi owns implementation
 and execution, at low thinking effort, and consults again at any roadblock.
 
-## How it works
-
-`pi-consult` registers four tools and one gate:
-
-- **`pre_consult`** — call once per session. Returns the catalogue and records
-  the acknowledgement that briefs, and any files a consultant reads, leave the
-  machine, that no secrets may be included, and of the consultation workflow:
-  judge each task (leaning toward consulting for evaluation, audit, and
-  investigative work), let the consultant own the design and its
-  verification, verify rather than repeat a consultant's investigation, carry
-  every doubt and roadblock back through continuation, and route audits of
-  consultant work to a consultant. Its `promptGuidelines` keep that
-  workflow in the system prompt after a compaction.
-- **`consult`** — sends a self-contained brief to `claude`, `codex`, or both
-  concurrently and returns their answers plus a continuation id. The agent
-  chooses which consultant(s) and how many consults to run — preferring a
-  single consultant, with `both` only when the task demands two independent
-  perspectives — and repeats or continues as useful. The result uses pi's
-  standard preview and expand toggle, with live activity in cards below it;
-  the model-facing result text is unchanged. Escape or a queued user message
-  **detaches** the call rather than cancelling it: the tool returns a pending
-  receipt naming the consult id and the consultants keep working. When it
-  finishes, its full result is delivered into that session as a
-  `pi-consult-result` message.
-- **`consult_terminate`** — the only path that ends a consultation early: it
-  aborts that consult's consultant processes and records the result.
-- **`consult_reply`** — answers a request a consultant made through the local
-  bridge, by its `requestId`, so the blocked consultant can continue. The
-  answer leaves the machine and is screened for secrets exactly like a brief.
-- **The gate** — a `tool_call` handler that blocks implementation work (`edit`,
-  `write`, `bash`, `powershell`, and any tool outside the operator's allow list)
-  **only until `pre_consult` has acknowledged the current contract in the
-  session**. After that, pi-consult blocks nothing — no consult receipt, no
-  effort declaration, no waiver — except in a session spawned as a pi-consult
-  independent auditor, where `edit`, `write`, and `powershell` stay blocked.
-  Reads (`read`, `grep`, `find`, `ls`) and the
-  pi-consult tools are never blocked. The acknowledgement is read session-wide,
-  so compaction, reload, resume, and `/tree` navigation keep it; a new session
-  starts closed until `pre_consult` runs once.
-
-### Judgment and verification
-
-The catalogue instructs the agent, and the tool's prompt guidelines repeat it:
-
-- Before the first implementation call of a task, the agent states its
-  consultation judgment visibly:
-  `Consultation decision: needed - <reason>.` or
-  `Consultation decision: not needed - <reason>.` The judgment is never
-  enforced; consulting stays the agent's stated decision.
-- Thinking work is offloaded: evaluation tasks (judging a diff, plan, design,
-  result, or set of options against criteria), audit tasks (checking every
-  member of a set for a property such as coverage, conformance, consistency,
-  or parity), and investigative tasks (research, root-cause diagnosis,
-  feasibility, behavior that cannot be observed locally) lean toward
-  consulting one consultant. Reasoning over evidence a consultant can read or
-  be handed is offloaded; work that needs local execution (builds, test runs,
-  devices, interactive sessions) the agent runs itself, then consults on the
-  interpretation. Evaluating a consultant's own answer is verification and
-  goes back through `continue`. `not needed` fits a short lookup the code,
-  documents, or evidence in view already settle, or a check a local command
-  decides outright, and the decision line says so. This is guidance, not
-  enforcement.
-- The agent does **not** redo a consultant's investigation. It verifies the
-  claims the change relies on — reading the cited files and lines, checking
-  names, signatures, and paths exist, running the relevant tests — and
-  reports that evidence as it came out. Whether the work is correct,
-  complete, best, or worth shipping is the consultant's verdict: finished
-  work goes back through `continue` for it.
-- Every doubt goes back to the consultant through `continue` with the consult
-  id, not to a silent parallel investigation. A **roadblock** — a failed
-  check, a step the plan does not cover, an unexpected result, or an
-  ambiguity — **must** go back the same way before the agent works around it.
-  Deviations from the recommendation are reported to the user and verified by
-  the consultant.
-- An audit of consultant-derived work climbs a ladder and never skips a rung:
-  1. **A consultant**, which ends a verification answer with
-     `Consultant verdict: approved - <reason>.` or `… changes needed - <reason>.`
-  2. **A dedicated independent agent**, only when every enabled consultant
-     has expired: the probe found it unavailable, a run ended `unavailable`,
-     `auth`, or with a quota or billing failure, or a consult and one retry
-     failed with an error or timeout in the cycle. pi spawns a fresh pi-teams
-     teammate with `team_spawn` whose task starts
-     `pi-consult independent audit - <scope>.` and carries the evidence. The
-     teammate runs at pi's pre-cycle thinking level, cannot use `edit`,
-     `write`, or `powershell`, and ends its report with
-     `Independent audit verdict: approved|changes needed - <reason>.`
-     pi-consult reads that verdict from the report pi-teams logs, not from
-     pi's claim. Markers count only as plain lines: indented, quoted, or
-     fenced copies are ignored, and a completion or verdict line must be the
-     last non-blank line. The auditor is independent of the implementing
-     session, not of its model: it runs on pi's model and provider.
-  3. **pi itself**, only on the user's explicit request
-     (`Audit by pi at the user's request - <request>.`).
-
-  Without pi-teams, or after a failed spawn or verdict-less report, pi stops
-  with `Independent audit unavailable - <reason>.` and leaves the work
-  unaudited. `Consultant fallback: no consultant available - <reason>.` covers
-  roadblocks only. These are contract commitments, not gate checks; pi-consult
-  verifies the markers, the expiry records, and the teammate report, not the
-  quality of a brief.
-- Most tasks consult **one** consultant; `target: "both"` is reserved for
-  tasks that genuinely demand two independent perspectives (cross-validating
-  a high-stakes design, comparing incompatible approaches), never as a
-  default.
-
-### pi's thinking level
-
-From the first consult of a task, pi-consult holds pi's own thinking level at
-`low` (`medium` where the model has no `low`). On a model that offers nothing
-below `high`, it warns and reports the hold as unsupported instead of claiming
-a lower level. During a hold any raise, including the automatic one a model
-switch makes, is lowered again; only the user can end a hold early, with
-`/consult-effort release` (`/consult-effort` alone shows its state). The hold
-ends, and the level pi had when the cycle began comes back, when one of these
-happens:
-
-- pi's final reply of a cleanly settled run ends with
-  `Consultation cycle: complete - <consult id> verified.`, **the cited
-  consult's answer ends with the approved verdict**, it started after pi's last
-  `edit`, `write`, `bash`, or `powershell` call, and no consult is running or
-  undelivered;
-- or, once every enabled consultant has expired, it ends with
-  `Consultation cycle: complete - <teammate id> independently verified.`,
-  that teammate was spawned as the independent auditor after the expiry, its
-  logged report ends with the approved verdict, and pi has not edited,
-  written, or run a command since spawning it;
-- pi states `Consultant fallback: no consultant available - <reason>.` on its
-  own line and pi-consult's records agree: every enabled consultant has
-  expired (see the audit ladder), and nothing is owed (a `pre_consult` probe
-  with the same result restores too);
-- pi states `Audit by pi at the user's request - <request>.` on its own line.
-
-Markers inside code fences or blockquotes, or quoted mid-sentence, are
-ignored. The cycle is recorded on the session branch, so reload, compaction,
-and `/tree` navigation carry it; leaving a branch mid-cycle restores the level.
-`off`, `minimal`, and `low` are left alone, the configured default for new
-sessions is not changed, and consultant `effort` settings are unaffected.
-`/consult-status` and `/consult-effort` also report the current rung of the
-audit ladder.
-
-### Live output
-
-Claude Code streams its answer token by token (`--output-format stream-json
---include-partial-messages`), so its window grows while it writes. Codex's
-`exec --json` protocol reports an agent message once, complete — its event
-processor emits `item.updated` only for plan changes and renders agent
-messages on completion — so a Codex window shows the live activity Codex does
-report: commands as they start, MCP calls, searches, reasoning summaries,
-plan updates, file changes, non-fatal warnings, and a non-zero exit. Codex's
-messages arrive complete: each one becomes a prose card, and the final
-message, the answer, is left to the result unless the call was detached. A
-failed MCP call is shown as an error on its own tool line; that is not a
-failure of the consult. Token-level Codex streaming exists only on the
-experimental `codex app-server` JSON-RPC transport
-(`item/agentMessage/delta`), which this extension does not use.
-
-The consult row uses pi's normal shell: one header line naming the target and
-brief, then one fixed status line per consultant while the call runs, and pi's
-ten-line preview of the answer once it finishes. Below the row, the call opens
-with one `[consult <id>]` card. Collapsed, it shows a single summary line: each
-consultant with its model and timeout, the file count, and any continuation.
-Expanded, it adds the working directory, the saved brief's path, the files, and
-the brief itself. The consultant's own stream follows as one card per tool-use
-burst or block of prose. Every activity card identifies its consultant,
-including single-target calls. A tool card starts with a bold `claude · tool`
-or `codex · tool` header and retains the success or error background, the
-bold tool name, and the muted argument. A prose card uses pi's
-custom-message box with an always-visible `[claude]` or `[codex]` label.
-Overflow notices name their consultant, for example
-`claude: +3 more steps not shown`. Saved v1 cards retain their attribution;
-older v2 cards without a recorded author show the consult id and "author
-unavailable". All cards are collapsed by default and opened with
-pi's standard expand toggle. They are TUI-only, stay out of the model context,
-and are bounded per consultant; the row and the cards are views, so the
-model-facing snapshot is unchanged. Steering or Escape detaches the call but
-not its stream: the cards keep arriving until the background run settles. The
-stream then closes with any trailing prose. The pending tool receipt does not
-carry the answer; the later `pi-consult-result` message does. Cards stop for
-good if pi switches to another session.
-
-### When the agent stops
-
-The extension watches the model's own results (`message_end`,
-`after_provider_response`, `session_compact_failed`) and classifies why the
-agent could not continue — context overflow, output-token limit, quota, auth,
-rate limit, or a provider error. It reports **once, at `agent_settled`**, after
-pi's own retries and compaction have had their chance: a notification with one
-concrete next action, a status-bar line, an audit entry
-(`pi-consult/availability`), and a hidden `nextTurn` note telling the resumed
-agent to re-read the files it was changing, not to redo a consultant's
-investigation, and to send doubts back with the continuation id. It never
-triggers a turn itself.
-
-While a `consult` runs, each consultant's live activity appears in the tool
-window (see Live output): Claude's answer streams as it is written, Codex's
-activity is reported as it happens and its answer arrives at the end. Escape
-or a queued user message detaches the call: it returns a pending receipt at
-once, the consultants keep running behind the scenes, and their cards keep
-arriving below the conversation. When it finishes, its full result (status,
-answer, answer paths, consult id) is delivered into the session that started
-it as a `pi-consult-result` message. That message continues the agent if the
-call was detached by a steer or a consultant request, and waits for the next
-prompt after Escape or a termination. If pi is in another session when a
-consult finishes, the result is delivered when it returns. `consult_terminate`
-is the only way to end one early.
-
 ## Install
 
 ```bash
@@ -289,6 +83,119 @@ common secret paths, and Codex runs with `-s read-only` (on a continuation,
 `-c sandbox_mode="read-only"`). A report of file changes from Codex is
 surfaced as a warning.
 
+## How it works
+
+`pi-consult` registers four tools and one gate:
+
+- **`pre_consult`** - the acknowledgement gate. Call it once per session; it
+  returns the catalogue and records that briefs, and any file a consultant
+  reads, leave the machine, that no secrets may be included, and how to judge
+  each task. Until it succeeds, implementation tools (`edit`, `write`, `bash`,
+  `powershell`, and any tool outside the operator's allow list) are blocked.
+  After it pi-consult blocks nothing, except in a session spawned as a
+  pi-consult independent auditor, where `edit`, `write`, and `powershell` stay
+  blocked. Reads and the pi-consult tools are never blocked. The
+  acknowledgement is session-wide, so compaction, reload, resume, and `/tree`
+  navigation keep it.
+- **`consult`** - sends a self-contained brief to `claude`, `codex`, or `both`
+  and returns the answers plus a continuation id. Prefer one consultant; use
+  `both` only for two genuinely independent perspectives. The result uses pi's
+  standard preview and expand toggle, with live activity in cards below it;
+  the model-facing text is unchanged.
+- **`consult_terminate`** - the only path that ends a consultation early.
+- **`consult_reply`** - answers a consultant's bridge request by `requestId`,
+  so the blocked consultant can continue; screened for secrets like a brief.
+
+### The consultation judgment
+
+The catalogue instructs the agent, and the tool's prompt guidelines repeat it:
+
+- Before its first implementation call of a task, the agent states its
+  judgment visibly: `Consultation decision: needed - <reason>.` or
+  `Consultation decision: not needed - <reason>.` It is never enforced.
+- Evaluation, audit, and investigative tasks lean toward one consultant; work
+  that needs local execution the agent runs itself, then consults on the
+  interpretation. Evaluating a consultant's own answer is verification and
+  goes back through `continue`. `not needed` fits a lookup the code or evidence
+  in view already settles, or a check a local command decides outright.
+- The agent does not redo a consultant's investigation; it verifies the claims
+  the change relies on (files, lines, names, paths, tests) and reports the
+  evidence as it came out. Whether the work is correct, complete, or worth
+  shipping is the consultant's verdict: finished work goes back through
+  `continue`.
+- Every doubt, and every **roadblock** (a failed check, an uncovered step, an
+  unexpected result, an ambiguity), goes back through `continue` before the
+  agent works around it.
+- An audit of consultant-derived work climbs a ladder and never skips a rung:
+  1. **A consultant**, ending `Consultant verdict: approved - <reason>.` or
+     `Consultant verdict: changes needed - <reason>.`
+  2. **A fresh pi-teams teammate**, only when every enabled consultant has
+     expired; its task starts `pi-consult independent audit - <scope>.` and
+     ends `Independent audit verdict: approved|changes needed - <reason>.`
+  3. **pi itself**, only on the user's explicit request
+     (`Audit by pi at the user's request - <request>.`).
+
+  Without pi-teams, or after a failed spawn or verdict-less report, pi stops
+  with `Independent audit unavailable - <reason>.` and leaves the work
+  unaudited. `Consultant fallback: no consultant available - <reason>.` covers
+  roadblocks only.
+
+### pi's thinking level
+
+From the first consult of a task, pi-consult holds pi's thinking level at
+`low` (`medium` where the model has no `low`); on a model with nothing below
+`high` it warns and reports the hold unsupported. During a hold any raise,
+including the automatic one a model switch makes, is lowered again; only
+`/consult-effort release` ends a hold early (`/consult-effort` alone shows its
+state). The hold ends, and pi's previous level comes back, when one of these
+plain last lines earns it:
+
+- `Consultation cycle: complete - <consult id> verified.` - the cited
+  consult's answer ends with the approved verdict, it started after pi's last
+  `edit`, `write`, `bash`, or `powershell`, and no consult is running or
+  undelivered;
+- `Consultation cycle: complete - <teammate id> independently verified.` -
+  once every enabled consultant has expired, that teammate was spawned as the
+  independent auditor after the expiry, its logged report ends with the
+  approved verdict, and pi has not edited, written, or run a command since;
+- `Consultant fallback: no consultant available - <reason>.` - pi-consult's
+  records agree: every enabled consultant has expired and nothing is owed;
+- `Audit by pi at the user's request - <request>.`
+
+Markers inside code fences or blockquotes, or quoted mid-sentence, are
+ignored. The cycle is recorded on the session branch, so reload, compaction,
+and `/tree` navigation carry it; leaving a branch mid-cycle restores the
+level. `off`, `minimal`, and `low` are left alone, the configured default for
+new sessions is unchanged, and consultant `effort` settings are unaffected.
+`/consult-status` and `/consult-effort` report the current rung of the audit
+ladder.
+
+### Live output
+
+Claude streams its answer as it writes; Codex reports its activity as it
+happens and its messages arrive complete. The consult row uses pi's standard
+shell: one header line naming the target and brief, one fixed status line per
+consultant while the call runs, and pi's ten-line preview of the answer once
+it finishes. Below the row the call opens with one `[consult <id>]` card
+naming the target, model, timeout, file count, and continuation; expanded, it
+adds the working directory, the saved brief's path, the files, and the brief.
+The consultant's stream follows as one card per tool-use burst or block of
+prose, every activity card tagged `claude` or `codex`; tool cards keep their
+success or error background. All cards are collapsed by default, opened with
+pi's standard expand toggle, TUI-only, out of the model context, bounded per
+consultant, and stop for good if pi switches to another session.
+
+### When the agent stops
+
+A detached call keeps its stream: the cards keep arriving until the background
+run settles, then the stream closes with any trailing prose. The pending tool
+receipt does not carry the answer; the full result (status, answer, answer
+paths, consult id) is delivered into the starting session as a
+`pi-consult-result` message, which continues the agent after a steer or a
+consultant request and waits for the next prompt after Escape. If pi is in
+another session when it finishes, delivery waits until it returns.
+`consult_terminate` is the only way to end one early.
+
 ## The `consult` tool
 
 | Parameter | Meaning |
@@ -332,18 +239,11 @@ spawned; a suspected secret is refused, never sent.
 - `/consult-status` — show acknowledgement state and consultation history.
 - `/consult-effort` — show the thinking-level hold; `/consult-effort release`
   ends it.
-- `/consult-settings` — open pi's settings dock: the same two-column
-  `SettingsList` as pi's own `/settings`, where flags and enums cycle in place,
-  every other value opens an editor seeded with the current one, and a trailing
-  **Restore defaults** row deletes the stored overrides after a confirmation.
-  Escape closes the dock, enter or space changes the selected row, and a
-  rejected value keeps its editor open with the error reported. The command
-  line stays available too: `/consult-settings key=value`,
-  `/consult-settings list`, and `/consult-settings reset` print or edit the
-  same catalog for scripted and headless sessions. Settings are written to the
-  `piConsult` object of pi's `~/.pi/agent/settings.json` (patched, so every
-  other key survives); `reset` removes only that object, and changes take effect
-  on `/reload`.
+- `/consult-settings` — open pi's settings dock for the `piConsult`
+  object, or use `/consult-settings key=value`, `/consult-settings list`, and
+  `/consult-settings reset` from the command line for scripted and headless
+  sessions. Settings are written to pi's `~/.pi/agent/settings.json` (patched,
+  so every other key survives), and changes take effect on `/reload`.
 
 ## Development
 
