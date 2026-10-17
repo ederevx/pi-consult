@@ -1,11 +1,12 @@
 /**
  * pi-consult — the consultant step card.
  *
- * The invocation opens with a summary card; activity cards name their
- * consultant only when two share the stream. A tool card reads as a pi tool
- * row and a prose card as pi's custom-message box, so the stream is
- * native-looking without ever reading as the agent's own tool rows or prose.
- * A card saved before v2 always named its consultant and must keep rendering.
+ * The invocation opens with a summary card; every activity card names its
+ * consultant. A tool card reads as a pi tool row opened by a bold author
+ * header and a prose card as pi's custom-message box, so the stream is
+ * native-looking while still reading as the consultant's, not the agent's own
+ * tool rows or prose. A card saved before attribution always named its
+ * consultant and must keep rendering.
  */
 
 import { initTheme, type Theme } from "@earendil-works/pi-coding-agent";
@@ -41,15 +42,25 @@ function card(
 	kind: ConsultActivityData["kind"],
 	lines: string[],
 	expanded: boolean,
-	consultant?: ConsultActivityData["consultant"],
+	consultant: ConsultActivityData["consultant"] = "claude",
 	width = 200,
 ): string[] {
-	const data: ConsultActivityData = {
-		v: 2, consultId: "c-1", kind, lines, ...(consultant ? { consultant } : {}),
-	};
+	const data: ConsultActivityData = { v: 2, consultId: "c-1", kind, lines, consultant };
 	const component = renderer.render({ data }, { expanded }, theme);
 	assert(component, "the renderer returns a card for valid data");
 	return component.render(width);
+}
+
+/** A saved v2 card written before attribution: no consultant recorded. */
+function historical(
+	kind: ConsultActivityData["kind"],
+	lines: string[],
+	expanded: boolean,
+): string[] {
+	const data = { v: 2, consultId: "c-1", kind, lines };
+	const component = renderer.render({ data } as never, { expanded }, theme);
+	assert(component, "a historical card still renders");
+	return component.render(200);
 }
 
 /** A card saved before v2: every card named its consultant. */
@@ -72,7 +83,7 @@ function startCard(info: ConsultStartInfo, expanded: boolean): string[] {
 	return component.render(200);
 }
 
-test("step renderer: an untagged tool card is a pi tool row with no title", () => {
+test("step renderer: a tool card is a pi tool row that names its consultant", () => {
 	for (const expanded of [false, true]) {
 		const lines = card("tool", ["Read src/x.ts"], expanded);
 		assert(lines.length > 0, "a card has lines");
@@ -82,8 +93,8 @@ test("step renderer: an untagged tool card is a pi tool row with no title", () =
 		);
 		const joined = lines.join("\n");
 		assertNotIncludes(joined, "customMessageBg", "a tool card is not a message box");
-		assertNotIncludes(joined, "<accent:", "a single-target card names nobody");
 		assertNotIncludes(joined, "✗", "a failure carries color, not a glyph");
+		assertIncludes(joined, "<accent:*claude · tool*>", "the author marker is always present");
 		assertIncludes(joined, "<toolTitle:*Read*>", "the tool name is bold");
 		assertIncludes(joined, "<muted:src/x.ts>", "the argument is muted");
 	}
@@ -91,8 +102,7 @@ test("step renderer: an untagged tool card is a pi tool row with no title", () =
 
 test("step renderer: a shared stream titles the card with its consultant", () => {
 	const codex = card("tool", ["Read src/x.ts"], false, "codex").join("\n");
-	assertIncludes(codex, "<accent:*codex*>", "the author opens the card");
-	assertNotIncludes(codex, "<toolTitle:*codex*", "the author is accent, not toolTitle");
+	assertIncludes(codex, "<accent:*codex · tool*>", "the author is the codex marker");
 });
 
 test("step renderer: a shell line and a failure render like pi", () => {
@@ -109,7 +119,7 @@ test("step renderer: a shell line and a failure render like pi", () => {
 	assertIncludes(joined, "<error:failed: boom>");
 });
 
-test("step renderer: an untagged text card is pi's custom-message box", () => {
+test("step renderer: a text card is pi's custom-message box with its author", () => {
 	for (const expanded of [false, true]) {
 		const lines = card("text", ["first", "second"], expanded);
 		assert(
@@ -117,8 +127,8 @@ test("step renderer: an untagged text card is pi's custom-message box", () => {
 			`text (${expanded}) lines carry the message background`,
 		);
 		const joined = lines.join("\n");
-		assertNotIncludes(joined, "customMessageLabel", "a single-target card has no label");
-		assertNotIncludes(joined, "[claude]", "no consultant is named");
+		assertIncludes(joined, "customMessageLabel", "the label uses pi's token");
+		assertIncludes(joined, "[claude]", "the author marker is always present");
 		assertNotIncludes(joined, "toolTitle", "prose is not a tool row");
 	}
 
@@ -157,19 +167,20 @@ test("step renderer: collapsed previews and expanded bodies", () => {
 	assertNotIncludes(textExpanded, "more lines");
 });
 
-test("step renderer: the more card is a muted notice, not a box", () => {
-	const untagged = card("more", ["+3 more steps not shown"], false).join("\n");
-	assertIncludes(untagged, "<muted:+3 more steps not shown>");
-	assertNotIncludes(untagged, "{", "the notice carries no background");
-	assertNotIncludes(untagged, "toolTitle", "the notice is not a tool row");
-
-	const tagged = card("more", ["+3 more steps not shown"], false, "claude").join("\n");
-	assertIncludes(tagged, "<muted:claude: +3 more steps not shown>");
+test("step renderer: the more card is a muted notice naming its consultant", () => {
+	const notice = card("more", ["+3 more steps not shown"], false).join("\n");
+	assertIncludes(notice, "<muted:claude: +3 more steps not shown>");
+	assertNotIncludes(notice, "{", "the notice carries no background");
+	assertNotIncludes(notice, "toolTitle", "the notice is not a tool row");
+	assertIncludes(
+		card("more", ["+3 more steps not shown"], false, "codex").join("\n"),
+		"<muted:codex: +3 more steps not shown>",
+	);
 });
 
-test("step renderer: a saved v1 card renders as it always did", () => {
+test("step renderer: a saved v1 card keeps its attribution", () => {
 	const tool = saved("tool", ["claude: Read src/x.ts"], false).join("\n");
-	assertIncludes(tool, "<accent:*claude*>", "a v1 tool card keeps its title");
+	assertIncludes(tool, "<accent:*claude · tool*>", "a v1 tool card names its author");
 	assertIncludes(tool, "<toolTitle:*Read*>");
 	assertNotIncludes(tool, "claude: Read", "the prefix is stripped");
 
@@ -181,7 +192,33 @@ test("step renderer: a saved v1 card renders as it always did", () => {
 	assertIncludes(more, "<muted:claude: +3 more steps not shown>");
 
 	const fresh = card("tool", ["Read src/x.ts"], false).join("\n");
-	assertNotIncludes(fresh, "<accent:", "a fresh single-target card has no title");
+	assertIncludes(fresh, "<accent:*claude · tool*>", "a fresh card always names its author");
+});
+
+test("step renderer: a historical v2 card without an author shows that explicitly", () => {
+	const tool = historical("tool", ["Read src/x.ts"], false).join("\n");
+	assertIncludes(tool, "<accent:*consult c-1 · author unavailable · tool*>");
+	assertIncludes(tool, "<toolTitle:*Read*>");
+
+	const text = historical("text", ["the words"], false).join("\n");
+	assertIncludes(text, "[consult c-1 · author unavailable]");
+
+	const more = historical("more", ["+3 more steps not shown"], false).join("\n");
+	assertIncludes(more, "<muted:consult c-1 · author unavailable: +3 more steps not shown>");
+});
+
+test("step renderer: a failed MCP line keeps its author and turns the card red", () => {
+	const failed = card("tool", ["srv/read failed: denied"], true);
+	assert(failed.every((line) => line.startsWith("{toolErrorBg:")),
+		"the card carries the error background");
+	const joined = failed.join("\n");
+	assertIncludes(joined, "<accent:*claude · tool*>", "the author marker stays");
+	assertIncludes(joined, "<error:srv/read failed: denied>");
+
+	assertIncludes(card("tool", ["srv/read completed"], true).join("\n"), "{toolSuccessBg:",
+		"a completed MCP call stays successful");
+	assertIncludes(card("tool", ["$ grep -r failed"], true).join("\n"), "{toolSuccessBg:",
+		"a command line mentioning failed is not a failure");
 });
 
 test("step renderer: the invocation card is a summary collapsed, the brief expanded", () => {

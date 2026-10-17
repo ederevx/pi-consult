@@ -1,10 +1,12 @@
 /**
  * pi-consult — the card a consultant step draws.
  *
- * The invocation opens with a summary card; activity cards name their
- * consultant only when two share the stream. A tool card is drawn the way pi
- * draws a finished tool row: a success/error background, a bold tool name
- * with muted arguments, and pi's expand hint. A prose card is drawn the way
+ * The invocation opens with a summary card; every activity card names its
+ * consultant, and one written before attribution shows the consult id and
+ * "author unavailable". A tool card is drawn the way pi draws a finished
+ * tool row, opened by a bold `<author> · tool` header: a success/error
+ * background, a bold tool name with muted arguments, and pi's expand hint. A
+ * prose card is drawn the way
  * pi draws a message that was not written by the agent: the `[claude]`
  * custom-message box. That keeps the stream native-looking while never being
  * mistaken for the agent's own tool rows or prose. Collapsed shows a short
@@ -30,9 +32,15 @@ import type {
 	ConsultActivityData,
 	ConsultStartData,
 	ConsultStartInfo,
-	ConsultStepData,
 } from "./consult-step-cards.ts";
 import type { ConsultantName } from "./contracts.ts";
+
+/** Stored activity as read: a saved v1 or v2 card may predate attribution. */
+type RenderActivityData = Omit<ConsultActivityData, "consultant"> & {
+	consultant?: ConsultantName;
+};
+
+type RenderStepData = ConsultStartData | RenderActivityData;
 
 /** One entry's render options and store. */
 export interface StepRenderOptions {
@@ -117,9 +125,9 @@ export class ConsultStepRenderer {
 		];
 	}
 
-	/** A tool card: a pi tool row, titled by the consultant when it is known. */
+	/** A tool card: a pi tool row that always names its consultant. */
 	private toolCard(
-		data: ConsultActivityData,
+		data: RenderActivityData,
 		expanded: boolean,
 		theme: Theme,
 	): Box {
@@ -128,10 +136,8 @@ export class ConsultStepRenderer {
 		const background = lines.some((line) => this.failed(line))
 			? "toolErrorBg" : "toolSuccessBg";
 		const box = new Box(1, 1, (text) => theme.bg(background, text));
-		if (data.consultant) {
-			box.addChild(new Text(
-				theme.fg("accent", theme.bold(data.consultant)), 0, 0));
-		}
+		box.addChild(new Text(
+			theme.fg("accent", theme.bold(`${this.author(data)} · tool`)), 0, 0));
 		const shown = expanded
 			? lines : lines.slice(0, ConsultStepRenderer.COLLAPSED_TOOL_LINES);
 		for (const line of shown) {
@@ -143,21 +149,19 @@ export class ConsultStepRenderer {
 		return box;
 	}
 
-	/** A prose card: pi's custom-message box for a non-agent author. */
+	/** A prose card: pi's custom-message box, always labelled with its author. */
 	private textCard(
-		data: ConsultActivityData,
+		data: RenderActivityData,
 		expanded: boolean,
 		theme: Theme,
 	): Box {
 		const box = new Box(1, 1, (text) => theme.bg("customMessageBg", text));
-		if (data.consultant) {
-			box.addChild(new Text(
-				theme.fg("customMessageLabel", `\x1b[1m[${data.consultant}]\x1b[22m`),
-				0,
-				0,
-			));
-			box.addChild(new Spacer(1));
-		}
+		box.addChild(new Text(
+			theme.fg("customMessageLabel", `\x1b[1m[${this.author(data)}]\x1b[22m`),
+			0,
+			0,
+		));
+		box.addChild(new Spacer(1));
 		const lines = data.lines.join("\n").split("\n");
 		const shown = expanded
 			? lines : lines.slice(0, ConsultStepRenderer.COLLAPSED_TEXT_LINES);
@@ -170,11 +174,10 @@ export class ConsultStepRenderer {
 		return box;
 	}
 
-	/** The overflow notice: one muted status line, like pi's own. */
-	private moreCard(data: ConsultActivityData, theme: Theme): Text {
+	/** The overflow notice: one muted status line naming its consultant. */
+	private moreCard(data: RenderActivityData, theme: Theme): Text {
 		const line = this.unprefixed(data.consultant, data.lines[0] ?? "");
-		const text = data.consultant ? `${data.consultant}: ${line}` : line;
-		return new Text(theme.fg("muted", text), 1, 0);
+		return new Text(theme.fg("muted", `${this.author(data)}: ${line}`), 1, 0);
 	}
 
 	/** One tool line in pi's call style: bold name, muted argument, and a
@@ -193,7 +196,14 @@ export class ConsultStepRenderer {
 	}
 
 	private failed(line: string): boolean {
-		return /^(failed:|exit \d+)/.test(line);
+		return /^(failed:|exit \d+)/.test(line) ||
+			/^[^\s/]+\/[^\s/]+ failed(?::|$)/.test(line);
+	}
+
+	/** The card's displayed author: the recorded consultant, or an explicit
+	 *  fallback for a saved card that predates attribution. */
+	private author(data: RenderActivityData): string {
+		return data.consultant ?? `consult ${data.consultId} · author unavailable`;
 	}
 
 	/** Drop the consultant prefix the streams carry, so saved and new
@@ -215,7 +225,7 @@ export class ConsultStepRenderer {
 	}
 
 	/** v2 data as is; a saved v1 card always named its consultant. */
-	private normalized(data: unknown): ConsultStepData | undefined {
+	private normalized(data: unknown): RenderStepData | undefined {
 		if (typeof data !== "object" || data === null) return undefined;
 		const value = data as Record<string, unknown>;
 		if (value.v !== 1 && value.v !== 2) return undefined;

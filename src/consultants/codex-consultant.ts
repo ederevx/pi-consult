@@ -129,7 +129,10 @@ export class CodexConsultant implements Consultant {
 	}
 
 	async consult(request: ConsultRequest, signal?: AbortSignal): Promise<ConsultantResult> {
-		const parser = new CodexEventParser((line) => request.onProgress?.(`codex: ${line}`));
+		const parser = new CodexEventParser(
+			(line) => request.onProgress?.(`codex: ${line}`),
+			(text, summary) => request.onMessage?.(text, `codex: ${summary}`),
+		);
 		const outcome = await this.runner.run({
 			command: this.settings.command,
 			args: this.buildArgs(request),

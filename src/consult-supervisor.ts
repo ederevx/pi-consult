@@ -27,11 +27,13 @@ export class ConsultSupervisor {
 		this.delivery = delivery;
 	}
 
-	/** Register and start one invocation. */
-	start(spec: InvocationSpec): ConsultInvocation {
+	/** Register, record the manifest, then start one invocation. A manifest
+	 *  that cannot be written never blocks the consult: without one, nothing
+	 *  can later mark the run abandoned. */
+	async start(spec: InvocationSpec): Promise<ConsultInvocation> {
 		const invocation = new ConsultInvocation(spec, this.runner);
 		this.invocations.set(spec.consultId, invocation);
-		void this.records.saveRun(invocation).catch(() => undefined);
+		await this.records.saveRun(invocation).catch(() => undefined);
 		invocation.start();
 		void invocation
 			.done()

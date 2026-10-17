@@ -63,8 +63,9 @@ export function fakeClaude(delayMs = 0, toolUse = false, lateToolUse = false): s
 	return path;
 }
 
-/** Write an executable fake Codex that answers after `delayMs`. */
-export function fakeCodex(delayMs = 0): string {
+/** Write an executable fake Codex that answers after `delayMs`, optionally
+ *  reporting commentary and one command before the answer. */
+export function fakeCodex(delayMs = 0, activity = false): string {
 	const path = join(scratchDir(), `fake-codex-${Math.random().toString(16).slice(2)}.mjs`);
 	const body = [
 		'import { readFileSync, writeFileSync } from "node:fs";',
@@ -74,6 +75,11 @@ export function fakeCodex(delayMs = 0): string {
 		"}",
 		`await new Promise((resolve) => setTimeout(resolve, ${delayMs}));`,
 		'process.stdout.write(JSON.stringify({ type: "thread.started", thread_id: "fake-thread" }) + "\\n");',
+		...(activity ? [
+			'process.stdout.write(JSON.stringify({ item: { type: "agent_message", text: "Looking at the parser.\\nSecond line of commentary." }, type: "item.completed" }) + "\\n");',
+			'process.stdout.write(JSON.stringify({ item: { type: "command_execution", command: "rg foo", status: "in_progress" }, type: "item.started" }) + "\\n");',
+			'process.stdout.write(JSON.stringify({ item: { type: "command_execution", command: "rg foo", exit_code: 0, status: "completed" }, type: "item.completed" }) + "\\n");',
+		] : []),
 		'process.stdout.write(JSON.stringify({ item: { type: "agent_message", text: "FAKE CODEX" }, type: "item.completed" }) + "\\n");',
 		'process.stdout.write(JSON.stringify({ type: "turn.completed", usage: { input_tokens: 1, output_tokens: 2 } }) + "\\n");',
 	].join("\n");

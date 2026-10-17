@@ -2,8 +2,8 @@
  * pi-consult — the step-card stream.
  *
  * The collector opens the stream with the invocation card, merges a burst of
- * tool uses, closes a card when prose starts, names the consultant only when
- * two share the stream, bounds how many cards one consult can write, and
+ * tool uses, closes a card when prose starts, always names the consultant on
+ * every card, bounds how many cards one consult can write, and
  * never writes after it stops.
  */
 
@@ -58,7 +58,7 @@ test("step cards: a tool step becomes one card on finish", () => {
 	const card = sink.activity()[0];
 	assertEq(card.v, 2);
 	assertEq(card.kind, "tool");
-	assertEq(card.consultant, undefined, "a single target names no consultant");
+	assertEq(card.consultant, "claude", "every card names its consultant");
 	assertEq(card.consultId, "c-1");
 	assertEq(card.lines[0], "Read src/x.ts", "the stream prefix is stripped");
 });
@@ -209,4 +209,38 @@ test("step cards: streamed text is clipped to its budget", () => {
 	const text = sink.lines("text")[0][0];
 	assert(Buffer.byteLength(text, "utf8") <= 2048 + 3, "the head is kept within budget");
 	assertIncludes(text, "…");
+});
+
+test("step cards: a message is its own prose card; finish drops the trailing answer", () => {
+	const sink = new Sink();
+	const cards = new ConsultStepCards("c-1", sink.append);
+	cards.message("codex", "Commentary 1\nCommentary 2");
+	cards.event("codex", "codex: $ rg foo");
+	cards.message("codex", "ANSWER\nmore");
+	cards.finish();
+	assertEq(sink.activity().map((card) => card.kind).join(","), "text,tool");
+	assertEq(sink.lines("text")[0][0], "Commentary 1\nCommentary 2");
+	assertEq(sink.lines("tool")[0][0], "$ rg foo");
+	assert(!JSON.stringify(sink.entries).includes("ANSWER"),
+		"the foreground result carries the answer");
+
+	const detached = new Sink();
+	const onDetach = new ConsultStepCards("c-1", detached.append);
+	onDetach.message("codex", "Commentary");
+	onDetach.event("codex", "codex: $ rg foo");
+	onDetach.message("codex", "ANSWER\nmore");
+	onDetach.detach();
+	assertEq(detached.lines("text")[1][0], "ANSWER\nmore",
+		"a detached run flushes the trailing answer as prose");
+});
+
+test("step cards: consecutive messages stay separate", () => {
+	const sink = new Sink();
+	const cards = new ConsultStepCards("c-1", sink.append);
+	cards.message("codex", "a");
+	cards.message("codex", "b");
+	cards.detach();
+	assertEq(sink.lines("text").length, 2);
+	assertEq(sink.lines("text")[0][0], "a");
+	assertEq(sink.lines("text")[1][0], "b");
 });
