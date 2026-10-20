@@ -163,6 +163,13 @@ fallback and user-request markers must appear on their own plain lines.
   records agree: every enabled consultant has expired and nothing is owed;
 - `Audit by pi at the user's request - <request>.`
 
+A completion marker that does not qualify keeps the hold, and pi-consult
+tells the agent once per distinct reason what still closes the cycle: the
+result to wait for, the consult to continue for its verdict, or the fresh
+audit to spawn. The one exception: when every consultant the cited consult
+ran against has expired (quota, credit, or auth exhaustion, or found
+unavailable), the cycle closes unverified and pi's previous level returns.
+
 Markers inside code fences or blockquotes, or quoted mid-sentence, are
 ignored. The cycle is recorded on the session branch, so reload, compaction,
 and `/tree` navigation carry it; leaving a branch mid-cycle restores the

@@ -8,7 +8,9 @@
  * independent auditor spawned through pi-teams. A fallback the records
  * support, an explicit user audit, or `/consult-effort release` also ends
  * it. Every change is persisted on the session branch. Consultant `effort`
- * settings are not touched.
+ * settings are not touched. A refused completion line is answered once with
+ * what still closes the cycle; it closes unverified only when every
+ * consultant the cited consult ran against has expired.
  */
 
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -32,6 +34,15 @@ interface EffortEntry {
 	auditors: string[];
 	independent: string[];
 	auditFailed: boolean;
+	consulted: Record<string, ConsultantName[]>;
+	nudged?: string;
+}
+
+/** Why a completion marker does not close the cycle, and the agent's next step. */
+interface Refusal {
+	kind: "owed" | "auditor" | "unverified";
+	reason: string;
+	action: string;
 }
 
 /** One non-blank source line and the Markdown context it sits in. */
@@ -51,6 +62,7 @@ export class AgentEffortPolicy {
 	private static readonly FALLBACK = /^Consultant fallback: no consultant available - \S.*$/;
 	private static readonly USER_AUDIT = /^Audit by pi at the user's request - \S.*$/;
 	private static readonly SPAWNED = /^spawned teammate (\S+)/;
+	private static readonly NUDGE = "pi-consult-cycle";
 	private static readonly TEAMS_LOG = "pi-teams-log";
 	private static readonly MUTATIONS = new Set(["edit", "write", "bash", "powershell"]);
 	private static readonly RETRYABLE = new Set(["error", "timeout"]);
@@ -73,6 +85,8 @@ export class AgentEffortPolicy {
 	private auditors = new Set<string>();
 	private independent = new Set<string>();
 	private auditFailed = false;
+	private consulted = new Map<string, ConsultantName[]>();
+	private nudged: string | undefined;
 	private readonly spawns = new Set<string>();
 	private unsupported = false;
 	private lastMessage: unknown;
@@ -146,6 +160,10 @@ export class AgentEffortPolicy {
 	settle(consultId: string, details?: ConsultDetails, answers?: ReadonlyMap<ConsultantName, string>): void {
 		if (!this.owed.delete(consultId)) return;
 		if (details?.phase === "complete") {
+			this.consulted.set(
+				consultId,
+				details.runs.filter((run) => run.status !== "aborted").map((run) => run.consultant),
+			);
 			const answered = details.runs.filter((run) => run.status === "ok");
 			if (
 				details.ok &&
@@ -212,6 +230,8 @@ export class AgentEffortPolicy {
 		this.auditors.clear();
 		this.independent.clear();
 		this.auditFailed = false;
+		this.consulted.clear();
+		this.nudged = undefined;
 	}
 
 	private lower(ctx: ExtensionContext | undefined, quiet = false): void {
@@ -396,34 +416,115 @@ export class AgentEffortPolicy {
 		const teammate = consultId ? undefined : line?.match(AgentEffortPolicy.INDEPENDENT)?.[1];
 		if (!consultId && !teammate) return;
 		const refusal = consultId ? this.completionRefusal(consultId) : this.independentRefusal(teammate as string);
-		if (refusal) {
-			this.notify(ctx, `pi-consult: cycle marked complete, but ${refusal}; holding low.`, "warning");
+		if (!refusal) {
+			this.restore(ctx, consultId ? "the consultant handed control back" : "the independent audit approved the work");
 			return;
 		}
-		this.restore(ctx, consultId ? "the consultant handed control back" : "the independent audit approved the work");
+		const spent = consultId && refusal.kind === "unverified" ? this.outOfAgent(consultId) : undefined;
+		if (spent) {
+			this.restore(ctx, `${spent.join(" and ")} expired before verifying ${consultId}; the cycle closes unverified`);
+		} else {
+			this.nudge(ctx, refusal);
+		}
 	}
 
-	private completionRefusal(consultId: string): string | undefined {
-		if (this.owed.size > 0) return `${[...this.owed].join(", ")} is still running or undelivered`;
-		if (!this.approved.has(consultId)) return `${consultId}'s answer does not end with an approved consultant verdict`;
-		if (!this.fresh.has(consultId)) return `${consultId} started before your last edit, write, or command`;
+	private owedRefusal(): Refusal | undefined {
+		if (this.owed.size === 0) return undefined;
+		const owed = [...this.owed];
+		const auditors = owed.filter((id) => this.auditors.has(id));
+		const reason = `${owed.join(", ")} is still running or undelivered`;
+		if (auditors.length > 0) {
+			return {
+				kind: "auditor",
+				reason,
+				action: `collect ${auditors.join(", ")} with team_wait, then close the cycle again`,
+			};
+		}
+		return {
+			kind: "owed",
+			reason,
+			action: "wait for its delivered result, then close the cycle against the consult that approves",
+		};
+	}
+
+	private completionRefusal(consultId: string): Refusal | undefined {
+		const owed = this.owedRefusal();
+		if (owed) return owed;
+		const resend = `return the work with continue: "${consultId}", ask for its verdict line, and once it approves end your final reply with "Consultation cycle: complete - <its new consult id> verified."`;
+		if (!this.approved.has(consultId)) {
+			const action = this.consulted.has(consultId)
+				? resend
+				: "cite the consult whose delivered answer ends with the approved verdict, or return the work through continue for one";
+			return {
+				kind: "unverified",
+				reason: `${consultId}'s answer does not end with an approved consultant verdict`,
+				action,
+			};
+		}
+		if (!this.fresh.has(consultId)) {
+			return {
+				kind: "unverified",
+				reason: `${consultId} started before your last edit, write, or command`,
+				action: resend,
+			};
+		}
 		return undefined;
 	}
 
-	private independentRefusal(teammate: string): string | undefined {
-		if (this.owed.size > 0) return `${[...this.owed].join(", ")} is still running or undelivered`;
+	private independentRefusal(teammate: string): Refusal | undefined {
+		const owed = this.owedRefusal();
+		if (owed) return owed;
+		const fresh = "spawn a fresh independent audit with team_spawn and close the cycle on its approved report";
 		if (!this.auditors.has(teammate)) {
-			return `${teammate} is not an independent auditor spawned after every enabled consultant expired`;
+			return {
+				kind: "unverified",
+				reason: `${teammate} is not an independent auditor spawned after every enabled consultant expired`,
+				action: `climb the audit ladder: a serving consultant through continue, else ${fresh}`,
+			};
 		}
-		if (!this.independent.has(teammate)) return `${teammate} has not reported an approved independent verdict`;
-		if (!this.fresh.has(teammate)) return `${teammate} was spawned before your last edit, write, or command`;
+		if (!this.independent.has(teammate)) {
+			return {
+				kind: "unverified",
+				reason: `${teammate} has not reported an approved independent verdict`,
+				action: `fix what it found, then ${fresh}`,
+			};
+		}
+		if (!this.fresh.has(teammate)) {
+			return {
+				kind: "unverified",
+				reason: `${teammate} was spawned before your last edit, write, or command`,
+				action: fresh,
+			};
+		}
 		return undefined;
 	}
 
 	private fallbackRefusal(): string | undefined {
-		if (this.owed.size > 0) return `${[...this.owed].join(", ")} is still running or undelivered`;
+		const owed = this.owedRefusal();
+		if (owed) return owed.reason;
 		const serving = this.serving();
 		return serving.length > 0 ? `${serving.join(", ")} has not expired in this cycle` : undefined;
+	}
+
+	/** The consult's every consultant expired: no verdict can come. */
+	private outOfAgent(consultId: string): ConsultantName[] | undefined {
+		const names = this.consulted.get(consultId) ?? [];
+		if (names.length === 0) return undefined;
+		return names.every((name) => this.expired.has(name) || this.unavailable.has(name)) ? names : undefined;
+	}
+
+	/** Tell the agent once per distinct refusal what still closes the cycle. */
+	private nudge(ctx: ExtensionContext, refusal: Refusal): void {
+		this.notify(ctx, `pi-consult: cycle marked complete, but ${refusal.reason}; holding low.`, "warning");
+		const content = `pi-consult: the consultation cycle is still open: ${refusal.reason}. Next: ${refusal.action}.`;
+		if (!this.pi || content === this.nudged) return;
+		// Record first so a throwing API can never send the same note twice.
+		this.nudged = content;
+		this.persist();
+		this.pi.sendMessage(
+			{ customType: AgentEffortPolicy.NUDGE, content, display: false },
+			refusal.kind === "owed" ? { deliverAs: "nextTurn" } : { deliverAs: "followUp", triggerTurn: true },
+		);
 	}
 
 	private load(ctx: ExtensionContext, navigated: boolean): void {
@@ -443,6 +544,8 @@ export class AgentEffortPolicy {
 		this.auditors = new Set(data?.auditors ?? []);
 		this.independent = new Set(data?.independent ?? []);
 		this.auditFailed = data?.auditFailed === true;
+		this.consulted = new Map(Object.entries(data?.consulted ?? {}));
+		this.nudged = data?.nudged;
 		this.spawns.clear();
 		this.unsupported = false;
 		this.lastMessage = undefined;
@@ -481,6 +584,8 @@ export class AgentEffortPolicy {
 			auditors: [...this.auditors],
 			independent: [...this.independent],
 			auditFailed: this.auditFailed,
+			consulted: Object.fromEntries(this.consulted),
+			nudged: this.nudged,
 		};
 		this.pi?.appendEntry(AgentEffortPolicy.ENTRY, data);
 	}
@@ -503,7 +608,7 @@ export class AgentEffortPolicy {
 			const strings = (value: unknown): string[] =>
 				Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 			const names = (value: unknown): ConsultantName[] =>
-				strings(value).filter((name): name is ConsultantName => name === "claude" || name === "codex");
+				AgentEffortPolicy.consultantNames(strings(value));
 			const failures: Partial<Record<ConsultantName, number>> = {};
 			const rawFailures = (typeof raw.failures === "object" && raw.failures !== null ? raw.failures : {}) as Record<string, unknown>;
 			for (const name of AgentEffortPolicy.NAMES) {
@@ -522,9 +627,30 @@ export class AgentEffortPolicy {
 				auditors: strings(raw.auditors),
 				independent: strings(raw.independent),
 				auditFailed: raw.auditFailed === true,
+				consulted: AgentEffortPolicy.consulted(raw.consulted),
+				nudged: typeof raw.nudged === "string" ? raw.nudged : undefined,
 			};
 		}
 		return undefined;
+	}
+
+	/** The known consultant names among already-stringified values. */
+	private static consultantNames(value: readonly string[]): ConsultantName[] {
+		return value.filter((name): name is ConsultantName => name === "claude" || name === "codex");
+	}
+
+	/** Persisted consult→consultants maps, keeping only well-formed non-empty entries. */
+	private static consulted(value: unknown): Record<string, ConsultantName[]> {
+		if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
+		const out: Record<string, ConsultantName[]> = {};
+		for (const [id, names] of Object.entries(value as Record<string, unknown>)) {
+			if (!Array.isArray(names)) continue;
+			const valid = AgentEffortPolicy.consultantNames(
+				names.filter((name): name is string => typeof name === "string"),
+			);
+			if (valid.length > 0) out[id] = valid;
+		}
+		return out;
 	}
 
 	private static isAudit(task: unknown): boolean {
