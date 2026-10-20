@@ -285,6 +285,7 @@ export class FakeEffortHost {
 	readonly tools: Array<{ name: string }> = [];
 	/** Each accepted (level-changing) set, in host order. */
 	readonly setCalls: string[] = [];
+	readonly messages: Array<{ message: unknown; options?: unknown }> = [];
 	readonly branch: BranchEntry[];
 	private level: string;
 	private available: readonly string[];
@@ -347,6 +348,10 @@ export class FakeEffortHost {
 
 	appendEntry(customType: string, data?: unknown): void {
 		this.branch.push({ type: "custom", id: `e${++this.seq}`, customType, data });
+	}
+
+	sendMessage(message: unknown, options?: unknown): void {
+		this.messages.push({ message, options });
 	}
 
 	getBranch(): BranchEntry[] {
@@ -453,4 +458,14 @@ export function verdictAnswers(
 	source: Partial<Record<ConsultantName, string>>,
 ): Map<ConsultantName, string> {
 	return new Map(Object.entries(source) as Array<[ConsultantName, string]>);
+}
+
+/** The consultation-cycle notes pi-consult sent the agent, in order. */
+export function cycleNotes(host: FakeEffortHost): Array<{
+	message: { customType?: string; content?: string; display?: boolean };
+	options?: { deliverAs?: string; triggerTurn?: boolean };
+}> {
+	return host.messages
+		.filter((entry) => (entry.message as { customType?: string }).customType === "pi-consult-cycle")
+		.map((entry) => entry as never);
 }

@@ -23,6 +23,7 @@ import {
 	assistantMessage,
 	consultDetails,
 	consultRun,
+	cycleNotes,
 	scratchDir,
 	test,
 	verdictAnswers,
@@ -541,4 +542,28 @@ test("audit: an auditor payload ending in a quoted line is a failed audit", asyn
 	await state.host.run("Consultation cycle: complete - tm-quote independently verified.");
 	assertEq(state.host.getThinkingLevel(), "low");
 	assertEq(lastEntry(state.host).auditFailed, true, "the quoted verdict does not count");
+});
+
+
+test("audit: a refused marker names the owed auditor to wait for", async () => {
+	const state = expiredAudit();
+	spawnAuditor(state, "tm-owed");
+	await state.host.run("Consultation cycle: complete - tm-owed independently verified.");
+	assertEq(state.host.getThinkingLevel(), "low");
+	const sent = cycleNotes(state.host);
+	assertEq(sent.length, 1);
+	assertEq(sent[0].options?.deliverAs, "followUp");
+	assertEq(sent[0].options?.triggerTurn, true);
+	assertIncludes(sent[0].message.content ?? "", "team_wait");
+});
+
+test("audit: a changes-needed auditor gets a note for a fresh audit, never a release", async () => {
+	const state = expiredAudit();
+	spawnAuditor(state, "tm-changes");
+	logReport(state, "tm-changes", "changes needed");
+	await state.host.run("Consultation cycle: complete - tm-changes independently verified.");
+	assertEq(state.host.getThinkingLevel(), "low");
+	const sent = cycleNotes(state.host);
+	assertEq(sent.length, 1);
+	assertIncludes(sent[0].message.content ?? "", "spawn a fresh independent audit");
 });

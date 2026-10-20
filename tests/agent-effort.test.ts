@@ -23,6 +23,7 @@ import {
 	consultDetails,
 	consultRun,
 	customEntry,
+	cycleNotes,
 	scratchDir,
 	test,
 	tick,
@@ -441,6 +442,8 @@ test("agent effort: malformed entries do not throw and fall back to defaults", (
 			auditors: 3,
 			independent: "x",
 			auditFailed: "yes",
+			consulted: { "c-1": "claude", "c-2": ["bogus"] },
+			nudged: 3,
 		}),
 	];
 	const { policy } = setup({ level: "high", branch });
@@ -599,4 +602,185 @@ test("agent effort: a plain fallback line in the middle of a reply restores", as
 	const state = expired();
 	await state.host.run("Consultant fallback: no consultant available - the CLI is gone.\nStill explaining.");
 	assertEq(state.host.getThinkingLevel(), "high");
+});
+
+
+/** A consult settled with a non-approved answer, then its completion marker. */
+async function unapproved(state: Setup, id: string): Promise<void> {
+	state.policy.engage(state.ctx as never, id);
+	state.policy.settle(
+		id,
+		consultDetails(id, [consultRun("claude", "ok")]),
+		verdictAnswers({ claude: "Consultant verdict: changes needed - not yet." }),
+	);
+	await state.host.run(`Consultation cycle: complete - ${id} verified.`);
+}
+
+test("agent effort: an unapproved completion line sends one cycle note", async () => {
+	const state = setup({ level: "high" });
+	await unapproved(state, "c-100001");
+	const sent = cycleNotes(state.host);
+	assertEq(sent.length, 1, "one note");
+	assertEq(sent[0].message.display, false, "the note is hidden");
+	assertEq(sent[0].options?.deliverAs, "followUp");
+	assertEq(sent[0].options?.triggerTurn, true);
+	assertIncludes(sent[0].message.content ?? "", 'continue: "c-100001"');
+	assertIncludes(sent[0].message.content ?? "", "verdict line");
+	assertEq(state.host.getThinkingLevel(), "low");
+	assertEq(lastEntry(state.host).nudged, sent[0].message.content, "the note is persisted");
+});
+
+test("agent effort: the same refused marker never sends the note twice", async () => {
+	const state = setup({ level: "high" });
+	await unapproved(state, "c-100002");
+	for (const _ of [1, 2]) await state.host.run("Consultation cycle: complete - c-100002 verified.");
+	assertEq(cycleNotes(state.host).length, 1);
+	const warnings = state.ctx.notifyCalls.filter((call) => call.message.includes("cycle marked complete"));
+	assertEq(warnings.length, 3, "every refusal still warns in the UI");
+});
+
+test("agent effort: the note dedup survives a reload", async () => {
+	const shared = config();
+	const first = setup({ config: shared });
+	await unapproved(first, "c-100003");
+
+	const host2 = new FakeEffortHost(first.host.getThinkingLevel(), THINKING_LEVELS, first.host.branch);
+	const ctx2 = new FakeContext(first.host.branch, "session-effort-3", scratchDir(), true);
+	host2.attachContext(ctx2);
+	const policy2 = new AgentEffortPolicy(shared);
+	policy2.register(host2 as never);
+	host2.emit("session_start", {});
+	await host2.run("Consultation cycle: complete - c-100003 verified.");
+	assertEq(cycleNotes(host2).length, 0, "the persisted note is not sent again");
+});
+
+test("agent effort: an owed consult gets a wait note, then a close clears it", async () => {
+	const state = setup({ level: "high" });
+	state.policy.engage(state.ctx as never, "c-100004");
+	await state.host.run("Consultation cycle: complete - c-100004 verified.");
+	const sent = cycleNotes(state.host);
+	assertEq(sent.length, 1);
+	assertEq(sent[0].options?.deliverAs, "nextTurn");
+	assertEq(sent[0].options?.triggerTurn, undefined);
+	assertIncludes(sent[0].message.content ?? "", "wait for its delivered result");
+
+	state.policy.settle(
+		"c-100004",
+		consultDetails("c-100004", [consultRun("claude", "ok")]),
+		verdictAnswers({ claude: APPROVED_VERDICT }),
+	);
+	await state.host.run("Consultation cycle: complete - c-100004 verified.");
+	assertEq(state.host.getThinkingLevel(), "high");
+	assertEq(cycleNotes(state.host).length, 1, "the close sends nothing new");
+	assertEq(lastEntry(state.host).nudged, undefined, "the close clears the note");
+});
+
+test("agent effort: a changed refusal reason sends a new note", async () => {
+	const state = setup({ level: "high" });
+	state.policy.engage(state.ctx as never, "c-100005");
+	await state.host.run("Consultation cycle: complete - c-100005 verified.");
+	state.policy.settle(
+		"c-100005",
+		consultDetails("c-100005", [consultRun("claude", "ok")]),
+		verdictAnswers({ claude: APPROVED_VERDICT }),
+	);
+	state.host.toolCall("edit", {});
+	await state.host.run("Consultation cycle: complete - c-100005 verified.");
+	const sent = cycleNotes(state.host);
+	assertEq(sent.length, 2, "the aged-out reason is a new note");
+	assertIncludes(sent[1].message.content ?? "", "started before your last edit");
+	assertEq(state.host.getThinkingLevel(), "low");
+});
+
+test("agent effort: a consult whose consultant ran out of agent closes unverified", async () => {
+	for (const run of [
+		consultRun("claude", "error", "insufficient_quota"),
+		consultRun("claude", "unavailable"),
+		consultRun("claude", "auth"),
+	]) {
+		const state = setup({ level: "high", config: config({ codex: { enabled: false } }) });
+		state.policy.engage(state.ctx as never, "c-100006");
+		state.policy.settle("c-100006", consultDetails("c-100006", [run], false));
+		await state.host.run("Consultation cycle: complete - c-100006 verified.");
+		assertEq(state.host.getThinkingLevel(), "high", `${run.status} closes the cycle`);
+		assertEq(cycleNotes(state.host).length, 0, "no note when the agent is spent");
+		assertIncludes(notices(state.ctx), "closes unverified");
+	}
+});
+
+test("agent effort: an expired consultant closes an approved but stale consult unverified", async () => {
+	const state = setup({ level: "high", config: config({ codex: { enabled: false } }) });
+	state.policy.engage(state.ctx as never, "c-100007");
+	state.policy.settle(
+		"c-100007",
+		consultDetails("c-100007", [consultRun("claude", "ok")]),
+		verdictAnswers({ claude: APPROVED_VERDICT }),
+	);
+	state.host.toolCall("edit", {});
+	state.policy.engage(state.ctx as never, "c-100008");
+	state.policy.settle(
+		"c-100008",
+		consultDetails("c-100008", [consultRun("claude", "auth", "invalid api key")], false),
+	);
+	await state.host.run("Consultation cycle: complete - c-100007 verified.");
+	assertEq(state.host.getThinkingLevel(), "high");
+	assertEq(cycleNotes(state.host).length, 0);
+});
+
+test("agent effort: a partly expired multi-consultant consult is not the exception", async () => {
+	const state = setup({ level: "high" });
+	state.policy.engage(state.ctx as never, "c-100009");
+	state.policy.settle(
+		"c-100009",
+		consultDetails("c-100009", [consultRun("claude", "unavailable"), consultRun("codex", "ok")], false),
+		verdictAnswers({ codex: "Consultant verdict: changes needed - not yet." }),
+	);
+	await state.host.run("Consultation cycle: complete - c-100009 verified.");
+	assertEq(state.host.getThinkingLevel(), "low");
+	assertEq(cycleNotes(state.host).length, 1);
+});
+
+test("agent effort: an unknown consult id never closes unverified", async () => {
+	const state = expired();
+	await state.host.run("Consultation cycle: complete - c-deadbe verified.");
+	assertEq(state.host.getThinkingLevel(), "low");
+	const sent = cycleNotes(state.host);
+	assertEq(sent.length, 1);
+	assertIncludes(sent[0].message.content ?? "", "cite the consult whose delivered answer");
+});
+
+test("agent effort: an owed consult blocks the expiry exception", async () => {
+	const state = expired();
+	state.policy.engage(state.ctx as never, "c-100010");
+	await state.host.run("Consultation cycle: complete - c-e001 verified.");
+	assertEq(state.host.getThinkingLevel(), "low");
+	const sent = cycleNotes(state.host);
+	assertEq(sent.length, 1);
+	assertEq(sent[0].options?.deliverAs, "nextTurn");
+});
+
+test("agent effort: a refused marker never restores on a non-completed outcome", async () => {
+	for (const outcome of ["aborted", "error"]) {
+		const state = setup({ level: "high" });
+		state.policy.engage(state.ctx as never, `c-100011-${outcome}`);
+		await state.host.run(`Consultation cycle: complete - c-100011-${outcome} verified.`, outcome);
+		assertEq(state.host.getThinkingLevel(), "low");
+		assertEq(cycleNotes(state.host).length, 0, `${outcome} sends no note`);
+	}
+});
+
+test("agent effort: a released hold clears the note dedup for the next cycle", async () => {
+	const state = setup({ level: "high" });
+	await unapproved(state, "c-100012");
+	const first = cycleNotes(state.host)[0].message.content;
+	await (state.host.commands.get("consult-effort")!.handler as (args: string, ctx: FakeContext) => Promise<void>)(
+		"release",
+		state.ctx,
+	);
+	assertEq(state.host.getThinkingLevel(), "high");
+
+	await unapproved(state, "c-100012");
+	const sent = cycleNotes(state.host);
+	assertEq(sent.length, 2, "the same refusal in a new cycle is sent again");
+	assertEq(sent[1].message.content, first);
 });
