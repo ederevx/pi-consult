@@ -426,8 +426,9 @@ export class FakeEffortHost {
 	}
 }
 
-/** A consultant-verdict line pi-consult accepts as approval. */
-export const APPROVED_VERDICT = "Consultant verdict: approved - the work is correct.";
+/** A consultant answer ending in the lines pi-consult accepts as approval. */
+export const APPROVED_VERDICT =
+	"Convention audit: compliant - AGENTS.md.\nConsultant verdict: approved - the work is correct.";
 
 /** One consultant's run outcome, with the fields the policy reads. */
 export function consultRun(consultant: ConsultantName, status: RunStatus, error?: string): ConsultRun {

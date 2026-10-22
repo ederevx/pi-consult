@@ -3,13 +3,13 @@
  *
  * Owns one consultation cycle: from a task's first consult, pi runs at low
  * thinking (the consultant owns the plan) until control is handed back — a
- * consult whose answer ends with the approved verdict, or, once every
- * enabled consultant has expired, an approved report from a dedicated
- * independent auditor spawned through pi-teams. A fallback the records
- * support, an explicit user audit, or `/consult-effort release` also ends
- * it. Every change is persisted on the session branch. Consultant `effort`
- * settings are not touched. A refused completion line is answered once with
- * what still closes the cycle; it closes unverified only when every
+ * consult whose answer ends with a passing convention audit and the approved
+ * verdict, or, once every enabled consultant has expired, an approved report
+ * from a dedicated independent auditor spawned through pi-teams. A fallback
+ * the records support, an explicit user audit, or `/consult-effort release`
+ * also ends it. Every change is persisted on the session branch. Consultant
+ * `effort` settings are not touched. A refused completion line is answered
+ * once with what still closes the cycle; it closes unverified only when every
  * consultant the cited consult ran against has expired.
  */
 
@@ -57,6 +57,7 @@ export class AgentEffortPolicy {
 	private static readonly COMPLETE = /^Consultation cycle: complete - (c-[0-9a-f]+) verified\.$/;
 	private static readonly INDEPENDENT = /^Consultation cycle: complete - (\S+) independently verified\.$/;
 	private static readonly VERDICT = /^Consultant verdict: approved - \S.*$/;
+	private static readonly CONVENTIONS = /^Convention audit: (compliant|none found) - \S.*$/;
 	private static readonly AUDIT_VERDICT = /^Independent audit verdict: (approved|changes needed) - \S.*$/;
 	private static readonly AUDIT_UNAVAILABLE = /^Independent audit unavailable - \S.*$/;
 	private static readonly FALLBACK = /^Consultant fallback: no consultant available - \S.*$/;
@@ -397,10 +398,12 @@ export class AgentEffortPolicy {
 			if (data.direction !== "received" || data.kind !== "result" || typeof from !== "string") continue;
 			if (!this.auditors.has(from) || !this.owed.has(from)) continue;
 			this.owed.delete(from);
-			const last = AgentEffortPolicy.lastPlain(String(data.payload ?? "")) ?? "";
+			const payload = String(data.payload ?? "");
+			const last = AgentEffortPolicy.lastPlain(payload) ?? "";
 			const verdict = last.match(AgentEffortPolicy.AUDIT_VERDICT)?.[1];
-			if (verdict === "approved") this.independent.add(from);
-			else if (!verdict) this.auditFailed = true;
+			if (verdict === "approved") {
+				if (AgentEffortPolicy.audited(payload)) this.independent.add(from);
+			} else if (!verdict) this.auditFailed = true;
 			changed = true;
 		}
 		if (changed) this.persist();
@@ -450,14 +453,14 @@ export class AgentEffortPolicy {
 	private completionRefusal(consultId: string): Refusal | undefined {
 		const owed = this.owedRefusal();
 		if (owed) return owed;
-		const resend = `return the work with continue: "${consultId}", ask for its verdict line, and once it approves end your final reply with "Consultation cycle: complete - <its new consult id> verified."`;
+		const resend = `return the work with continue: "${consultId}", ask for its convention audit and verdict lines, and once it approves end your final reply with "Consultation cycle: complete - <its new consult id> verified."`;
 		if (!this.approved.has(consultId)) {
 			const action = this.consulted.has(consultId)
 				? resend
 				: "cite the consult whose delivered answer ends with the approved verdict, or return the work through continue for one";
 			return {
 				kind: "unverified",
-				reason: `${consultId}'s answer does not end with an approved consultant verdict`,
+				reason: `${consultId}'s answer does not end with an approved consultant verdict after a passing convention audit`,
 				action,
 			};
 		}
@@ -485,7 +488,7 @@ export class AgentEffortPolicy {
 		if (!this.independent.has(teammate)) {
 			return {
 				kind: "unverified",
-				reason: `${teammate} has not reported an approved independent verdict`,
+				reason: `${teammate} has not reported an approved independent verdict after a passing convention audit`,
 				action: `fix what it found, then ${fresh}`,
 			};
 		}
@@ -668,7 +671,14 @@ export class AgentEffortPolicy {
 
 	private static approves(answer: string | undefined): boolean {
 		if (!answer) return false;
-		return AgentEffortPolicy.VERDICT.test(AgentEffortPolicy.lastPlain(answer) ?? "");
+		return AgentEffortPolicy.VERDICT.test(AgentEffortPolicy.audited(answer) ?? "");
+	}
+
+	/** The final plain line, only when a passing convention audit plainly precedes it. */
+	private static audited(text: string): string | undefined {
+		const [audit, last] = AgentEffortPolicy.classify(text).slice(-2);
+		if (audit?.kind !== "plain" || last?.kind !== "plain") return undefined;
+		return AgentEffortPolicy.CONVENTIONS.test(audit.text) ? last.text : undefined;
 	}
 
 	/** The last plain line of a final, tool-free assistant message. */

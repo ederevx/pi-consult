@@ -98,7 +98,7 @@ function logReport(state: Setup, from: string, verdict: string): void {
 		direction: "received",
 		from,
 		kind: "result",
-		payload: `Report body.\nIndependent audit verdict: ${verdict} - reason.`,
+		payload: `Report body.\nConvention audit: compliant - AGENTS.md.\nIndependent audit verdict: ${verdict} - reason.`,
 	});
 }
 
@@ -566,4 +566,57 @@ test("audit: a changes-needed auditor gets a note for a fresh audit, never a rel
 	const sent = cycleNotes(state.host);
 	assertEq(sent.length, 1);
 	assertIncludes(sent[0].message.content ?? "", "spawn a fresh independent audit");
+});
+
+test("audit: an approval without a passing convention audit is not approval", async () => {
+	const answers = [
+		"Consultant verdict: approved - fine.",
+		"Convention audit: violations - tabs.\nConsultant verdict: approved - fine.",
+		"Convention audit: compliant - x.\nMore text.\nConsultant verdict: approved - fine.",
+		"```\nConvention audit: compliant - x.\n```\nConsultant verdict: approved - fine.",
+		"    Convention audit: compliant - x.\nConsultant verdict: approved - fine.",
+	];
+	for (const [index, answer] of answers.entries()) {
+		const { host, ctx, policy } = setup();
+		const id = `c-00020${index}`;
+		policy.engage(ctx as never, id);
+		policy.settle(
+			id,
+			consultDetails(id, [consultRun("claude", "ok")]),
+			verdictAnswers({ claude: answer }),
+		);
+		await host.run(`Consultation cycle: complete - ${id} verified.`);
+		assertEq(host.getThinkingLevel(), "low", "the approval does not close the cycle");
+		assertIncludes(notices(ctx), "approved consultant verdict after a passing convention audit");
+	}
+});
+
+test("audit: none found before an approval restores", async () => {
+	const { host, ctx, policy } = setup();
+	policy.engage(ctx as never, "c-000210");
+	policy.settle(
+		"c-000210",
+		consultDetails("c-000210", [consultRun("claude", "ok")]),
+		verdictAnswers({
+			claude:
+				"Convention audit: none found - no AGENTS.md or quoted rules.\n\n" +
+				"Consultant verdict: approved - fine.",
+		}),
+	);
+	await host.run("Consultation cycle: complete - c-000210 verified.");
+	assertEq(host.getThinkingLevel(), "high");
+});
+
+test("audit: an independent approval without a convention audit does not verify", async () => {
+	const state = expiredAudit();
+	spawnAuditor(state, "tm-bare");
+	state.host.pushTeamsLog({
+		direction: "received",
+		from: "tm-bare",
+		kind: "result",
+		payload: "Independent audit verdict: approved - reason.",
+	});
+	await state.host.run("Consultation cycle: complete - tm-bare independently verified.");
+	assertEq(state.host.getThinkingLevel(), "low");
+	assertIncludes(notices(state.ctx), "approved independent verdict after a passing convention audit");
 });
