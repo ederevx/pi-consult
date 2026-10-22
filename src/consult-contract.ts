@@ -3,11 +3,12 @@
  *
  * One owner for every model-facing string: the catalogue returned by
  * `pre_consult`, the acknowledgement text the agent must accept, the
- * consultation workflow it commits to (judge, consultant-owned design and
- * verification, roadblocks and audits back to a consultant), and the gate's
- * denial and post-compaction reminder text. The constructor takes no
- * configuration: the version pins fixed terms, and nothing about live
- * settings leaks into what is acknowledged.
+ * consultation workflow it commits to (a closing sanity check or audit for
+ * every task, consultant-owned design and verification, roadblocks and
+ * audits back to a consultant), and the gate's denial and post-compaction
+ * reminder text. The constructor takes no configuration: the version pins
+ * fixed terms, and nothing about live settings leaks into what is
+ * acknowledged.
  */
 
 import type { ConsultantAvailability, ConsultantName } from "./contracts.ts";
@@ -15,7 +16,7 @@ import type { GateSnapshot } from "./receipt-ledger.ts";
 
 export class ConsultContract {
 	/** Bump when the acknowledgement terms change; old receipts stop counting. */
-	static readonly VERSION = 10;
+	static readonly VERSION = 11;
 
 	/** The acknowledgement text the agent accepts by calling `pre_consult`. */
 	contractText(): string {
@@ -46,23 +47,43 @@ export class ConsultContract {
 			"- Each brief is persisted under the pi-consult artifact directory before it",
 			"  is sent, as the audit record of what left the machine.",
 			"- By calling pre_consult you acknowledge the terms above and the workflow",
-			"  below: judge each task, leaning toward consulting for evaluation, audit,",
-			"  and investigative work; let a consultant own the design and the",
-			"  verification of its work while you own implementation and execution;",
-			"  send every audit of consultant work to a consultant; verify rather than",
-			"  repeat a consultant's work; and carry every doubt and roadblock back to",
-			"  the consultant.",
+			"  below: end every task with a closing consultation, a sanity check for",
+			"  a simple change and an audit for anything larger, leaning toward",
+			"  consulting earlier for evaluation, audit, and investigative work; let a",
+			"  consultant own the design and the verification of its work while you",
+			"  own implementation and execution; send every audit of consultant work",
+			"  to a consultant, and a closing consultation to a fresh independent",
+			"  pi-teams session only when every enabled consultant has expired; verify",
+			"  rather than repeat a consultant's work; and carry every doubt and",
+			"  roadblock back to the consultant.",
 			"",
-			"Judge each task before you implement:",
-			"- For every task, decide whether it needs an external consultation and",
-			"  state that decision in your next visible reply, before your first",
-			"  implementation call, in one of these forms:",
-			"    Consultation decision: needed - <one-line reason>.",
-			"    Consultation decision: not needed - <one-line reason>.",
-			"- Base it on uncertainty, unfamiliar code, design choices, scope, and the",
-			"  consequence of a mistake. A small mechanical change with an established",
-			"  approach may not need a consultant. Follow an explicit user request to",
-			"  consult. Restate the decision if the task changes shape.",
+			"End every task with a consultation:",
+			"- Every task ends with a closing consultation of its finished work,",
+			"  even when nothing changed. Choose its tier and state it in your next",
+			"  visible reply, before your first implementation call, in one of these",
+			"  forms:",
+			"    Consultation tier: sanity check - <one-line reason>.",
+			"    Consultation tier: audit - <one-line reason>.",
+			"- A sanity check fits a small mechanical change with an established",
+			"  approach: ask one consultant whether the finished work has a defect.",
+			"  An audit fits everything else (uncertainty, unfamiliar code, design",
+			"  choices, wide scope, or a costly mistake): ask for a full review of",
+			"  the work against the task, every changed path, and the evidence; an",
+			"  audit-tier change also leans toward a consult on its design before you",
+			"  implement. When in doubt, audit. Follow an explicit user request for",
+			"  either tier. Restate the tier if the task changes shape.",
+			"- The closing consultation is a consult under every term below: for",
+			"  consultant-derived work it is that consultant's verification, sent with",
+			"  continue: <consult id>; for work you did alone it is a new consult.",
+			"  Brief it with the work: the diff or changed paths; for a task that",
+			"  changed no files, the commands you ran and the state they left, or the",
+			"  answer you will give and the evidence behind it. Ask for its verdict",
+			"  line. Any edit, write, or command after an approved verdict reopens it:",
+			"  return the change with continue for a new verdict.",
+			"- A task is a user request for work: a change, an investigation, or an",
+			"  answer drawn from code, documents, or this machine. A reply that only",
+			"  asks the user a question or waits on their decision does not end a",
+			"  task, and answering a consultant's bridge request is not one.",
 			"- Offload thinking work: evaluation, audit, and investigative tasks lean",
 			"  toward consulting. Evaluation judges an artifact (a diff, plan, design,",
 			"  result, or set of options) against criteria: correct, complete, best,",
@@ -74,13 +95,9 @@ export class ConsultContract {
 			"  test runs, devices, interactive sessions), run it yourself and consult",
 			"  on the interpretation. Evaluating a consultant's own answer is",
 			"  verification: use its continue id, not a new consult. Brief one",
-			"  consultant unless the task demands two independent perspectives. For",
-			"  these tasks, \"not needed\" means a short lookup that the code, documents,",
-			"  or evidence in front of you already settle, or a check a local command",
-			"  decides outright; give that as the reason.",
-			"- The decision is yours and is never enforced: consulting stays your",
-			"  stated judgment, not a gate. Once a task has consulted, the ownership",
-			"  and audit terms below are not optional for it.",
+			"  consultant unless the task demands two independent perspectives.",
+			"- These are commitments, not gate checks: pi-consult blocks no tool for",
+			"  them and checks only the completion line below.",
 			"",
 			"Consultant mode: the consultant owns the design and its verification:",
 			"- For work that came from a consult answer, the consultant owns the",
@@ -109,7 +126,8 @@ export class ConsultContract {
 			"  Never write the line earlier, and never quote, indent, or fence it.",
 			"  If pi-consult answers the line with what still closes the cycle, do",
 			"  exactly that, then write the line again. When every consultant of the",
-			"  cited consult has expired, pi-consult closes the cycle unverified.",
+			"  cited consult has expired, pi-consult closes the cycle unverified; the",
+			"  closing consultation then moves to the next rung of the ladder below.",
 			"- pi-consult reads every marker line in this contract only as plain text:",
 			"  a marker indented four or more spaces, quoted with >, inside a code",
 			"  fence, or in the lines after a quote does not count, and a completion",
@@ -150,7 +168,8 @@ export class ConsultContract {
 			"  that consultant with continue: <consult id>, or brief a consultant fresh",
 			"  when the user asks for an independent review. You never audit",
 			"  consultant-derived work yourself, and you never call it correct,",
-			"  complete, or ready to ship on your own judgment.",
+			"  complete, or ready to ship on your own judgment. Every closing",
+			"  consultation, of either tier and any work, climbs the same ladder.",
 			"- Audits climb a ladder and never skip a rung: a consultant; then, only",
 			"  when every enabled consultant has expired, a dedicated independent",
 			"  agent; then, only on the user's explicit request, you. An enabled",
@@ -161,11 +180,14 @@ export class ConsultContract {
 			"  expired; wait for its delivered result. While one enabled consultant has",
 			"  not expired, it is the rung.",
 			"- The independent agent is a fresh pi-teams teammate spawned with",
-			"  team_spawn for this audit alone, never team_attach and never a session",
-			"  that already holds the task. Start its task with this line, then hand",
-			"  it the plan, the changed paths or diff, the commands you ran and their",
-			"  results as they came out, and what to judge; never tell it what verdict",
-			"  to give:",
+			"  team_spawn for this audit alone, never team_attach, team_peer, another",
+			"  pi process, or a session that already holds the task. It may serve a",
+			"  closing consultation of either tier, but only as this fallback, never",
+			"  while an enabled consultant can serve. Start its task with this line,",
+			"  naming the tier in the scope, then hand it the plan, the changed paths",
+			"  or diff, the commands you ran and their results as they came out, and",
+			"  what to judge (a sanity check: whether the work has a defect; an audit:",
+			"  a full review); never tell it what verdict to give:",
 			"    pi-consult independent audit - <one-line scope>.",
 			"  Collect its report with team_wait and relay its verdict as it is. If",
 			"  the report ends with an approved verdict, nothing is owed, and you have",
@@ -178,17 +200,20 @@ export class ConsultContract {
 			"  not audit the work yourself; tell the user, on a line of its own:",
 			"    Independent audit unavailable - <one-line reason>.",
 			"  and leave the work unaudited until a consultant returns or the user",
-			"  decides.",
+			"  decides; the task then ends without its closing consultation, and you",
+			"  say so.",
 			"- If your own task starts with the pi-consult independent audit line, you",
 			"  are that independent agent and the audit is your task: do it yourself,",
 			"  read-only (no edits, no writes, no state-changing commands; edit, write,",
-			"  and powershell are blocked for you), do not delegate it, and end the",
-			"  report you send your parent with one of these lines, plain and last:",
+			"  and powershell are blocked for you), do not delegate it or consult on",
+			"  it (your report is its closing consultation), and end the report you",
+			"  send your parent with one of these lines, plain and last:",
 			"    Independent audit verdict: approved - <one-line reason>.",
 			"    Independent audit verdict: changes needed - <one-line reason>.",
 			"- Only when every enabled consultant has expired may you carry a",
-			"  roadblock yourself; the fallback never covers an audit. Say so and why",
-			"  on a line of its own, in this form:",
+			"  roadblock yourself; the fallback never covers an audit or a closing",
+			"  consultation, which still goes to the independent agent above. Say so",
+			"  and why on a line of its own, in this form:",
 			"    Consultant fallback: no consultant available - <one-line reason>.",
 			"  pi-consult restores your thinking level when you state that line, but",
 			"  only if its own records agree that every enabled consultant has expired",
@@ -242,10 +267,11 @@ export class ConsultContract {
 		);
 		lines.push(
 			"- After that acknowledgement nothing is blocked: no consult receipt, no " +
-				"effort declaration, no waiver. Whether a task consults is your stated " +
-				"judgment. A failed or unavailable consultant does not close the gate. " +
-				"The consultant-mode, roadblock, and audit terms are commitments, not " +
-				"gate checks. The one exception: a session spawned as a pi-consult independent " +
+				"effort declaration, no waiver. The closing consultation every task " +
+				"owes and the consultant-mode, roadblock, and audit terms are " +
+				"commitments, not gate checks. pi-consult checks only the completion " +
+				"line. A failed or unavailable consultant does not close the gate. " +
+				"The one exception: a session spawned as a pi-consult independent " +
 				"auditor keeps edit, write, and powershell blocked for its whole life.",
 		);
 		lines.push("");
@@ -287,8 +313,9 @@ export class ConsultContract {
 			);
 		}
 		return (
-			"pi-consult: this session was compacted. Restate your consultation " +
-			"decision for the current task if it is no longer in view, and verify - " +
+			"pi-consult: this session was compacted. Every task ends with a closing " +
+			"consultation; restate its tier (sanity check or audit) for the current " +
+			"task if it is no longer in view, and verify - " +
 			"do not redo - any consultant's work; send doubts back with the " +
 			"consultant's continue id. A consultant owns the design and verification " +
 			"of its work: every roadblock goes back to it, and audits of its work go " +
@@ -311,7 +338,7 @@ export class ConsultContract {
 		const parts = [
 			`acknowledged: ${snapshot.acknowledged ? "yes" : "no"}`,
 			`contract: v${ConsultContract.VERSION}`,
-			"consult decision: judgment only",
+			"closing consult: every task (sanity check or audit)",
 			"consultant work: consultant-verified (commitment, not gate)",
 			effort,
 			`consults on branch: ${lastConsultId === null ? 0 : consults.length}`,

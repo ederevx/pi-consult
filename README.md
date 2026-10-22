@@ -2,14 +2,15 @@
 
 Offload thinking work from the [pi](https://pi.dev) coding agent to external
 consultants — **Claude Code** and **OpenAI Codex** — behind an
-acknowledgement gate with a stated consultation judgment. In consultant mode
-the consultant owns the design and its verification; pi owns implementation
-and execution, at low thinking effort, and consults again at any roadblock.
+acknowledgement gate, and every task ends with a consultation: a sanity check
+for a simple change, an audit for anything larger. In consultant mode the
+consultant owns the design and its verification; pi owns implementation and
+execution, at low thinking effort, and consults again at any roadblock.
 
 ## Install
 
 ```bash
-pi install git:github.com/ederevx/pi-consult@v0.14.5
+pi install git:github.com/ederevx/pi-consult@v0.15.0
 ```
 
 The package has no runtime dependencies; it uses the host-provided
@@ -89,8 +90,9 @@ surfaced as a warning.
 
 - **`pre_consult`** - the acknowledgement gate. Call it once per session; it
   returns the catalogue and records that briefs, and any file a consultant
-  reads, leave the machine, that no secrets may be included, and how to judge
-  each task. Until it succeeds, implementation tools (`edit`, `write`, `bash`,
+  reads, leave the machine, that no secrets may be included, and that every
+  task ends with a closing consultation. Until it succeeds, implementation
+  tools (`edit`, `write`, `bash`,
   `powershell`, and any tool outside the operator's allow list) are blocked.
   After it pi-consult blocks nothing, except in a session spawned as a
   pi-consult independent auditor, where `edit`, `write`, and `powershell` stay
@@ -106,18 +108,24 @@ surfaced as a warning.
 - **`consult_reply`** - answers a consultant's bridge request by `requestId`,
   so the blocked consultant can continue; screened for secrets like a brief.
 
-### The consultation judgment
+### The closing consultation
 
 The catalogue instructs the agent, and the tool's prompt guidelines repeat it:
 
-- Before its first implementation call of a task, the agent states its
-  judgment visibly: `Consultation decision: needed - <reason>.` or
-  `Consultation decision: not needed - <reason>.` It is never enforced.
-- Evaluation, audit, and investigative tasks lean toward one consultant; work
-  that needs local execution the agent runs itself, then consults on the
+- Every task ends with a consultation of its finished work. Before its first
+  implementation call the agent states the tier: `Consultation tier: sanity
+  check - <reason>.` (a small mechanical change: one consultant checks for
+  defects) or `Consultation tier: audit - <reason>.` (anything else, or when in
+  doubt: a full review). Consultant-derived work is verified through
+  `continue`; work pi did alone gets a new consult. Only when every enabled
+  consultant has expired does a fresh pi-teams auditor serve it instead. A task
+  with no diff is briefed with its commands and resulting state, or the answer
+  and its evidence. Any edit after an approved verdict reopens it. It is a
+  commitment: pi-consult enforces only the completion line.
+- Evaluation, audit, and investigative tasks lean toward consulting earlier;
+  work that needs local execution the agent runs itself, then consults on the
   interpretation. Evaluating a consultant's own answer is verification and
-  goes back through `continue`. `not needed` fits a lookup the code or evidence
-  in view already settles, or a check a local command decides outright.
+  goes back through `continue`.
 - The agent does not redo a consultant's investigation; it verifies the claims
   the change relies on (files, lines, names, paths, tests) and reports the
   evidence as it came out. Whether the work is correct, complete, or worth
@@ -130,15 +138,18 @@ The catalogue instructs the agent, and the tool's prompt guidelines repeat it:
   1. **A consultant**, ending `Consultant verdict: approved - <reason>.` or
      `Consultant verdict: changes needed - <reason>.`
   2. **A fresh pi-teams teammate**, only when every enabled consultant has
-     expired; its task starts `pi-consult independent audit - <scope>.` and
-     ends `Independent audit verdict: approved|changes needed - <reason>.`
+     expired, never `team_attach`, `team_peer`, or another pi process; it also
+     serves either tier of the closing consultation, only as this fallback.
+     Its task starts `pi-consult independent audit - <scope>.` (the scope
+     names the tier) and ends
+     `Independent audit verdict: approved|changes needed - <reason>.`
   3. **pi itself**, only on the user's explicit request
      (`Audit by pi at the user's request - <request>.`).
 
   Without pi-teams, or after a failed spawn or verdict-less report, pi stops
   with `Independent audit unavailable - <reason>.` and leaves the work
   unaudited. `Consultant fallback: no consultant available - <reason>.` covers
-  roadblocks only.
+  roadblocks only, never an audit or a closing consultation.
 
 ### pi's thinking level
 
