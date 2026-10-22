@@ -152,9 +152,9 @@ test("pre_consult: a nested call is rejected", async () => {
 	assertEq(threw, true);
 });
 
-test("pre_consult: contract v11 states the hold, the verdict and the completion line", async () => {
+test("pre_consult: contract v12 states the hold, the verdict and the completion line", async () => {
 	const text = await contractText();
-	assertEq(ConsultContract.VERSION, 11);
+	assertEq(ConsultContract.VERSION, 12);
 	assertIncludes(text, "holds your own thinking effort");
 	assertIncludes(text, "It never leaves you at high, xhigh, or max");
 	assertIncludes(text, "you own the implementation and the\n  execution");
@@ -163,6 +163,20 @@ test("pre_consult: contract v11 states the hold, the verdict and the completion 
 	assertIncludes(text, "Never write the line earlier, and never quote, indent, or fence it.");
 	assertIncludes(text, "/consult-effort release");
 	assertNotIncludes(text, "low; never high, xhigh, or max)");
+});
+
+test("pre_consult: contract v12 requires a convention audit in every closing consultation", async () => {
+	const definition = register({ probeAll: async () => [] } as unknown as ConsultRunner);
+	const text = await contractText();
+	assertIncludes(text, "Every closing consultation audits convention compliance");
+	assertIncludes(text, "which a consultant cannot read");
+	assertIncludes(text, "Convention audit: none found - <where it looked>.");
+	assertIncludes(text, "An approved verdict counts only directly after compliant or none found.");
+	assertIncludes(text, "ends with a passing convention audit line and the");
+	assertIncludes(
+		(definition.promptGuidelines ?? []).join("\n"),
+		"Convention audit: compliant|violations|none found",
+	);
 });
 
 test("pre_consult: the catalogue names the auditor exception and the marker rule", async () => {

@@ -582,7 +582,9 @@ test("agent effort: a two-space indent and a closed fence keep plain lines", asy
 	indented.policy.settle(
 		"c-000051",
 		consultDetails("c-000051", [consultRun("claude", "ok")]),
-		verdictAnswers({ claude: "  Consultant verdict: approved - indented." }),
+		verdictAnswers({
+			claude: "  Convention audit: compliant - AGENTS.md.\n  Consultant verdict: approved - indented.",
+		}),
 	);
 	await indented.host.run("Consultation cycle: complete - c-000051 verified.");
 	assertEq(indented.host.getThinkingLevel(), "high", "a two-space indent is plain");

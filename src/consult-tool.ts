@@ -114,7 +114,8 @@ export class ConsultTool {
 				"The answer is the plan of record: verify its claims rather than repeating " +
 				"its investigation, and carry every doubt and every roadblock back with " +
 				"continue instead of working around it. The consultant also verifies the " +
-				"finished work and ends with a verdict line: send the evidence back " +
+				"finished work, audits it against the conventions you brief, and ends " +
+				"with a convention audit line and a verdict line: send the evidence back " +
 				"with continue. Never audit consultant work yourself: when every " +
 				"consultant has expired, a fresh pi-teams teammate audits it, and you " +
 				"audit only on the user's explicit request, saying so. " +

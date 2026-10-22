@@ -19,11 +19,20 @@ export class BriefComposer {
 		"flag anything you could not verify. When the brief asks a question, answer",
 		"it directly first, then the supporting detail.",
 		"",
-		"When the brief asks you to verify finished work, end your answer with one",
-		"of these lines, alone and as its last line, not quoted or in a code block:",
+		"When the brief asks you to verify finished work, first audit it against",
+		"every convention that governs it: the conventions the brief quotes or",
+		"lists, and any AGENTS.md, CLAUDE.md, or RULES.md in the working",
+		"directory. Then end your answer with two plain lines, not quoted or in a",
+		"code block. First, one of:",
+		"  Convention audit: compliant - <the conventions checked>.",
+		"  Convention audit: violations - <each rule broken>.",
+		"  Convention audit: none found - <where you looked>.",
+		"Then, alone and as the last line, one of:",
 		"  Consultant verdict: approved - <one-line reason>.",
 		"  Consultant verdict: changes needed - <one-line reason>.",
-		"Approved hands control back to pi; give it only when nothing remains.",
+		"Approved hands control back to pi; give it only when nothing remains and",
+		"the convention audit is compliant or none found. pi does not accept an",
+		"approval unless the convention audit line directly precedes it.",
 	].join("\n");
 
 	/** The consultant role text. */

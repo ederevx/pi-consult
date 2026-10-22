@@ -122,6 +122,13 @@ The catalogue instructs the agent, and the tool's prompt guidelines repeat it:
   with no diff is briefed with its commands and resulting state, or the answer
   and its evidence. Any edit after an approved verdict reopens it. It is a
   commitment: pi-consult enforces only the completion line.
+- Every closing consultation audits convention compliance. The agent briefs
+  the conventions that govern the work: in-tree files (`AGENTS.md`,
+  `CLAUDE.md`, rules files) through `files`, out-of-tree memory rules
+  (`RULES.md`, `MEMORY.md`) quoted, or none and why. The consultant ends with
+  `Convention audit: compliant|violations|none found - <detail>.` directly
+  before its verdict; an approval without `compliant` or `none found` there
+  does not count.
 - Evaluation, audit, and investigative tasks lean toward consulting earlier;
   work that needs local execution the agent runs itself, then consults on the
   interpretation. Evaluating a consultant's own answer is verification and
@@ -135,13 +142,14 @@ The catalogue instructs the agent, and the tool's prompt guidelines repeat it:
   unexpected result, an ambiguity), goes back through `continue` before the
   agent works around it.
 - An audit of consultant-derived work climbs a ladder and never skips a rung:
-  1. **A consultant**, ending `Consultant verdict: approved - <reason>.` or
+  1. **A consultant**, ending `Convention audit: compliant|none found -
+     <detail>.` and then `Consultant verdict: approved - <reason>.` or
      `Consultant verdict: changes needed - <reason>.`
   2. **A fresh pi-teams teammate**, only when every enabled consultant has
      expired, never `team_attach`, `team_peer`, or another pi process; it also
      serves either tier of the closing consultation, only as this fallback.
      Its task starts `pi-consult independent audit - <scope>.` (the scope
-     names the tier) and ends
+     names the tier), ends with a convention audit line, then
      `Independent audit verdict: approved|changes needed - <reason>.`
   3. **pi itself**, only on the user's explicit request
      (`Audit by pi at the user's request - <request>.`).
@@ -163,13 +171,14 @@ markers qualifies. Completion markers must be the final non-blank line;
 fallback and user-request markers must appear on their own plain lines.
 
 - `Consultation cycle: complete - <consult id> verified.` - the cited
-  consult's answer ends with the approved verdict, it started after pi's last
-  `edit`, `write`, `bash`, or `powershell`, and no consult is running or
-  undelivered;
+  consult's answer ends with a passing convention audit line and the approved
+  verdict, it started after pi's last `edit`, `write`, `bash`, or
+  `powershell`, and no consult is running or undelivered;
 - `Consultation cycle: complete - <teammate id> independently verified.` -
   once every enabled consultant has expired, that teammate was spawned as the
-  independent auditor after the expiry, its logged report ends with the
-  approved verdict, and pi has not edited, written, or run a command since;
+  independent auditor after the expiry, its logged report ends with a passing
+  convention audit and the approved verdict, and pi has not edited, written,
+  or run a command since;
 - `Consultant fallback: no consultant available - <reason>.` - pi-consult's
   records agree: every enabled consultant has expired and nothing is owed;
 - `Audit by pi at the user's request - <request>.`
