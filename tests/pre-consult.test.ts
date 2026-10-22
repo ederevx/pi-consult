@@ -76,8 +76,10 @@ test("pre_consult: returns the current catalogue and a versioned receipt", async
 	assertEq(result.details.ack.contractVersion, ConsultContract.VERSION);
 	const text = result.content[0].text;
 	assertIncludes(text, `pi-consult contract v${ConsultContract.VERSION}`);
-	assertIncludes(text, "Consultation decision: needed");
-	assertIncludes(text, "Consultation decision: not needed");
+	assertIncludes(text, "Consultation tier: sanity check - <one-line reason>.");
+	assertIncludes(text, "Consultation tier: audit - <one-line reason>.");
+	assertNotIncludes(text, "not needed", "no consultation can be skipped");
+	assertNotIncludes(text, "Consultation decision:");
 	assertIncludes(text, "Do not redo the investigation");
 	assertIncludes(text, "continue: <consult id>");
 	assertIncludes(text, "no consult receipt, no ");
@@ -91,16 +93,17 @@ test("pre_consult: returns the current catalogue and a versioned receipt", async
 	assertIncludes(text, "An audit checks every member of a set", "audit is defined");
 	assertIncludes(text, "a consultant can\n  read or be handed", "the offload boundary names what a consultant can see");
 	assertIncludes(text, 'use its continue id, not a new consult', "evaluating a consultant's answer is verification");
-	assertIncludes(text, '"not needed" means a short', "the not-needed threshold is stated");
-	assertIncludes(text, "a check a local command\n  decides outright", "a local-command check is an accepted not-needed reason");
+	assertIncludes(text, "Every task ends with a closing consultation", "the closing consultation is unconditional");
+	assertIncludes(text, "after an approved verdict reopens it", "a later change reopens the closing consultation");
+	assertIncludes(text, "for a task that\n  changed no files", "a no-diff task still closes with a consult");
 	assertNotIncludes(text, "would materially improve the work", "the old optional-investigation wording is gone");
 	assertIncludes(text, "unless the task demands two independent", "the consulting default keeps the both-exception");
-	const base = text.indexOf("- Base it on uncertainty");
+	const tierRule = text.indexOf("- Every task ends with a closing consultation");
 	const leaning = text.indexOf("- Offload thinking work: evaluation, audit");
-	const neverEnforced = text.indexOf("- The decision is yours and is never enforced");
+	const commitment = text.indexOf("- These are commitments, not gate checks");
 	assert(
-		base >= 0 && base < leaning && leaning < neverEnforced,
-		"the consulting default sits inside the never-enforced scope",
+		tierRule >= 0 && tierRule < leaning && leaning < commitment,
+		"the tier rule precedes the offload default and the commitment scope",
 	);
 });
 
@@ -108,14 +111,16 @@ test("pre_consult: the tool carries workflow prompt guidelines", () => {
 	const definition = register({ probeAll: async () => [] } as unknown as ConsultRunner);
 	const guidelines = definition.promptGuidelines ?? [];
 	assert(guidelines.length >= 2, "both workflow rules survive compaction");
-	assertIncludes(guidelines.join("\n"), "Consultation decision");
+	assertIncludes(guidelines.join("\n"), "Consultation tier");
+	assertIncludes(guidelines.join("\n"), "Every task ends with a closing consultation");
+	assertNotIncludes(guidelines.join("\n"), "not needed");
 	assertIncludes(guidelines.join("\n"), "continuation");
 	assertIncludes(guidelines.join("\n"), "single consultant", "the singular-consultant preference survives compaction");
 	assert(guidelines.length >= 4, "the investigative default is a guideline");
 	assertIncludes(guidelines.join("\n"), "investigative tasks", "the investigative default survives compaction");
 	assertIncludes(guidelines.join("\n"), "Offload thinking work", "the offload default survives compaction");
 	assertIncludes(guidelines.join("\n"), "audit tasks", "audit tasks survive compaction");
-	assertIncludes(guidelines.join("\n"), "short lookup");
+	assertIncludes(guidelines.join("\n"), "never team_attach, team_peer", "the independent session is a fresh teammate only");
 	assertIncludes(guidelines.join("\n"), "every roadblock", "roadblocks survive compaction");
 	assertIncludes(guidelines.join("\n"), "Consultant fallback", "the fallback wording survives compaction");
 	assertIncludes(guidelines.join("\n"), "Audit by pi at the user", "the direct-request audit survives compaction");
@@ -132,7 +137,7 @@ test("pre_consult: a probe failure still returns the full terms", async () => {
 	const result = await executor(definition)("call-probe", { acknowledge: true });
 	const text = result.content[0].text;
 	assertIncludes(text, `pi-consult contract v${ConsultContract.VERSION}`);
-	assertIncludes(text, "Judge each task before you implement");
+	assertIncludes(text, "End every task with a consultation");
 	assertEq(result.details.ack.contractVersion, ConsultContract.VERSION);
 });
 
@@ -147,9 +152,9 @@ test("pre_consult: a nested call is rejected", async () => {
 	assertEq(threw, true);
 });
 
-test("pre_consult: contract v10 states the hold, the verdict and the completion line", async () => {
+test("pre_consult: contract v11 states the hold, the verdict and the completion line", async () => {
 	const text = await contractText();
-	assertEq(ConsultContract.VERSION, 10);
+	assertEq(ConsultContract.VERSION, 11);
 	assertIncludes(text, "holds your own thinking effort");
 	assertIncludes(text, "It never leaves you at high, xhigh, or max");
 	assertIncludes(text, "you own the implementation and the\n  execution");
@@ -185,6 +190,10 @@ test("pre_consult: the contract routes audits up a ladder", async () => {
 	assertIncludes(text, "pi-consult independent audit - <one-line scope>.");
 	assertIncludes(text, "Independent audit unavailable - <one-line reason>.");
 	assertIncludes(text, "the fallback never covers an audit");
+	assertIncludes(text, "never covers an audit or a closing\n  consultation");
+	assertIncludes(text, "never team_attach, team_peer, another", "only a fresh pi-teams teammate is independent");
+	assertIncludes(text, "but only as this fallback, never", "the independent session is fallback-only");
+	assertIncludes(text, "a closing consultation to a fresh independent", "the acknowledgement names the fallback");
 	assertIncludes(text, "Consultant fallback: no consultant available - <one-line reason>.");
 	assertIncludes(text, "A slow, detached, or interrupted consult has not\n  expired; wait for its delivered result.");
 	assertIncludes(text, "Audit by pi at the user's request - <the request, in brief>.");
@@ -201,10 +210,10 @@ test("pre_consult: the contract keeps evidence and the consultant's verdict", as
 	assertIncludes(text, "the consultant's verdict");
 });
 
-test("pre_consult: the contract orders decision, mode, use, roadblock and audit", async () => {
+test("pre_consult: the contract orders the commitment, mode, use, roadblock and audit", async () => {
 	const text = await contractText();
 	const order = [
-		"- The decision is yours",
+		"- These are commitments, not gate checks",
 		"Consultant mode:",
 		"Use consultant work",
 		"- Carry every doubt back",
@@ -275,6 +284,7 @@ test("pre_consult: statusText carries the effort hold and the consultant-verifie
 	);
 	assertIncludes(text, "effort hold: on");
 	assertIncludes(text, "consultant-verified (commitment, not gate)");
-	assertIncludes(text, "consult decision: judgment only");
+	assertIncludes(text, "closing consult: every task (sanity check or audit)");
+	assertNotIncludes(text, "judgment only");
 	assertNotIncludes(text, "requirement: none");
 });

@@ -3,9 +3,9 @@
  *
  * A single `tool_call` handler: deny implementation work until the session
  * has acknowledged the current contract with `pre_consult`. Nothing else is
- * gated — no consult receipt, no effort allowance, no waiver — so whether a
- * task consults is the agent's stated judgment. A thrown handler blocks the
- * tool, so the gate fails closed.
+ * gated — no consult receipt, no effort allowance, no waiver — so the closing
+ * consultation every task owes is a contract commitment, not a gate check. A
+ * thrown handler blocks the tool, so the gate fails closed.
  */
 
 import type {
