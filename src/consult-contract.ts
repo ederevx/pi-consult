@@ -315,16 +315,15 @@ export class ConsultContract {
 		return (
 			"pi-consult: this session was compacted. Every task ends with a closing " +
 			"consultation; restate its tier (sanity check or audit) for the current " +
-			"task if it is no longer in view, and verify - " +
-			"do not redo - any consultant's work; send doubts back with the " +
-			"consultant's continue id. A consultant owns the design and verification " +
-			"of its work: every roadblock goes back to it, and audits of its work go " +
-			"to a consultant, never to you: when every enabled consultant has " +
-			"expired, to a fresh pi-teams independent auditor, and to you only on " +
-			"the user's explicit request, and you say so. Write the Consultation " +
-			"cycle: complete line, as your final line, only after an approved " +
-			"consultant or independent verdict and with no consult or audit running " +
-			"or undelivered."
+			"task if it is no longer in view, and verify - do not redo - any " +
+			"consultant's work; send doubts back with the consultant's continue id. " +
+			"A consultant owns the design and verification of its work: every " +
+			"roadblock goes back to it, and audits of its work go to a consultant, " +
+			"never to you: when every enabled consultant has expired, to a fresh " +
+			"pi-teams independent auditor, and to you only on the user's explicit " +
+			"request, and you say so. Write the Consultation cycle: complete line, " +
+			"as your final line, only after an approved consultant or independent " +
+			"verdict and with no consult or audit running or undelivered."
 		);
 	}
 
