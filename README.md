@@ -92,8 +92,8 @@ surfaced as a warning.
   returns the catalogue and records that briefs, and any file a consultant
   reads, leave the machine, that no secrets may be included, and that every
   task ends with a closing consultation. Until it succeeds, implementation
-  tools (`edit`, `write`, `bash`,
-  `powershell`, and any tool outside the operator's allow list) are blocked.
+  tools (`edit`, `write`, `bash`, `powershell`, and any tool outside the
+  operator's allow list) are blocked.
   After it pi-consult blocks nothing, except in a session spawned as a
   pi-consult independent auditor, where `edit`, `write`, and `powershell` stay
   blocked. Reads and the pi-consult tools are never blocked. The

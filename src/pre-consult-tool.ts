@@ -6,9 +6,8 @@
  * consultation workflow the agent commits to (a closing consultation for
  * every task, consultant-owned design and verification, roadblocks and
  * audits back to a consultant), and consultant availability. A probe that
- * finds consultants
- * unavailable records that, and restores the thinking level the cycle had
- * lowered when no enabled consultant can serve it.
+ * finds consultants unavailable records that, and restores the thinking
+ * level the cycle had lowered when no enabled consultant can serve it.
  */
 
 import type {
@@ -45,8 +44,8 @@ export class PreConsultTool {
 				"pi-consult catalogue: the acknowledgement that briefs and the files a " +
 				"consultant reads leave this machine, how every task ends with a " +
 				"closing consultation (a sanity check or an audit), how to verify a " +
-				"consultant's work without repeating its " +
-				"investigation, why the consultant owns the design and verification " +
+				"consultant's work without repeating its investigation, why the " +
+				"consultant owns the design and verification " +
 				"while pi implements and executes, how roadblocks and audits of " +
 				"consultant work go back to a consultant, and the acknowledgement " +
 				"gate's rules. Until this succeeds for the current contract, " +
@@ -68,11 +67,10 @@ export class PreConsultTool {
 						"You acknowledge that consult briefs and the files a consultant " +
 						"reads leave this machine, that no secrets may be included, and " +
 						"that you will end every task with a closing consultation of the " +
-						"tier you state, verify " +
-						"rather than repeat a consultant's investigation, send doubts " +
-						"and roadblocks back through consult continuation, let the " +
-						"consultant own design and verification, and route audits of " +
-						"consultant work to a consultant.",
+						"tier you state, verify rather than repeat a consultant's " +
+						"investigation, send doubts and roadblocks back through consult " +
+						"continuation, let the consultant own design and verification, " +
+						"and route audits of consultant work to a consultant.",
 				}),
 			}),
 			annotations: { readOnlyHint: true },
