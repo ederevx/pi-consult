@@ -52,6 +52,14 @@ export interface OutputSettings {
 export interface DriveSettings {
 	enabled: boolean;
 	deadlineMs: number;
+	/** Which tools pi may be asked to run for a consultant. */
+	tools: DriveToolSettings;
+}
+
+/** The consultant-requested tool policy's configurable values. */
+export interface DriveToolSettings {
+	/** Tool names pi may be asked to run; pi still decides every run. */
+	allow: string[];
 }
 
 export class ConsultConfig {
@@ -68,6 +76,7 @@ export class ConsultConfig {
 		"pre_teams",
 		"transcript_read",
 	];
+	private static readonly DEFAULT_DRIVE_TOOLS_ALLOW = ["read", "grep", "find", "ls", "bash"];
 
 	readonly enabled: boolean;
 	readonly confirmFirstConsult: boolean;
@@ -107,12 +116,17 @@ export class ConsultConfig {
 		};
 
 		const drive = ConsultConfig.record(raw.drive);
+		const toolSettings = ConsultConfig.record(drive.tools);
+		const toolAllow = ConsultConfig.stringList(toolSettings.allow);
 		this.drive = {
 			enabled: ConsultConfig.bool(drive.enabled, true),
 			deadlineMs: ConsultConfig.positiveNumber(
 				drive.deadlineMs,
 				ConsultConfig.DEFAULT_DRIVE_DEADLINE_MS,
 			),
+			tools: {
+				allow: toolAllow.length > 0 ? toolAllow : [...ConsultConfig.DEFAULT_DRIVE_TOOLS_ALLOW],
+			},
 		};
 
 		this.claude = ConsultConfig.consultantSettings(

@@ -23,7 +23,7 @@ export interface ConsultantTarget {
 
 export class ConsultContract {
 	/** Bump when the acknowledgement terms change; old receipts stop counting. */
-	static readonly VERSION = 13;
+	static readonly VERSION = 14;
 
 	/** The acknowledgement text the agent accepts by calling `pre_consult`. */
 	contractText(targets: readonly ConsultantTarget[]): string {
@@ -279,6 +279,10 @@ export class ConsultContract {
 		lines.push(
 			"- consult_reply: answer a request a consultant made through the bridge, by " +
 				"its requestId, so the blocked consultant can continue.",
+		);
+		lines.push(
+			"- consult_execute: run the tool a consultant requested through the bridge, " +
+				"by its requestId; the output is piped back to the consultant for you.",
 		);
 		lines.push("");
 		lines.push(this.contractText(targets));

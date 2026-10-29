@@ -14,7 +14,7 @@ import { join } from "node:path";
 
 import { BridgeFrameDecoder } from "./bridge-frame-decoder.ts";
 import { BridgeProtocol, type BridgeFrame } from "./bridge-protocol.ts";
-import type { ConsultRequestBroker } from "./consult-request-broker.ts";
+import type { ConsultRequestBroker, RequestPayload } from "./consult-request-broker.ts";
 
 export interface ControlServerDeps {
 	broker: ConsultRequestBroker;
@@ -24,6 +24,8 @@ export interface ControlServerDeps {
 
 export class ConsultControlServer {
 	private static readonly SOCKET_NAME = "bridge.sock";
+	/** What this server serves; an older bridge reads none of it. */
+	private static readonly CAPABILITIES = ["use_tool"];
 	private readonly broker: ConsultRequestBroker;
 	private readonly root: string;
 	private readonly tokens = new Map<string, string>();
@@ -108,7 +110,7 @@ export class ConsultControlServer {
 				socket.destroy();
 				return admitted;
 			}
-			this.send(socket, { type: "ready", invocationId: known });
+			this.send(socket, { type: "ready", invocationId: known, capabilities: ConsultControlServer.CAPABILITIES });
 			return known;
 		}
 		if (!admitted) {
@@ -117,31 +119,46 @@ export class ConsultControlServer {
 			return admitted;
 		}
 		if (frame.type === "drive") {
-			this.drive(socket, admitted, frame.clientRequestId, frame.prompt);
+			this.drive(socket, admitted, frame.prompt, frame.clientRequestId);
+		} else if (frame.type === "use_tool") {
+			const request: RequestPayload & { clientRequestId: string } = {
+				kind: "tool",
+				clientRequestId: frame.clientRequestId,
+				name: frame.name,
+				arguments: frame.arguments,
+			};
+			this.drive(socket, admitted, request);
 		} else if (frame.type === "cancel") {
 			this.broker.cancel(admitted, frame.clientRequestId);
 		}
 		return admitted;
 	}
 
-	private drive(socket: Socket, invocationId: string, clientRequestId: string, prompt: string): void {
+	private drive(
+		socket: Socket,
+		invocationId: string,
+		payload: string | (RequestPayload & { clientRequestId?: string }),
+		clientRequestId?: string,
+	): void {
 		const separator = invocationId.indexOf(":");
 		const consultId = separator > 0 ? invocationId.slice(0, separator) : invocationId;
 		const consultant = separator > 0 ? invocationId.slice(separator + 1) : "claude";
+		const id = clientRequestId ?? (typeof payload === "string" ? "" : payload.clientRequestId);
 		void this.broker
 			.submit(
 				invocationId,
 				consultId,
 				consultant === "codex" ? "codex" : "claude",
-				clientRequestId,
-				prompt,
+				id,
+				payload,
 			)
 			.then((outcome) => {
 				this.send(socket, {
 					type: "answer",
-					clientRequestId,
+					clientRequestId: id,
 					status: outcome.status,
 					answer: outcome.answer,
+					isError: outcome.isError,
 				});
 			})
 			.catch(() => undefined);

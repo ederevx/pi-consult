@@ -21,6 +21,7 @@ import { ConsultContract } from "./consult-contract.ts";
 import { ConsultControlServer } from "./consult-control-server.ts";
 import { ConsultDelivery } from "./consult-delivery.ts";
 import { ConsultDriveDispatcher } from "./consult-drive-dispatcher.ts";
+import { ConsultExecuteTool } from "./consult-execute-tool.ts";
 import { ConsultForeground } from "./consult-foreground.ts";
 import { ConsultIndex } from "./consult-index.ts";
 import { ConsultRecordStore } from "./consult-record-store.ts";
@@ -32,6 +33,8 @@ import { ConsultSettingsStore } from "./consult-settings-store.ts";
 import { ConsultSupervisor } from "./consult-supervisor.ts";
 import { ConsultTerminateTool } from "./consult-terminate-tool.ts";
 import { ConsultTool } from "./consult-tool.ts";
+import { ConsultToolOutput } from "./consult-tool-output.ts";
+import { ConsultToolPolicy } from "./consult-tool-policy.ts";
 import { ClaudeConsultant } from "./consultants/claude-consultant.ts";
 import { CodexConsultant } from "./consultants/codex-consultant.ts";
 import { FailureClassifier } from "./failure-classifier.ts";
@@ -102,6 +105,11 @@ export class ConsultExtension {
 		}).register(pi);
 		new ConsultTerminateTool(supervisor, effort).register(pi);
 		new ConsultReplyTool(broker, new SecretScreen()).register(pi);
+		new ConsultExecuteTool(
+			broker,
+			new ConsultToolPolicy(config.drive.tools),
+			new ConsultToolOutput(new SecretScreen()),
+		).register(pi);
 		new ImplementationGate(ledger, classifier, contract).register(pi);
 		new AgentAvailability(new FailureClassifier(), () => index.latest()?.consultId ?? null).register(pi);
 		new SessionLifecycle(

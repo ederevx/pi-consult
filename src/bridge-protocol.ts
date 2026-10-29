@@ -24,10 +24,11 @@ export interface BridgeHelloFrame {
 	invocationId: string;
 }
 
-/** The server's admission reply. */
+/** The server's admission reply; `capabilities` names what this server serves. */
 export interface BridgeReadyFrame {
 	type: "ready";
 	invocationId: string;
+	capabilities?: readonly string[];
 }
 
 /** The consultant asking pi to do something and answer. */
@@ -35,6 +36,14 @@ export interface BridgeDriveFrame {
 	type: "drive";
 	clientRequestId: string;
 	prompt: string;
+}
+
+/** The consultant asking pi to run one named tool and pipe the output back. */
+export interface BridgeUseToolFrame {
+	type: "use_tool";
+	clientRequestId: string;
+	name: string;
+	arguments: Record<string, unknown>;
 }
 
 /** The consultant withdrawing a request it no longer wants. */
@@ -49,6 +58,10 @@ export interface BridgeAnswerFrame {
 	clientRequestId: string;
 	status: DriveStatus;
 	answer?: string;
+	/** The executed tool reported failure; the answer text is its output. */
+	isError?: boolean;
+	/** The answer text was cut to fit the answer bound. */
+	truncated?: boolean;
 }
 
 /** A protocol or admission failure. */
@@ -62,6 +75,7 @@ export type BridgeFrame =
 	| BridgeHelloFrame
 	| BridgeReadyFrame
 	| BridgeDriveFrame
+	| BridgeUseToolFrame
 	| BridgeCancelFrame
 	| BridgeAnswerFrame
 	| BridgeErrorFrame;
@@ -109,7 +123,11 @@ export class BridgeProtocol {
 					: undefined;
 			case "ready":
 				return BridgeProtocol.isId(frame.invocationId)
-					? { type: "ready", invocationId: frame.invocationId as string }
+					? {
+							type: "ready",
+							invocationId: frame.invocationId as string,
+							capabilities: BridgeProtocol.capabilities(frame.capabilities),
+						}
 					: undefined;
 			case "drive":
 				return BridgeProtocol.isId(frame.clientRequestId) &&
@@ -119,6 +137,21 @@ export class BridgeProtocol {
 							type: "drive",
 							clientRequestId: frame.clientRequestId as string,
 							prompt: frame.prompt,
+						}
+					: undefined;
+			case "use_tool":
+				return BridgeProtocol.isId(frame.clientRequestId) &&
+					BridgeProtocol.isId(frame.name) &&
+					typeof frame.arguments === "object" &&
+					frame.arguments !== null &&
+					!Array.isArray(frame.arguments) &&
+					Buffer.byteLength(JSON.stringify(frame.arguments), "utf8") <=
+						BridgeProtocol.MAX_PROMPT_BYTES
+					? {
+							type: "use_tool",
+							clientRequestId: frame.clientRequestId as string,
+							name: frame.name as string,
+							arguments: frame.arguments as Record<string, unknown>,
 						}
 					: undefined;
 			case "cancel":
@@ -133,6 +166,8 @@ export class BridgeProtocol {
 							clientRequestId: frame.clientRequestId as string,
 							status: frame.status as DriveStatus,
 							answer: typeof frame.answer === "string" ? frame.answer : undefined,
+							isError: frame.isError === true ? true : undefined,
+							truncated: frame.truncated === true ? true : undefined,
 						}
 					: undefined;
 			case "error":
@@ -165,5 +200,12 @@ export class BridgeProtocol {
 			value === "busy" ||
 			value === "unavailable"
 		);
+	}
+
+	/** The capability names a ready frame carries, when well-formed. */
+	private static capabilities(value: unknown): string[] | undefined {
+		if (!Array.isArray(value)) return undefined;
+		const names = value.filter((item): item is string => BridgeProtocol.isId(item));
+		return names.length > 0 ? names : undefined;
 	}
 }

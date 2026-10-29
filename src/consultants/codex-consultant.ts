@@ -125,6 +125,8 @@ export class CodexConsultant implements Consultant {
 			// tool itself is pre-approved.
 			"-c",
 			`mcp_servers.${bridge.serverName}.tools.${bridge.toolName}.approval_mode="approve"`,
+			"-c",
+			`mcp_servers.${bridge.serverName}.tools.${bridge.useToolName}.approval_mode="approve"`,
 		];
 	}
 

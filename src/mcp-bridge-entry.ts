@@ -26,7 +26,8 @@ export default async function runBridge(): Promise<number> {
 		process.stderr.write(`pi-consult-bridge: ${message}\n`);
 		return 1;
 	}
-	await new McpStdioServer(process.stdin, process.stdout, client).serve();
+	await client.negotiate();
+	await new McpStdioServer(process.stdin, process.stdout, client, undefined, () => client.capabilities).serve();
 	client.close();
 	return 0;
 }

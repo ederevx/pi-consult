@@ -80,8 +80,10 @@ export class ClaudeConsultant implements Consultant {
 			else args.push("--safe-mode", "--restricted");
 		}
 		args.push("--permission-mode", "dontAsk", "--permission-prompts", "none");
+		// A bridged run holds no tools of its own: reading and every other
+		// capability is requested through the bridge and executed by pi.
 		const tools = request.bridge
-			? `${ClaudeConsultant.READ_TOOLS},${request.bridge.qualifiedToolName}`
+			? `${request.bridge.qualifiedToolName},${request.bridge.qualifiedUseToolName}`
 			: ClaudeConsultant.READ_TOOLS;
 		args.push("--tools", tools);
 		args.push("--allowed-tools", tools);

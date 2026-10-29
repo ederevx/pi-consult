@@ -24,6 +24,8 @@ export class BridgeLauncher {
 	private static readonly SERVER_NAME = "pi_consult";
 	private static readonly TOOL_NAME = "drive_pi";
 	private static readonly QUALIFIED_TOOL_NAME = "mcp__pi_consult__drive_pi";
+	private static readonly USE_TOOL_NAME = "use_tool";
+	private static readonly QUALIFIED_USE_TOOL_NAME = "mcp__pi_consult__use_tool";
 	private readonly control: ConsultControlServer;
 	private readonly artifacts: ArtifactStore;
 	private readonly settings: BridgeSettings;
@@ -60,6 +62,8 @@ export class BridgeLauncher {
 			serverName: BridgeLauncher.SERVER_NAME,
 			toolName: BridgeLauncher.TOOL_NAME,
 			qualifiedToolName: BridgeLauncher.QUALIFIED_TOOL_NAME,
+			useToolName: BridgeLauncher.USE_TOOL_NAME,
+			qualifiedUseToolName: BridgeLauncher.QUALIFIED_USE_TOOL_NAME,
 		};
 	}
 

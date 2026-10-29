@@ -18,12 +18,16 @@ import { BridgeProtocol, type DriveStatus } from "./bridge-protocol.ts";
 export interface DriveOutcome {
 	status: DriveStatus;
 	answer?: string;
+	/** The executed tool reported failure; the answer text is its output. */
+	isError?: boolean;
 }
 
 /** The control-server seam the MCP surface drives. */
 export interface DriveHandler {
 	drive(clientRequestId: string, prompt: string): Promise<DriveOutcome>;
 	cancel(clientRequestId: string): void;
+	/** Run one named pi tool, when the control server serves `use_tool`. */
+	useTool?(clientRequestId: string, name: string, args: Record<string, unknown>): Promise<DriveOutcome>;
 }
 
 type JsonRpcId = string | number;
@@ -33,6 +37,7 @@ export class McpStdioServer {
 	static readonly SERVER_NAME = "pi-consult-bridge";
 	static readonly SERVER_VERSION = pkg.version;
 	static readonly TOOL_NAME = "drive_pi";
+	static readonly USE_TOOL_NAME = "use_tool";
 
 	private readonly input: Readable;
 	private readonly output: Writable;
@@ -42,18 +47,29 @@ export class McpStdioServer {
 	private discarding = false;
 	/** JSON-RPC request id -> the drive it is waiting on. */
 	private readonly inflight = new Map<JsonRpcId, string>();
+	/** Reads the control server's capabilities; absent means `use_tool` is served. */
+	private readonly capabilities?: () => readonly string[];
 
 	constructor(
 		input: Readable,
 		output: Writable,
 		handler: DriveHandler,
 		maxLineBytes: number = BridgeProtocol.MAX_FRAME_BYTES,
+		capabilities?: () => readonly string[],
 	) {
 		this.input = input;
 		this.output = output;
 		this.handler = handler;
 		this.maxLineBytes = maxLineBytes;
+		this.capabilities = capabilities;
 	}
+
+	/** Whether this surface offers `use_tool` to the consultant. */
+	private servesUseTool(): boolean {
+		return this.handler.useTool !== undefined &&
+			(this.capabilities === undefined || this.capabilities().includes("use_tool"));
+	}
+
 
 	/** Serve until the input ends. Never rejects. */
 	serve(): Promise<void> {
@@ -183,39 +199,71 @@ export class McpStdioServer {
 		};
 	}
 
-	/** The one tool: put a question to pi and wait, bounded, for its answer. */
+	/** The tools the control server serves: always the question, plus `use_tool`
+	 *  when it advertised that capability. */
 	private toolsListResult(): object {
-		return {
-			tools: [
-				{
-					name: McpStdioServer.TOOL_NAME,
-					description:
-						"Ask the pi agent a question and block until pi answers. The wait is bounded: " +
-						"it ends when pi answers or declines, when the request is cancelled, or when " +
-						"the deadline passes.",
-					inputSchema: {
-						type: "object",
-						properties: {
-							prompt: {
-								type: "string",
-								description: "The question or request to put to the pi agent.",
-							},
-							client_request_id: {
-								type: "string",
-								description:
-									"Idempotency key; optional. A retry with the same key names the same request.",
-							},
+		const tools: object[] = [
+			{
+				name: McpStdioServer.TOOL_NAME,
+				description:
+					"Ask the pi agent a question and block until pi answers. The wait is bounded: " +
+					"it ends when pi answers or declines, when the request is cancelled, or when " +
+					"the deadline passes.",
+				inputSchema: {
+					type: "object",
+					properties: {
+						prompt: {
+							type: "string",
+							description: "The question or request to put to the pi agent.",
 						},
-						required: ["prompt"],
+						client_request_id: {
+							type: "string",
+							description:
+								"Idempotency key; optional. A retry with the same key names the same request.",
+						},
 					},
+					required: ["prompt"],
 				},
-			],
-		};
+			},
+		];
+		if (this.servesUseTool()) {
+			tools.push({
+				name: McpStdioServer.USE_TOOL_NAME,
+				description:
+					"Ask the pi agent to run one of its tools and return the tool's output. " +
+					"You never execute anything yourself: pi decides whether to run the named " +
+					"tool, runs it, and pipes the output back. The wait is bounded like drive_pi's.",
+				inputSchema: {
+					type: "object",
+					properties: {
+						name: {
+							type: "string",
+							description: "The pi tool to run, e.g. read, grep, or bash.",
+						},
+						arguments: {
+							type: "object",
+							description: "The tool's arguments object, exactly as the pi tool expects.",
+						},
+						client_request_id: {
+							type: "string",
+							description:
+								"Idempotency key; optional. A retry with the same key names the same request.",
+						},
+					},
+					required: ["name", "arguments"],
+				},
+			});
+		}
+		return { tools };
 	}
 
 	/** Validate the arguments, drive the control server, and reply once. */
 	private async toolsCall(id: JsonRpcId, params: unknown): Promise<void> {
 		const call = (params ?? {}) as { name?: unknown; arguments?: unknown };
+		if (call.name === McpStdioServer.USE_TOOL_NAME) {
+			await this.useToolCall(id, call.arguments);
+			return;
+		}
 		if (call.name !== McpStdioServer.TOOL_NAME) {
 			this.replyError(id, -32602, "Unknown tool");
 			return;
@@ -249,6 +297,57 @@ export class McpStdioServer {
 		this.reply(id, this.driveResult(outcome));
 	}
 
+	/** Validate `use_tool` arguments and block until pi runs the named tool. */
+	private async useToolCall(id: JsonRpcId, raw: unknown): Promise<void> {
+		if (!this.servesUseTool()) {
+			this.reply(id, this.toolResult("[unavailable]", true));
+			return;
+		}
+		const args = (raw ?? {}) as {
+			name?: unknown;
+			arguments?: unknown;
+			client_request_id?: unknown;
+		};
+		if (typeof args.name !== "string") {
+			this.reply(id, this.toolResult("name is required", true));
+			return;
+		}
+		if (
+			typeof args.arguments !== "object" ||
+			args.arguments === null ||
+			Array.isArray(args.arguments)
+		) {
+			this.reply(id, this.toolResult("arguments must be an object", true));
+			return;
+		}
+		if (Buffer.byteLength(JSON.stringify(args.arguments), "utf8") > BridgeProtocol.MAX_PROMPT_BYTES) {
+			this.reply(
+				id,
+				this.toolResult(`arguments exceed ${BridgeProtocol.MAX_PROMPT_BYTES} bytes`, true),
+			);
+			return;
+		}
+		const clientRequestId = McpStdioServer.driveKey(args.client_request_id);
+		if (clientRequestId === undefined) {
+			this.reply(id, this.toolResult("client_request_id is not a valid id", true));
+			return;
+		}
+		this.inflight.set(id, clientRequestId);
+		let outcome: DriveOutcome;
+		try {
+			outcome = await this.handler.useTool(
+				clientRequestId,
+				args.name,
+				args.arguments as Record<string, unknown>,
+			);
+		} catch {
+			outcome = { status: "unavailable" };
+		}
+		if (this.inflight.get(id) !== clientRequestId) return;
+		this.inflight.delete(id);
+		this.reply(id, this.driveResult(outcome));
+	}
+
 	/** The requested key, a generated one, or undefined when it is malformed. */
 	private static driveKey(value: unknown): string | undefined {
 		if (value === undefined) return randomUUID();
@@ -263,7 +362,8 @@ export class McpStdioServer {
 	/** Map a drive outcome to MCP content: the answer, or a short status line. */
 	private driveResult(outcome: DriveOutcome): object {
 		const text = outcome.status === "answered" ? outcome.answer ?? "" : `[${outcome.status}]`;
-		return this.toolResult(text, outcome.status !== "answered");
+		const isError = outcome.status !== "answered" || outcome.isError === true;
+		return this.toolResult(text, isError);
 	}
 
 	private toolResult(text: string, isError: boolean): object {

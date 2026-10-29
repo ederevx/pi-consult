@@ -115,6 +115,10 @@ export interface BridgeConnection {
 	toolName: string;
 	/** Claude's fully-qualified name for that tool. */
 	qualifiedToolName: string;
+	/** The tool that runs a named pi tool and pipes its output back. */
+	useToolName: string;
+	/** Claude's fully-qualified name for that tool. */
+	qualifiedUseToolName: string;
 }
 
 /** One final or pending consult result with the answers it renders. */

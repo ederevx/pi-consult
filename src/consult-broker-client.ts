@@ -12,7 +12,11 @@ import { readFileSync } from "node:fs";
 import { connect, type Socket } from "node:net";
 
 import { BridgeFrameDecoder } from "./bridge-frame-decoder.ts";
-import { BridgeProtocol, type BridgeDescriptor, type BridgeFrame } from "./bridge-protocol.ts";
+import {
+	BridgeProtocol,
+	type BridgeDescriptor,
+	type BridgeFrame,
+} from "./bridge-protocol.ts";
 import type { DriveOutcome } from "./mcp-stdio-server.ts";
 
 /** Builds the socket the handshake runs over; injected for tests. */
@@ -28,6 +32,7 @@ export class ConsultBrokerClient {
 	private readonly handshakeTimeoutMs: number;
 	private readonly decoder = new BridgeFrameDecoder();
 	private readonly pending = new Map<string, (outcome: DriveOutcome) => void>();
+	private capabilities: string[] = [];
 	private state: BrokerState = "idle";
 	private socket: Socket | undefined;
 	private handshakeTimer: NodeJS.Timeout | undefined;
@@ -54,11 +59,35 @@ export class ConsultBrokerClient {
 		return outcome;
 	}
 
+	/** Ask pi to run one named tool. Unsupported when the server did not admit
+	 *  `use_tool`; unsupported and unknown tools fail closed, never degrade to
+	 *  a prose question. */
+	useTool(
+		clientRequestId: string,
+		name: string,
+		args: Record<string, unknown>,
+	): Promise<DriveOutcome> {
+		if (this.pending.size > 0) return Promise.resolve({ status: "busy" });
+		if (this.state === "closed") return Promise.resolve({ status: "unavailable" });
+		if (!this.capabilities.includes("use_tool")) {
+			return Promise.resolve({ status: "unavailable" });
+		}
+		const outcome = new Promise<DriveOutcome>((resolve) => this.pending.set(clientRequestId, resolve));
+		void this.connect().then((ready) => this.sendUseTool(clientRequestId, name, args, ready));
+		return outcome;
+	}
+
 	/** Withdraw a request the consultant no longer wants. */
 	cancel(clientRequestId: string): void {
 		if (!this.pending.has(clientRequestId)) return;
 		this.send({ type: "cancel", clientRequestId });
 		this.settle(clientRequestId, { status: "cancelled" });
+	}
+
+	/** Admit the connection now so the server's capabilities are known before
+	 *  the first request; false when the control server is unreachable. */
+	negotiate(): Promise<boolean> {
+		return this.connect();
 	}
 
 	/** End the connection. Outstanding requests resolve unavailable. */
@@ -125,10 +154,12 @@ export class ConsultBrokerClient {
 		if (this.decoder.overflowed) this.socket?.destroy();
 	}
 
-	/** Admit a `ready`, settle an `answer`, treat anything else as fatal. */
+	/** Admit a `ready` (recording its capabilities), settle an `answer`, treat
+	 *  anything else as fatal. */
 	private onFrame(frame: BridgeFrame): void {
 		if (this.state !== "ready") {
 			if (frame.type === "ready" && frame.invocationId === this.descriptor.invocationId) {
+				this.capabilities = [...(frame.capabilities ?? [])];
 				this.admit();
 			} else {
 				this.socket?.destroy();
@@ -136,7 +167,11 @@ export class ConsultBrokerClient {
 			return;
 		}
 		if (frame.type === "answer") {
-			this.settle(frame.clientRequestId, { status: frame.status, answer: frame.answer });
+			this.settle(frame.clientRequestId, {
+				status: frame.status,
+				answer: frame.answer,
+				isError: frame.isError,
+			});
 			return;
 		}
 		if (frame.type === "error") this.socket?.destroy();
@@ -148,6 +183,19 @@ export class ConsultBrokerClient {
 			return;
 		}
 		this.send({ type: "drive", clientRequestId, prompt });
+	}
+
+	private sendUseTool(
+		clientRequestId: string,
+		name: string,
+		args: Record<string, unknown>,
+		ready: boolean,
+	): void {
+		if (!ready || !this.pending.has(clientRequestId)) {
+			this.settle(clientRequestId, { status: "unavailable" });
+			return;
+		}
+		this.send({ type: "use_tool", clientRequestId, name, arguments: args });
 	}
 
 	private send(frame: BridgeFrame): void {

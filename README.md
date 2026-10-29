@@ -258,6 +258,21 @@ cancelled by a timeout. The endpoint is a Unix socket under the artifact
 directory, admitted only by a per-run random token written 0600 next to the
 brief, and both directions are bounded in size.
 
+### Consultant-requested tool usage
+
+The bridge also carries `use_tool`: the consultant names one of pi's own tools
+and its arguments, and the request reaches pi as a message instructing it to
+call `consult_execute { requestId }` (or decline it). A claimed request runs
+through the session's own tool path — the same validation, hooks, and
+permission checks as a model-issued call — and the tool's output is piped
+straight back to the waiting consultant: screened for secrets, bounded to the
+answer size, never retyped by the model. The consultant holds no tools of its
+own while bridged; every read and every command runs in pi. Which tools may be
+requested is operator-configured (`drive.tools.allow`, default
+`read, grep, find, ls, bash`), and the bridge's own tools are never
+requestable. Tool failures come back as MCP tool errors with their output;
+transport status and tool status are separate facts.
+
 The returned details carry the consult id, each consultant's status, usage, and
 the path of the full answer. Model-facing text is bounded per the `output`
 settings; the complete answer is always written to the artifact directory
