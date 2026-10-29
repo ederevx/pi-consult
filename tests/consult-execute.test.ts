@@ -1,11 +1,13 @@
 import { BridgeProtocol } from "../src/bridge-protocol.ts";
+import { ConsultExecuteTool } from "../src/consult-execute-tool.ts";
+import type { DriveOutcome as BrokerDriveOutcome } from "../src/consult-request-broker.ts";
 import { ConsultRequestBroker } from "../src/consult-request-broker.ts";
 import { ConsultToolOutput } from "../src/consult-tool-output.ts";
 import { ConsultToolPolicy } from "../src/consult-tool-policy.ts";
 import { McpStdioServer } from "../src/mcp-stdio-server.ts";
 import { SecretScreen } from "../src/secret-screen.ts";
 import { assert, assertEq, assertIncludes, test } from "./harness.ts";
-import type { DriveOutcome } from "../src/mcp-stdio-server.ts";
+import type { DriveOutcome as McpDriveOutcome } from "../src/mcp-stdio-server.ts";
 import type { RequestPayload } from "../src/consult-request-broker.ts";
 
 /** A dispatcher that records what it is asked to post. */
@@ -28,50 +30,10 @@ function makeBroker(
 	};
 }
 
-/** Write an MCP request into the server and read one reply. */
-async function mcpCall(
-	server: McpStdioServer,
-	id: number,
-	name: string,
-	...arguments_: Record<string, unknown>[]
-): Promise<{ result?: { content?: Array<{ text?: string }>; isError?: boolean } }> {
-	const lines: string[] = [];
-	let notify: (() => void) | undefined;
-	const waiters: Array<() => void> = [];
-	const output = {
-		write: (chunk: string) => {
-			lines.push(chunk);
-			const waiter = waiters.shift();
-			if (waiter) waiter();
-			else notify = undefined;
-		},
-		on: () => undefined,
-		writableEnded: false,
-		destroyed: false,
-	};
-	const readable = {
-		setEncoding: () => undefined,
-		on: (event: string, handler: (chunk?: string) => void) => {
-			if (event === "data") queueMicrotask(() => handler(JSON.stringify({
-				jsonrpc: "2.0",
-				id,
-				method: "tools/call",
-				params: { name, arguments: arguments_[0] ?? {} },
-			}) + "\n"));
-			if (event === "end" || event === "close" || event === "error") queueMicrotask(() => handler());
-		},
-		once: () => undefined,
-	};
-	void server.serve();
-	return new Promise((resolve) => {
-		waiters.push(() => resolve(JSON.parse(lines[0]) as { result?: Record<string, unknown> }));
-	});
-}
-
 function handlerWith(
 	broker: ConsultRequestBroker,
-	outcome?: DriveOutcome,
-): { useTool: (id: string, name: string, args: Record<string, unknown>) => Promise<DriveOutcome>; drive: (id: string, prompt: string) => Promise<DriveOutcome>; cancel: (id: string) => void } {
+	outcome?: McpDriveOutcome,
+): { useTool: (id: string, name: string, args: Record<string, unknown>) => Promise<McpDriveOutcome>; drive: (id: string, prompt: string) => Promise<McpDriveOutcome>; cancel: (id: string) => void } {
 	return {
 		drive: () => Promise.resolve({ status: "answered", answer: "ok" }),
 		cancel: () => undefined,
@@ -93,38 +55,52 @@ test("tool policy: allows only listed tools and never the control surface", () =
 		false,
 		"no allow entry exempts the control tools",
 	);
+	assertEq(
+		new ConsultToolPolicy({ allow: ["edit"] }).allows("edit"),
+		false,
+		"a configured mutation tool is still denied",
+	);
+	assertEq(
+		new ConsultToolPolicy({ allow: [] }).allows("read"),
+		false,
+		"an explicit empty allow list allows nothing",
+	);
 });
 
 test("tool output: screens, truncates, and reports omissions", () => {
 	const output = new ConsultToolOutput(new SecretScreen(), 200);
-	const clean = output.bound(
-		{ content: [{ type: "text", text: "a".repeat(300) }] },
-		0,
-	);
+	const clean = output.bound({ content: [{ type: "text", text: "a".repeat(300) }] }, "r1");
 	assertEq(clean.status, "answered");
 	assertEq(clean.isError, false);
-	assert(clean.truncated === undefined || clean.answer!.length < 320, "long text is bounded");
+	assertEq(clean.truncated, true, "long text is reported truncated");
+	assert(Buffer.byteLength(clean.answer ?? "", "utf8") <= 200, "the answer stays inside the byte bound");
 	assertIncludes(clean.answer ?? "", "[truncated]", "the cut is visible");
 
-	const secret = output.bound(
-		{ content: [{ type: "text", text: "AKIAIOSFODNN7EXAMPLE" }] },
-		0,
-	);
+	const secret = output.bound({ content: [{ type: "text", text: "AKIAIOSFODNN7EXAMPLE" }] }, "r2");
 	assertEq(secret.isError, true, "screened output is refused");
 	assertIncludes(secret.answer ?? "", "aws-access-key", "the rule names, never the value");
 
 	const omitted = output.bound(
 		{ content: [{ type: "text", text: "fine" }, { type: "image", data: "x" }] },
-		1,
+		"r3",
 	);
+	assertEq(omitted.truncated, undefined, "a short answer is not marked truncated");
 	assertIncludes(omitted.answer ?? "", "1 non-text content block", "the omission is reported");
+
+	const tiny = new ConsultToolOutput(new SecretScreen(), 5).bound(
+		{ content: [{ type: "text", text: "abcdefghij" }] },
+		"r4",
+	);
+	assert(Buffer.byteLength(tiny.answer ?? "", "utf8") <= 5, "a budget below the suffix emits no oversized suffix");
 });
 
 test("tool output: a multibyte cut never splits a character", () => {
-	const output = new ConsultToolOutput(new SecretScreen(), 10);
-	const outcome = output.bound({ content: [{ type: "text", text: "é".repeat(20) }] }, 0);
+	const output = new ConsultToolOutput(new SecretScreen(), 22);
+	const outcome = output.bound({ content: [{ type: "text", text: "é".repeat(20) }] }, "r5");
 	assertEq(outcome.status, "answered");
-	assert(outcome.answer!.length < 30, "the cut stays inside the byte budget");
+	assert(Buffer.byteLength(outcome.answer ?? "", "utf8") <= 22, "the cut stays inside the byte budget");
+	const emoji = output.bound({ content: [{ type: "text", text: "😀".repeat(20) }] }, "r6");
+	assertEq(emoji.answer, "😀\n…[truncated]", "the emoji cut keeps whole code points and the suffix");
 });
 
 test("broker: a tool request is dispatched, claimed once, and finished by the executor", async () => {
@@ -235,7 +211,7 @@ test("broker: deadline during execution aborts the claim and settles once", asyn
 
 test("mcp server: use_tool is listed and served when the handler has it", async () => {
 	const made = makeBroker();
-	const outcome: DriveOutcome = { status: "answered", answer: "TOOL OUTPUT", isError: false };
+	const outcome: McpDriveOutcome = { status: "answered", answer: "TOOL OUTPUT", isError: false };
 	const server = new McpStdioServer(
 		{ setEncoding: () => undefined, on: () => undefined, once: () => undefined } as never,
 		{ write: () => undefined, on: () => undefined, writableEnded: false, destroyed: false } as never,
@@ -302,12 +278,16 @@ test("broker: the per-invocation request limit refuses further requests", async 
 	const { broker } = makeBroker(5000, 2);
 	const first = broker.submit("c-l:claude", "c-l", "claude", "r1", "one");
 	await Promise.resolve();
-	broker.reply(broker.list()[0].requestId, "answered", "one");
+	const requestId = broker.list()[0].requestId;
+	broker.reply(requestId, "answered", "one");
 	assertEq((await first).status, "answered");
 	broker.submit("c-l:claude", "c-l", "claude", "r2", "two");
 	await Promise.resolve();
 	broker.reply(broker.list()[0].requestId, "answered", "two");
-	const third = await broker.submit("c-l:claude", "c-l", "claude", "r3", "three");
+	const third = await Promise.race([
+		broker.submit("c-l:claude", "c-l", "claude", "r3", "three"),
+		new Promise((resolve) => setTimeout(() => resolve({ status: "settled" }), 50)),
+	]);
 	assertEq(third.status, "busy", "the third request is past the limit");
 	const other = await Promise.race([
 		broker.submit("c-o:claude", "c-o", "claude", "r1", "another invocation"),
@@ -319,7 +299,6 @@ test("broker: the per-invocation request limit refuses further requests", async 
 	const replay = broker.submit("c-l:claude", "c-l", "claude", "r1", "one");
 	await Promise.resolve();
 	assertEq(broker.list().length, 1, "a forgotten invocation admits its ids again");
-	void replay;
 	broker.cancelAll();
 });
 
@@ -334,7 +313,10 @@ test("broker: a settled response frees the slot only when the execution ends", a
 	const requestId = dispatcher.posted[0].requestId;
 	assert(broker.claimTool(requestId) !== undefined, "the request is claimed");
 	assertEq((await waiting).status, "deadline_exceeded");
-	const blocked = broker.submit("c-s:claude", "c-s", "claude", "r2", "next");
+	const blocked = await Promise.race([
+		broker.submit("c-s:claude", "c-s", "claude", "r2", "next"),
+		new Promise((resolve) => setTimeout(() => resolve({ status: "settled" }), 50)),
+	]);
 	assertEq((await blocked).status, "busy", "the slot is held while the tool runs");
 	assertEq(broker.finishTool(requestId, { status: "answered", answer: "late" }), false);
 	const after = broker.submit("c-s:claude", "c-s", "claude", "r2", "next");
@@ -342,8 +324,49 @@ test("broker: a settled response frees the slot only when the execution ends", a
 	broker.cancelAll();
 });
 
+test("tool output: escape-heavy text fits the encoded frame", () => {
+	const output = new ConsultToolOutput(new SecretScreen(), BridgeProtocol.MAX_ANSWER_BYTES);
+	const escapeHeavy = '"\\\\t" '.repeat(6000);
+	const outcome = output.bound({ content: [{ type: "text", text: escapeHeavy }] }, "r7");
+	assertEq(outcome.status, "answered");
+	const frame = BridgeProtocol.encode({
+		type: "answer",
+		clientRequestId: "r7",
+		status: "answered",
+		answer: outcome.answer,
+	});
+	assert(
+		Buffer.byteLength(frame, "utf8") <= BridgeProtocol.MAX_FRAME_BYTES,
+		"the encoded answer frame fits the frame bound",
+	);
+});
+
+test("tool output: the transmitted frame, metadata included, fits the bound", () => {
+	const output = new ConsultToolOutput(new SecretScreen());
+	const clientRequestId = "r".repeat(128);
+	// Control characters expand six-fold under JSON escaping, so a nominal
+	// answer near the byte bound can still overflow the frame once encoded.
+	const text = "\u0001".repeat(10800) + "a".repeat(537);
+	const outcome = output.bound(
+		{ content: [{ type: "text", text }], isError: false },
+		clientRequestId,
+	);
+	const frame = BridgeProtocol.encode({
+		type: "answer",
+		clientRequestId,
+		status: "answered",
+		answer: outcome.answer,
+		isError: outcome.isError,
+		truncated: outcome.truncated,
+	});
+	assert(
+		Buffer.byteLength(frame, "utf8") <= BridgeProtocol.MAX_FRAME_BYTES,
+		"the exact transmitted frame fits the frame bound",
+	);
+});
+
 test("broker: forget settles a pending request and leaves no record", async () => {
-	const { broker } = makeBroker();
+	const { broker, dispatcher } = makeBroker();
 	broker.submit("c-f:claude", "c-f", "claude", "r1", "pending question");
 	await Promise.resolve();
 	assertEq(broker.list().length, 1, "the request is pending");
@@ -356,5 +379,105 @@ test("broker: forget settles a pending request and leaves no record", async () =
 	await Promise.resolve();
 	assertEq(broker.list().length, 1, "the retired ids are admitted again");
 	void readmitted;
+	void dispatcher;
 	broker.cancelAll();
+});
+
+test("mcp server: an invalid tool name errors immediately without a frame", async () => {
+	const made = makeBroker();
+	let sent = 0;
+	const handler = {
+		drive: () => Promise.resolve({ status: "answered" }),
+		cancel: () => undefined,
+		useTool: () => {
+			sent += 1;
+			return Promise.resolve({ status: "answered", answer: "x" });
+		},
+	};
+	const replies: object[] = [];
+	const server = new McpStdioServer(
+		{ setEncoding: () => undefined, on: () => undefined, once: () => undefined } as never,
+		{ write: (line: string) => replies.push(JSON.parse(line)), on: () => undefined, writableEnded: false, destroyed: false } as never,
+		handler,
+		undefined,
+		() => ["use_tool"],
+	);
+	await server["useToolCall"](5, { name: "bad name with spaces", arguments: {} });
+	assertEq(replies.length, 1, "one immediate reply");
+	const content = (replies[0] as { result: { content: Array<{ text: string }>; isError: boolean } }).result;
+	assertEq(content.isError, true, "the invalid name is refused before any frame is sent");
+	assertEq(sent, 0, "no frame reached the handler");
+	void server;
+	void made;
+});
+
+test("executor: an infrastructure failure reports isError and the delivery result", async () => {
+	const { broker, dispatcher } = makeBroker(5000);
+	const executor = new ConsultExecuteTool(
+		broker,
+		new ConsultToolPolicy({ allow: ["bash"] }),
+		new ConsultToolOutput(new SecretScreen()),
+	);
+	const failing = {
+		tools: [{ name: "bash" }],
+		executeTool: async () => {
+			throw new Error("boom");
+		},
+	} as never;
+	broker.submit("c-x:claude", "c-x", "claude", "r1", {
+		kind: "tool",
+		name: "bash",
+		arguments: { command: "true" },
+	});
+	await Promise.resolve();
+	broker.submit("c-x:claude", "c-x", "claude", "r2", {
+		kind: "tool",
+		name: "bash",
+		arguments: { command: "true" },
+	});
+	await Promise.resolve();
+	const observed: BrokerDriveOutcome[] = [];
+	const watching = (broker as unknown as {
+		finishTool: (id: string, outcome: BrokerDriveOutcome) => boolean;
+	}).finishTool.bind(broker);
+	(broker as unknown as { finishTool: (id: string, o: BrokerDriveOutcome) => boolean }).finishTool =
+		(id, outcome) => {
+			observed.push(outcome);
+			return watching(id, outcome);
+		};
+	const live = await executor.execute({ requestId: dispatcher.posted[0].requestId }, undefined, failing);
+	assertEq(live.isError, undefined, "a delivered failure is still a successful tool call");
+	assertIncludes(live.content[0].text ?? "", "piped back", "the delivery is reported");
+	assertEq(observed[observed.length - 1]?.isError, true, "the failure outcome keeps isError");
+
+	// A claimed run whose response expires mid-execution, then fails: the
+	// consultant keeps its deadline answer and the receipt reports no delivery.
+	const { broker: slowBroker, dispatcher: slowDispatcher } = makeBroker(50);
+	const slowExecutor = new ConsultExecuteTool(
+		slowBroker,
+		new ConsultToolPolicy({ allow: ["bash"] }),
+		new ConsultToolOutput(new SecretScreen()),
+	);
+	const slowResult = slowBroker.submit("c-x:claude", "c-x", "claude", "r1", {
+		kind: "tool",
+		name: "bash",
+		arguments: { command: "true" },
+	});
+	await Promise.resolve();
+	let rejectRun: ((reason?: unknown) => void) | undefined;
+	const deferred = {
+		tools: [{ name: "bash" }],
+		executeTool: () => new Promise((_resolve, rejectRunInner) => {
+			rejectRun = rejectRunInner;
+		}),
+	} as never;
+	const executing = slowExecutor.execute(
+		{ requestId: slowDispatcher.posted[0].requestId },
+		undefined,
+		deferred,
+	);
+	assertEq((await slowResult).status, "deadline_exceeded", "the consultant was answered at the deadline");
+	rejectRun?.(new Error("late boom"));
+	const expired = await executing;
+	assertIncludes(expired.content[0].text ?? "", "nothing was delivered", "the expired run reports it");
 });

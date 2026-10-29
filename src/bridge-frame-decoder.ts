@@ -31,6 +31,13 @@ export class BridgeFrameDecoder {
 		while (index >= 0) {
 			const line = this.buffer.slice(0, index);
 			this.buffer = this.buffer.slice(index + 1);
+			// A whole line past the bound is refused here too: the leftover check
+			// below never sees it, and a newline-terminated frame must not pass.
+			if (Buffer.byteLength(line, "utf8") > this.maxFrameBytes) {
+				this.failed = true;
+				this.buffer = "";
+				return frames;
+			}
 			const frame = BridgeProtocol.parse(line);
 			if (frame) frames.push(frame);
 			index = this.buffer.indexOf("\n");

@@ -186,7 +186,7 @@ export class BridgeProtocol {
 		return (
 			typeof value === "string" &&
 			value.length > 0 &&
-			value.length <= BridgeProtocol.MAX_ID_BYTES &&
+			Buffer.byteLength(value, "utf8") <= BridgeProtocol.MAX_ID_BYTES &&
 			!/[\s\n\r]/.test(value)
 		);
 	}

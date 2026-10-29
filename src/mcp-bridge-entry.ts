@@ -27,7 +27,7 @@ export default async function runBridge(): Promise<number> {
 		return 1;
 	}
 	await client.negotiate();
-	await new McpStdioServer(process.stdin, process.stdout, client, undefined, () => client.capabilities).serve();
+	await new McpStdioServer(process.stdin, process.stdout, client, undefined, () => client.capabilities()).serve();
 	client.close();
 	return 0;
 }

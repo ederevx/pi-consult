@@ -20,6 +20,8 @@ export interface DriveOutcome {
 	answer?: string;
 	/** The executed tool reported failure; the answer text is its output. */
 	isError?: boolean;
+	/** The answer text was cut to fit the answer bound. */
+	truncated?: boolean;
 }
 
 /** The control-server seam the MCP surface drives. */
@@ -47,7 +49,7 @@ export class McpStdioServer {
 	private discarding = false;
 	/** JSON-RPC request id -> the drive it is waiting on. */
 	private readonly inflight = new Map<JsonRpcId, string>();
-	/** Reads the control server's capabilities; absent means `use_tool` is served. */
+	/** Reads negotiated control-server capabilities; absent fails closed. */
 	private readonly capabilities?: () => readonly string[];
 
 	constructor(
@@ -64,10 +66,11 @@ export class McpStdioServer {
 		this.capabilities = capabilities;
 	}
 
-	/** Whether this surface offers `use_tool` to the consultant. */
+	/** Whether this surface offers `use_tool` to the consultant: only when
+	 *  the handler serves it and the negotiated capabilities name it. */
 	private servesUseTool(): boolean {
 		return this.handler.useTool !== undefined &&
-			(this.capabilities === undefined || this.capabilities().includes("use_tool"));
+			(this.capabilities?.() ?? []).includes("use_tool");
 	}
 
 
@@ -308,8 +311,8 @@ export class McpStdioServer {
 			arguments?: unknown;
 			client_request_id?: unknown;
 		};
-		if (typeof args.name !== "string") {
-			this.reply(id, this.toolResult("name is required", true));
+		if (typeof args.name !== "string" || !McpStdioServer.isId(args.name)) {
+			this.reply(id, this.toolResult("name is not a valid tool id", true));
 			return;
 		}
 		if (
@@ -356,14 +359,18 @@ export class McpStdioServer {
 	}
 
 	private static isId(value: string): boolean {
-		return value.length > 0 && value.length <= BridgeProtocol.MAX_ID_BYTES && !/\s/.test(value);
+		return value.length > 0 &&
+			Buffer.byteLength(value, "utf8") <= BridgeProtocol.MAX_ID_BYTES &&
+			!/\s/.test(value);
 	}
 
 	/** Map a drive outcome to MCP content: the answer, or a short status line. */
 	private driveResult(outcome: DriveOutcome): object {
 		const text = outcome.status === "answered" ? outcome.answer ?? "" : `[${outcome.status}]`;
 		const isError = outcome.status !== "answered" || outcome.isError === true;
-		return this.toolResult(text, isError);
+		const result = this.toolResult(text, isError);
+		if (outcome.truncated === true) (result as { truncated?: boolean }).truncated = true;
+		return result;
 	}
 
 	private toolResult(text: string, isError: boolean): object {

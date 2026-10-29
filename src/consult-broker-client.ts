@@ -32,7 +32,7 @@ export class ConsultBrokerClient {
 	private readonly handshakeTimeoutMs: number;
 	private readonly decoder = new BridgeFrameDecoder();
 	private readonly pending = new Map<string, (outcome: DriveOutcome) => void>();
-	private capabilities: string[] = [];
+	private capabilityNames: string[] = [];
 	private state: BrokerState = "idle";
 	private socket: Socket | undefined;
 	private handshakeTimer: NodeJS.Timeout | undefined;
@@ -69,7 +69,7 @@ export class ConsultBrokerClient {
 	): Promise<DriveOutcome> {
 		if (this.pending.size > 0) return Promise.resolve({ status: "busy" });
 		if (this.state === "closed") return Promise.resolve({ status: "unavailable" });
-		if (!this.capabilities.includes("use_tool")) {
+		if (!this.capabilityNames.includes("use_tool")) {
 			return Promise.resolve({ status: "unavailable" });
 		}
 		const outcome = new Promise<DriveOutcome>((resolve) => this.pending.set(clientRequestId, resolve));
@@ -88,6 +88,11 @@ export class ConsultBrokerClient {
 	 *  the first request; false when the control server is unreachable. */
 	negotiate(): Promise<boolean> {
 		return this.connect();
+	}
+
+	/** The capabilities the control server advertised, after admission. */
+	capabilities(): readonly string[] {
+		return this.capabilityNames;
 	}
 
 	/** End the connection. Outstanding requests resolve unavailable. */
@@ -159,7 +164,7 @@ export class ConsultBrokerClient {
 	private onFrame(frame: BridgeFrame): void {
 		if (this.state !== "ready") {
 			if (frame.type === "ready" && frame.invocationId === this.descriptor.invocationId) {
-				this.capabilities = [...(frame.capabilities ?? [])];
+				this.capabilityNames = [...(frame.capabilities ?? [])];
 				this.admit();
 			} else {
 				this.socket?.destroy();
@@ -171,6 +176,7 @@ export class ConsultBrokerClient {
 				status: frame.status,
 				answer: frame.answer,
 				isError: frame.isError,
+				truncated: frame.truncated,
 			});
 			return;
 		}

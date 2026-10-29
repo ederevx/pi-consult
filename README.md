@@ -266,8 +266,9 @@ call `consult_execute { requestId }` (or decline it). A claimed request runs
 through the session's own tool path — the same validation, hooks, and
 permission checks as a model-issued call — and the tool's output is piped
 straight back to the waiting consultant: screened for secrets, bounded to the
-answer size, never retyped by the model. The consultant holds no tools of its
-own while bridged; every read and every command runs in pi. Which tools may be
+answer size, never retyped by the model. A bridged Claude holds no tools of
+its own, so every read and every command runs in pi; a bridged Codex keeps
+its read-only sandbox but also goes through the bridge. Which tools may be
 requested is operator-configured (`drive.tools.allow`, default
 `read, grep, find, ls, bash`), and the bridge's own tools are never
 requestable. Tool failures come back as MCP tool errors with their output;
