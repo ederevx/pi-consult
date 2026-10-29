@@ -23,6 +23,10 @@ export interface FallbackContext {
 	requests: readonly ConsultRequest[];
 	results: readonly ConsultantResult[];
 	signal: AbortSignal;
+	/** A continuation resumes this transcript instead of opening one. */
+	conversation?: unknown[];
+	/** A continuation runs the fallback directly, with no CLI attempts. */
+	force?: boolean;
 }
 
 export interface FallbackServiceDeps {
@@ -47,10 +51,12 @@ export class NativeFallbackService {
 	async takeover(context: FallbackContext): Promise<ConsultantResult | undefined> {
 		const settings = this.deps.settings();
 		if (!settings.enabled) return undefined;
-		if (context.results.some((result) => result.status === "ok")) return undefined;
-		const fallbackFor = context.results
-			.filter((result) => NativeFallbackService.eligible(result, this.deps.classifier))
-			.map((result) => result.consultant as Exclude<RunParticipant, "fallback">);
+		if (!context.force && context.results.some((result) => result.status === "ok")) return undefined;
+		const fallbackFor = context.force
+			? context.results.map((result) => result.consultant as Exclude<RunParticipant, "fallback">)
+			: context.results
+					.filter((result) => NativeFallbackService.eligible(result, this.deps.classifier))
+					.map((result) => result.consultant as Exclude<RunParticipant, "fallback">);
 		if (fallbackFor.length === 0) return undefined;
 		const models = this.deps.models();
 		const live = this.deps.context();
@@ -70,6 +76,7 @@ export class NativeFallbackService {
 			context.brief,
 			context.paths,
 			context.signal,
+			context.conversation as never,
 		);
 		return {
 			consultant: "fallback",

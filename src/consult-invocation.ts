@@ -56,7 +56,8 @@ export interface InvocationSpec {
 	requests: readonly InvocationRequestSpec[];
 	/** Provider session ids known before the run starts (Claude picks its own). */
 	providerSessions?: Partial<Record<ConsultantName, string>>;
-	/** Serves the native fallback after the primary fan-out, when it applies. */
+	/** Serves the native fallback after the primary fan-out, when it applies.
+	 *  A continuation forces it directly, with no CLI attempts first. */
 	fallback?: (context: {
 		consultId: string;
 		brief: string;
@@ -64,6 +65,8 @@ export interface InvocationSpec {
 		requests: readonly ConsultRequest[];
 		results: readonly ConsultantResult[];
 		signal: AbortSignal;
+		conversation?: unknown[];
+		force?: boolean;
 	}) => Promise<ConsultantResult | undefined>;
 }
 
@@ -114,7 +117,7 @@ export class ConsultInvocation {
 				// The fallback decision comes after the primary fan-out, once,
 				// and only while the invocation is still live.
 				if (this.spec.fallback && !this.controller.signal.aborted) {
-					const requests = this.requests();
+					const requests = this.spec.requests;
 					const extra = await this.spec.fallback({
 						consultId: this.consultId,
 						brief: this.spec.brief,

@@ -23,7 +23,7 @@ export interface ConsultantTarget {
 
 export class ConsultContract {
 	/** Bump when the acknowledgement terms change; old receipts stop counting. */
-	static readonly VERSION = 14;
+	static readonly VERSION = 15;
 
 	/** The acknowledgement text the agent accepts by calling `pre_consult`. */
 	contractText(targets: readonly ConsultantTarget[]): string {
@@ -51,6 +51,13 @@ export class ConsultContract {
 			"  arrives as a message naming a requestId and pi answers it with",
 			"  consult_reply. That answer leaves the machine, so it is screened for",
 			"  secrets exactly like a brief.",
+			"- When every requested consultant CLI of a consultation fails on",
+			"  availability, credentials, quota, throttling, or a provider error,",
+			"  a native fallback conversation with the configured pi model serves",
+			"  it instead - one conversation, billed to that model's provider,",
+			"  disclosed in the answer with its model and cost. A continuation of",
+			"  a fallback-served consult resumes that private transcript; its",
+			"  answer is one perspective, never two.",
 			"- A consultant may also request that pi run one of pi's own tools",
 			"  through the bridge: the request names the tool and its arguments,",
 			"  pi authorizes it and runs it with consult_execute, and the tool's",

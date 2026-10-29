@@ -15,6 +15,7 @@ import type {
 	ExtensionToolContext,
 } from "@earendil-works/pi-coding-agent";
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
 import { Type } from "typebox";
@@ -24,6 +25,7 @@ import type {
 	ConsultReceipt,
 	ConsultTarget,
 	ConsultantName,
+	FallbackMetadata,
 } from "./contracts.ts";
 import type { AgentEffortPolicy } from "./agent-effort-policy.ts";
 import type { AnswerFormatter } from "./answer-formatter.ts";
@@ -72,7 +74,8 @@ export interface ConsultToolDeps {
 	bridge: BridgeLauncher;
 	/** pi's thinking-level cycle; engaged by a consult, settled by its receipt. */
 	effort?: AgentEffortPolicy;
-	/** Serves the native fallback after a failed primary fan-out. */
+	/** Serves the native fallback after a failed primary fan-out, or
+	 *  directly when a continuation resumes a native transcript. */
 	fallback?: (context: {
 		consultId: string;
 		brief: string;
@@ -80,6 +83,8 @@ export interface ConsultToolDeps {
 		requests: readonly ConsultRequest[];
 		results: readonly ConsultantResult[];
 		signal: AbortSignal;
+		conversation?: unknown[];
+		force?: boolean;
 	}) => Promise<ConsultantResult | undefined>;
 }
 
@@ -87,6 +92,8 @@ export interface ConsultToolDeps {
 interface Continuation {
 	consultId: string;
 	resumeFor: Map<ConsultantName, { sessionId: string; cwd: string }>;
+	/** A native fallback success this continuation resumes directly. */
+	fallback?: { metadata: FallbackMetadata; messages: unknown[] };
 }
 
 export class ConsultTool {
@@ -253,17 +260,24 @@ export class ConsultTool {
 		}
 		if (continuation) {
 			// A target without a saved session would silently start fresh while
-			// the result still reports continuedFrom; refuse instead.
+			// the result still reports continuedFrom; refuse instead. A target
+			// the fallback served resumes its private transcript natively.
 			for (const name of targets) {
-				if (!continuation.resumeFor.has(name)) {
-					return this.failure(
-						ctx,
-						`consult ${continuation.consultId} has no saved ${name} session to ` +
-							"continue; omit continue to consult fresh.",
-					);
-				}
+				if (continuation.resumeFor.has(name)) continue;
+				if (continuation.fallback?.metadata.fallbackFor.includes(name)) continue;
+				return this.failure(
+					ctx,
+					`consult ${continuation.consultId} has no saved ${name} session to ` +
+						"continue; omit continue to consult fresh.",
+				);
 			}
 		}
+		// A native continuation serves every requested target itself; no CLI
+		// attempt intervenes, so the spec carries the resume straight through.
+		const nativeResume = continuation?.fallback &&
+			targets.every((name) => continuation.fallback!.metadata.fallbackFor.includes(name))
+			? { targets, messages: continuation.fallback.messages }
+			: undefined;
 
 		const consultId = this.deps.index.nextId();
 		const sessionId = this.sessionId(ctx);
@@ -276,7 +290,7 @@ export class ConsultTool {
 		}
 
 		const spec = await this.spec(
-			consultId, sessionId, params, targets, composed, continuation, paths, ctx);
+			consultId, sessionId, params, targets, composed, continuation, paths, ctx, nativeResume);
 		const invocation = await this.deps.supervisor.start(spec);
 		this.deps.effort?.engage(ctx, consultId);
 		const steps = ctx.mode === "tui" && this.append
@@ -374,9 +388,39 @@ export class ConsultTool {
 		continuation: Continuation | undefined,
 		paths: ConsultPaths,
 		ctx: ExtensionToolContext,
+		nativeResume: { targets: readonly ConsultantName[]; messages: unknown[] } | undefined,
 	): Promise<InvocationSpec> {
 		const providerSessions: Partial<Record<ConsultantName, string>> = {};
 		const requests: InvocationRequestSpec[] = [];
+		if (nativeResume) {
+			return {
+				consultId,
+				sessionId,
+				cwd: ctx.cwd,
+				targets,
+				brief: composed,
+				systemPrompt: this.deps.composer.systemPrompt(),
+				paths,
+				continuedFrom: continuation?.consultId,
+				requests,
+				providerSessions,
+				fallback: (context) =>
+					this.deps.fallback?.({
+						...context,
+						results: nativeResume.targets.map((name) => ({
+							consultant: name,
+							status: "auth",
+							answer: "",
+							partial: false,
+							durationMs: 0,
+							exitCode: null,
+							warnings: [],
+						})),
+						conversation: nativeResume.messages,
+						force: true,
+					}),
+			};
+		}
 		for (const name of targets) {
 			const settings = this.deps.config.consultant(name);
 			const resume = continuation?.resumeFor.get(name);
@@ -449,7 +493,22 @@ export class ConsultTool {
 				resumeFor.set(run.consultant, { sessionId: run.sessionId, cwd: details.cwd });
 			}
 		}
-		return { consultId: details.consultId, resumeFor };
+		const fallback = details.runs.find(
+			(run) => run.consultant === "fallback" && run.status === "ok" && run.fallback?.conversationPath,
+		);
+		const continuation: Continuation = { consultId: details.consultId, resumeFor };
+		if (fallback?.fallback) {
+			try {
+				continuation.fallback = {
+					metadata: fallback.fallback,
+					messages: JSON.parse(readFileSync(fallback.fallback.conversationPath!, "utf8")),
+				};
+			} catch {
+				// A missing transcript cannot be resumed; the CLI sessions and
+				// a fresh consult remain available.
+			}
+		}
+		return continuation;
 	}
 
 	private async validateFiles(files: readonly string[], cwd: string): Promise<string | undefined> {
