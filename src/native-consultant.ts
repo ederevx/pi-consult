@@ -298,6 +298,9 @@ export class NativeConsultant {
 			rejectAbort = reject;
 			signal.addEventListener("abort", onCancelled, { once: true });
 		});
+		// Cancellation during submission emitted before this listener was
+		// registered; the state check catches it.
+		if (signal.aborted) onCancelled();
 		let outcome;
 		try {
 			outcome = await Promise.race([waiter, cancelled]);
