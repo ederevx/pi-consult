@@ -6,7 +6,7 @@
  * answer on disk.
  */
 
-import type { ConsultDetails, ConsultantName } from "./contracts.ts";
+import type { ConsultDetails, RunParticipant } from "./contracts.ts";
 import type { OutputSettings } from "./consult-config.ts";
 
 /** Truncation metadata for one answer. */
@@ -24,11 +24,15 @@ export class AnswerFormatter {
 	}
 
 	/** Render the full model-facing text for one consult result. */
-	format(details: ConsultDetails, answers: ReadonlyMap<ConsultantName, string>): string {
+	format(details: ConsultDetails, answers: ReadonlyMap<RunParticipant, string>): string {
+		const disclosure = this.disclosure(details);
+		// The disclosure is protected: its bytes come out of the answer budget,
+		// and a budget it exceeds leaves only the disclosure.
+		const totalBytes = Math.max(0, this.output.totalBytes - Buffer.byteLength(disclosure, "utf8"));
 		const count = Math.max(1, details.runs.length);
 		const perRun = Math.max(
 			200,
-			Math.min(this.output.answerBytes, Math.floor(this.output.totalBytes / count)),
+			Math.min(this.output.answerBytes, Math.floor(totalBytes / count)),
 		);
 		const header = [
 			`consult ${details.consultId} · ${this.summarize(details)}`,
@@ -50,8 +54,30 @@ export class AnswerFormatter {
 				),
 			);
 		}
-		const rendered = [...header, "", ...sections].join("\n");
-		return this.truncate(rendered, this.output.totalBytes, Number.MAX_SAFE_INTEGER).text;
+		const parts = disclosure ? [disclosure, ""] : [];
+		const rendered = [...parts, ...header, "", ...sections].join("\n");
+		const budget = totalBytes + Buffer.byteLength(disclosure, "utf8");
+		// The disclosure sits above everything: reattach it whenever the
+		// budget cut would remove it.
+		const bounded = this.truncate(rendered, budget, Number.MAX_SAFE_INTEGER);
+		if (disclosure && !bounded.text.startsWith(disclosure)) {
+			return `${disclosure}\n${bounded.text}`;
+		}
+		return bounded.text;
+	}
+
+	/** The protected fallback provenance line, placed before any answer text. */
+	private disclosure(details: ConsultDetails): string {
+		const run = details.runs.find((candidate) => candidate.fallback);
+		const fallback = run?.fallback;
+		if (!fallback) return "";
+		const cost = run?.usage?.costUsd;
+		const amount = typeof cost === "number" ? `$${cost.toFixed(4)}` : "unavailable";
+		const served = run?.status === "ok" ? "served" : "attempt failed for";
+		return (
+			`Native fallback ${served} this consultation: ${fallback.provider}/${fallback.model}; ` +
+			`cost ${amount}; replaced ${fallback.fallbackFor.join(", ")}.`
+		);
 	}
 
 	private summarize(details: ConsultDetails): string {
@@ -61,7 +87,7 @@ export class AnswerFormatter {
 	}
 
 	private section(
-		name: ConsultantName,
+		name: RunParticipant,
 		status: string,
 		error: string | undefined,
 		durationMs: number,
