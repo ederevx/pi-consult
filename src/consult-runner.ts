@@ -84,6 +84,19 @@ export class ConsultRunner {
 		}
 	}
 
+	/** Run one native fallback under the shared concurrency budget; a
+	 *  queued native run cancels with the invocation signal. */
+	async native<T>(run: () => Promise<T>, signal: AbortSignal): Promise<T | undefined> {
+		if (signal.aborted) return undefined;
+		const acquired = await this.acquire(signal);
+		if (!acquired) return undefined;
+		try {
+			return await run();
+		} finally {
+			this.release();
+		}
+	}
+
 	/** Abort every in-flight and queued run. Idempotent. */
 	cancelAll(): void {
 		for (const batch of [...this.batches]) batch.abort();

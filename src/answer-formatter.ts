@@ -74,8 +74,14 @@ export class AnswerFormatter {
 		const cost = run?.usage?.costUsd;
 		const amount = typeof cost === "number" ? `$${cost.toFixed(4)}` : "unavailable";
 		const served = run?.status === "ok" ? "served" : "attempt failed for";
+		const routed = fallback.servedBy && fallback.servedBy.length > 1
+			? ` via ${fallback.servedBy.join(", ")}`
+			: "";
+		const responder = fallback.provider && fallback.model
+			? `${fallback.provider}/${fallback.model}`
+			: "actual responder unavailable";
 		return (
-			`Native fallback ${served} this consultation: ${fallback.provider}/${fallback.model}; ` +
+			`Native fallback ${served} this consultation: ${responder}${routed}; ` +
 			`cost ${amount}; replaced ${fallback.fallbackFor.join(", ")}.`
 		);
 	}

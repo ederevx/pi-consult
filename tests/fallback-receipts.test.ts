@@ -192,8 +192,8 @@ test("effort policy: a fallback approval satisfies the closing consultation", ()
 	setup.policy.settle(
 		"c-ok",
 		{ ...consultDetails("c-ok", [run], true), schema: 3 },
-		new Map([["fallback", "The answer approves."]]),
+		new Map([["fallback", "The reasoning.\n\nConvention audit: compliant - checked.\nConsultant verdict: approved - sound."]]),
 	);
-	assert(setup.policy.describe().includes("approved") || !setup.policy.describe().includes("owed"),
-		"the native answer settles the owed consultation");
+	const approved = (setup.policy as unknown as { approved: Set<string> }).approved;
+	assert(approved.has("c-ok"), "a real approved verdict from the native answer settles the cycle");
 });
