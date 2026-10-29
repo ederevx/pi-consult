@@ -1,16 +1,16 @@
 import { ConsultExtension } from "../src/index.ts";
-import { ConsultConfig } from "../src/consult-config.ts";
 import { ConsultSettingsStore } from "../src/consult-settings-store.ts";
 import { FakePi, scratchDir, test } from "./harness.ts";
 import { join } from "node:path";
 
+import { writeFileSync } from "node:fs";
+
 /** Registration must construct every owner in dependency order, whatever
  *  the configuration: a thrown constructor is a dead extension. */
-function registersWith(raw: Record<string, unknown>): void {
+function registersWith(namespace: Record<string, unknown>): void {
 	const file = join(scratchDir(), `reg-${Math.random().toString(16).slice(2)}.json`);
-	const store = new ConsultSettingsStore(file);
-	new ConsultExtension().registerWith(new FakePi(), store);
-	void ConsultConfig.from(raw, scratchDir());
+	writeFileSync(file, JSON.stringify({ piConsult: namespace }));
+	new ConsultExtension().registerWith(new FakePi(), new ConsultSettingsStore(file));
 }
 
 test("extension: registration constructs with the fallback enabled", () => {

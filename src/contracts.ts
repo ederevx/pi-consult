@@ -23,6 +23,8 @@ export interface FallbackMetadata {
 	/** The provider and model that actually answered; may differ by routing. */
 	provider: string;
 	model: string;
+	/** Every identity that answered, when routing moved mid-conversation. */
+	servedBy?: string[];
 	/** The persisted private transcript a continuation resumes. */
 	conversationPath?: string;
 }
