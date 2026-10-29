@@ -39,7 +39,7 @@ const context = {
 };
 
 function service(artifacts: ArtifactStore, fallback: { enabled: boolean; model?: string }) {
-	const models = new FallbackModels({ settings: () => ({ defaultProvider: "one", defaultModel: "fast" }) });
+	const models = new FallbackModels();
 	const consultant = new NativeConsultant({
 		registry: new OneShotStream() as unknown as NativeStream,
 		broker: { submit: async () => ({ status: "answered", answer: "pi" }) } as never,
@@ -259,7 +259,7 @@ test("native resume: a refused resume names no responder from the earlier run", 
 	const { NativeFallbackService } = await import("../src/native-fallback.ts");
 	const { ArtifactStore } = await import("../src/artifact-store.ts");
 	const artifacts = new ArtifactStore(join(scratchDir(), `ref-${Date.now()}`));
-	const models = new FallbackModels({ settings: () => ({}) });
+	const models = new FallbackModels();
 	const context = {
 		modelRegistry: { getAvailable: () => [{ provider: "one", id: "fast", name: "Fast" }] },
 		scopedModels: [],
@@ -297,7 +297,7 @@ test("native resume: a refused resume names no responder from the earlier run", 
 
 test("fallback models: a bound environment's defaults drive the resolution", async () => {
 	const { FallbackModels } = await import("../src/fallback-models.ts");
-	const models = new FallbackModels({ settings: () => ({ defaultModel: "wrong" }) });
+	const models = new FallbackModels();
 	const environment = {
 		modelRegistry: { getAvailable: () => [
 			{ provider: "one", id: "fast", name: "Fast" },

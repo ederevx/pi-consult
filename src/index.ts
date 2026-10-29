@@ -78,7 +78,7 @@ export class ConsultExtension {
 			commandContext = ctx;
 		});
 		const failureClassifier = new FailureClassifier();
-		const fallbackModels = new FallbackModels({ settings: () => ({}) });
+		const fallbackModels = new FallbackModels();
 		const nativeFallback = new NativeFallbackService({
 			settings: () => ConsultConfig.load(store).fallback,
 			models: () => fallbackModels,
