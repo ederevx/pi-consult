@@ -9,7 +9,7 @@
  * tool result replaces this text.
  */
 
-import type { ConsultantName } from "./contracts.ts";
+import type { RunParticipant } from "./contracts.ts";
 
 interface Section {
 	events: string[];
@@ -22,14 +22,14 @@ export class ConsultProgressFeed {
 	private static readonly MAX_PARTIAL_BYTES = 2 * 1024;
 	private static readonly MAX_LINE_BYTES = 400;
 
-	private readonly sections = new Map<ConsultantName, Section>();
-	private readonly order: ConsultantName[] = [];
+	private readonly sections = new Map<RunParticipant, Section>();
+	private readonly order: RunParticipant[] = [];
 	private readonly deliver: (snapshot: string) => void;
 	private timer: NodeJS.Timeout | undefined;
 	private lastSent = 0;
 	private closed = false;
 
-	constructor(names: readonly ConsultantName[], deliver: (snapshot: string) => void) {
+	constructor(names: readonly RunParticipant[], deliver: (snapshot: string) => void) {
 		this.deliver = deliver;
 		for (const name of names) {
 			this.order.push(name);
@@ -37,8 +37,15 @@ export class ConsultProgressFeed {
 		}
 	}
 
+	/** Register one more section, when the native fallback takes over. */
+	register(name: RunParticipant): void {
+		if (this.sections.has(name)) return;
+		this.order.push(name);
+		this.sections.set(name, { events: [], partial: "" });
+	}
+
 	/** Append a completed activity line for one consultant. */
-	event(name: ConsultantName, line: string): void {
+	event(name: RunParticipant, line: string): void {
 		const section = this.sections.get(name);
 		if (!section || this.closed) return;
 		const clean = line.replace(/\s+/g, " ").trim();
@@ -54,7 +61,7 @@ export class ConsultProgressFeed {
 	}
 
 	/** Replace the in-progress answer text for one consultant. */
-	partial(name: ConsultantName, text: string): void {
+	partial(name: RunParticipant, text: string): void {
 		const section = this.sections.get(name);
 		if (!section || this.closed || !text) return;
 		section.partial = this.tail(
@@ -133,8 +140,8 @@ export class ConsultProgressFeed {
 		return total;
 	}
 
-	private longest(): ConsultantName | undefined {
-		let best: ConsultantName | undefined;
+	private longest(): RunParticipant | undefined {
+		let best: RunParticipant | undefined;
 		let bestLength = 0;
 		for (const name of this.order) {
 			const length = this.sections.get(name)?.events.length ?? 0;

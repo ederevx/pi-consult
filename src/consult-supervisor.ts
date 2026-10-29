@@ -86,7 +86,7 @@ export class ConsultSupervisor {
 	/** The pending receipt for a still-running invocation. */
 	pending(invocation: ConsultInvocation): ConsultDetails {
 		return {
-			schema: 2,
+			schema: 3,
 			consultId: invocation.consultId,
 			phase: "running",
 			ok: false,

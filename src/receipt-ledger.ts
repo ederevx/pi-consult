@@ -100,7 +100,7 @@ export class ReceiptLedger {
 		if (!details) return undefined;
 		if (typeof details.consultId !== "string" || details.consultId === "-") return undefined;
 		if (!Array.isArray(details.runs) || details.runs.length === 0) return undefined;
-		if (details.schema === 2 && details.phase !== "complete") return undefined;
+		if ((details.schema === 2 || details.schema === 3) && details.phase !== "complete") return undefined;
 		return details as unknown as ConsultDetails;
 	}
 
@@ -110,7 +110,7 @@ export class ReceiptLedger {
 	private receiptDetails(entry: BranchEntry): Record<string, unknown> | undefined {
 		if (entry.type === "custom_message" && entry.customType === RESULT_MESSAGE) {
 			const details = entry.details as Record<string, unknown> | undefined;
-			return details?.schema === 2 ? details : undefined;
+			return details?.schema === 2 || details?.schema === 3 ? details : undefined;
 		}
 		const toolName = entry.message?.toolName;
 		if (toolName !== "consult" && toolName !== "consult_collect") return undefined;
@@ -125,6 +125,8 @@ export class ReceiptLedger {
 		}
 		const details = message.details as Record<string, unknown> | undefined;
 		if (!details) return undefined;
-		return details.schema === 1 || details.schema === 2 ? details : undefined;
+		return details.schema === 1 || details.schema === 2 || details.schema === 3
+			? details
+			: undefined;
 	}
 }
