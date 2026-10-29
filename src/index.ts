@@ -59,14 +59,26 @@ export class ConsultExtension {
 	/** The same registration over an explicit settings owner. */
 	registerWith(pi: ExtensionAPI, store: ConsultSettingsStore): void {
 		const config = ConsultConfig.load(store);
-		// The live session context arrives with session_start; the picker and
-		// the resolution read it at use, never at registration.
-		let live: ExtensionContext | undefined;
+		// Every fallback resolution binds the environment of the context it
+		// serves: registry, copied scope, and the default-model settings
+		// read once through the live API.
+		const bindEnvironment = (ctx: ExtensionContext): BoundEnvironment => {
+			const settings = pi.getSettings();
+			return {
+				modelRegistry: (ctx as { modelRegistry?: BoundEnvironment["modelRegistry"] }).modelRegistry,
+				scopedModels: [...(ctx as { scopedModels?: BoundEnvironment["scopedModels"] }).scopedModels ?? []],
+				defaults: {
+					defaultProvider: settings.defaultProvider,
+					defaultModel: settings.defaultModel,
+				},
+			};
+		};
+		let commandContext: ExtensionContext | undefined;
 		pi.on("session_start", (_event, ctx: ExtensionContext) => {
-			live = ctx;
+			commandContext = ctx;
 		});
 		const failureClassifier = new FailureClassifier();
-		const fallbackModels = new FallbackModels({ settings: () => pi.getSettings() });
+		const fallbackModels = new FallbackModels({ settings: () => ({}) });
 		const nativeFallback = new NativeFallbackService({
 			settings: () => ConsultConfig.load(store).fallback,
 			models: () => fallbackModels,
@@ -85,9 +97,11 @@ export class ConsultExtension {
 			bridge: () => ConsultConfig.load(store).drive.enabled,
 		});
 		new ConsultSettings(store, {
-			choices: () => (live ? fallbackModels.available(live) : []),
+			choices: () =>
+				commandContext ? fallbackModels.available(bindEnvironment(commandContext)) : [],
 			// The unset row names pi's own default, never the stored override.
-			defaultChoice: () => (live ? fallbackModels.resolve(live) : undefined),
+			defaultChoice: () =>
+				commandContext ? fallbackModels.resolve(bindEnvironment(commandContext)) : undefined,
 			unset: () => store.unset(["fallback", "model"]),
 		}).register(pi);
 		if (!config.enabled) return;
@@ -143,17 +157,7 @@ export class ConsultExtension {
 			bridge,
 			effort,
 			fallback: (context) => nativeFallback.takeover(context),
-			bindEnvironment: (ctx) => {
-				const settings = pi.getSettings();
-				return {
-					modelRegistry: (ctx as { modelRegistry?: BoundEnvironment["modelRegistry"] }).modelRegistry,
-					scopedModels: [...(ctx as { scopedModels?: BoundEnvironment["scopedModels"] }).scopedModels ?? []],
-					defaults: {
-						defaultProvider: settings.defaultProvider,
-						defaultModel: settings.defaultModel,
-					},
-				};
-			},
+			bindEnvironment,
 		}).register(pi);
 		new ConsultTerminateTool(supervisor, effort).register(pi);
 		new ConsultReplyTool(broker, new SecretScreen()).register(pi);
