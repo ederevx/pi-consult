@@ -10,19 +10,13 @@
  * model id or provider name is hardcoded here.
  */
 
-/** The pi settings the default resolution reads. */
-export interface DefaultModelSettings {
-	defaultProvider?: string;
-	defaultModel?: string;
-}
-
 /** A bound fallback environment: registry, copied scope, defaults. */
 export interface BoundEnvironment {
 	modelRegistry: { getAvailable(): CatalogueModel[] } | undefined;
 	scopedModels: readonly { model: CatalogueModel }[];
 	/** The default model settings snapshotted with the environment; `{}` is
 	 *  an authoritative snapshot that resolves no default. */
-	defaults: DefaultModelSettings;
+	defaults?: { defaultProvider?: string; defaultModel?: string };
 }
 
 /** The registry's own catalogue entry, as this owner reads it. */
@@ -42,17 +36,8 @@ export interface FallbackChoice {
 	model: CatalogueModel;
 }
 
-export interface FallbackModelsDeps {
-	/** Reads the default model settings; a snapshot once one is bound. */
-	settings: () => DefaultModelSettings;
-}
-
 export class FallbackModels {
-	private readonly settings: () => DefaultModelSettings;
 
-	constructor(deps: FallbackModelsDeps) {
-		this.settings = deps.settings;
-	}
 
 	/**
 	 * Every model eligible as the fallback: the session's scope intersected
