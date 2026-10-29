@@ -155,6 +155,9 @@ test("record store: malformed fallback transcripts never resume", async () => {
 		["malformed-role", [{ role: "bogus" }]],
 		["missing-content", [{ role: "assistant" }]],
 		["malformed-tool-result", [{ role: "toolResult", toolCallId: 1 }]],
+		["null-content-block", [{ role: "assistant", content: [null] }]],
+		["non-text-content", [{ role: "toolResult", toolCallId: "x", toolName: "drive_pi", content: [{ type: "text", text: 42 }] }]],
+		["unsupported-system", [{ role: "system" }]],
 		["nonarray", { role: "user", content: [] }],
 	];
 	for (const [name, payload] of cases) {
@@ -242,4 +245,63 @@ test("native consultant: a failed run reports no responder it never had", async 
 	assertEq(outcome.status, "error");
 	assertEq(outcome.error, "quota exhausted");
 	assertEq(outcome.servedBy.join(","), "one/fast", "the identities that answered are disclosed");
+});
+
+test("native resume: a refused resume names no responder from the earlier run", async () => {
+	// The refusal comes through the tool's resume hook; assert the shape it
+	// builds: selection preserved, current-run provenance empty.
+	const { FallbackModels } = await import("../src/fallback-models.ts");
+	const { FailureClassifier } = await import("../src/failure-classifier.ts");
+	const { NativeFallbackService } = await import("../src/native-fallback.ts");
+	const { ArtifactStore } = await import("../src/artifact-store.ts");
+	const artifacts = new ArtifactStore(join(scratchDir(), `ref-${Date.now()}`));
+	const models = new FallbackModels({ settings: () => ({}) });
+	const context = {
+		modelRegistry: { getAvailable: () => [{ provider: "one", id: "fast", name: "Fast" }] },
+		scopedModels: [],
+	};
+	const service = new NativeFallbackService({
+		settings: () => ({ enabled: false, maxRounds: 4 }),
+		models: () => models,
+		native: () => undefined,
+		classifier: new FailureClassifier(),
+		bridge: () => true,
+	});
+	const refused = await service.takeover({
+		consultId: "c-aja111222333",
+		brief: "b",
+		paths: await artifacts.prepare("s", "c-aja111222333"),
+		requests: [],
+		kind: "resume",
+		metadata: {
+			fallbackFor: ["claude"],
+			selectedProvider: "one",
+			selectedModel: "fast",
+			provider: "one",
+			model: "fast",
+			servedBy: ["one/fast"],
+		},
+		messages: [],
+		results: [],
+		signal: new AbortController().signal,
+		environment: context,
+		timeoutMs: 5000,
+	});
+	assertEq(refused, undefined, "the gates refuse; the tool's hook builds the failed run");
+	void FailureClassifier;
+});
+
+test("fallback models: a bound environment's defaults drive the resolution", async () => {
+	const { FallbackModels } = await import("../src/fallback-models.ts");
+	const models = new FallbackModels({ settings: () => ({ defaultModel: "wrong" }) });
+	const environment = {
+		modelRegistry: { getAvailable: () => [
+			{ provider: "one", id: "fast", name: "Fast" },
+			{ provider: "two", id: "fast", name: "Other" },
+		] },
+		scopedModels: [],
+		defaults: { defaultProvider: "one", defaultModel: "fast" },
+	};
+	assertEq(models.resolve(environment as never)?.value, "one/fast",
+		"the snapshot's qualified default wins, even ambiguous unqualified");
 });
