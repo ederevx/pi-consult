@@ -100,13 +100,13 @@ export class PreConsultTool {
 				};
 				let text: string;
 				try {
-					text = this.contract.catalogText(availability);
+					text = this.contract.catalogText(availability, this.runner.targets());
 				} catch (error) {
 					// Acknowledgement must survive a catalogue formatting failure: the
 					// fixed terms still have to reach the agent.
 					const reason = error instanceof Error ? error.message : String(error);
 					text =
-						`${this.contract.contractText()}\n\n` +
+						`${this.contract.contractText(this.runner.targets())}\n\n` +
 						`consultant availability could not be determined: ${reason}`;
 				}
 				return { content: [{ type: "text", text }], details };
@@ -120,10 +120,11 @@ export class PreConsultTool {
 			return await this.runner.probeAll();
 		} catch (error) {
 			const reason = error instanceof Error ? error.message : String(error);
-			return [
-				{ name: "claude", available: false, error: `probe failed: ${reason}` },
-				{ name: "codex", available: false, error: `probe failed: ${reason}` },
-			];
+			return this.runner.targets().map((target) => ({
+				name: target.name,
+				available: false,
+				error: `probe failed: ${reason}`,
+			}));
 		}
 	}
 }

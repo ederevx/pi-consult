@@ -1,6 +1,6 @@
 import type { AgentToolResult, ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 
-import { ConsultContract } from "../src/consult-contract.ts";
+import { ConsultContract, type ConsultantTarget } from "../src/consult-contract.ts";
 import type { ConsultRunner } from "../src/consult-runner.ts";
 import type { PreConsultDetails } from "../src/contracts.ts";
 import { PreConsultTool } from "../src/pre-consult-tool.ts";
@@ -24,6 +24,20 @@ function register(runner: ConsultRunner): ToolDefinition {
 	tool.register(pi);
 	return definition as ToolDefinition;
 }
+
+/** A stub runner: the probe answer it gives, and the CLIs it reports. */
+function runner(
+	probeAll: ConsultRunner["probeAll"],
+	targets: readonly ConsultantTarget[] = [],
+): ConsultRunner {
+	return { probeAll, targets: () => [...targets] } as unknown as ConsultRunner;
+}
+
+/** Two configured consultants, so the terms can name the CLIs that carry a brief. */
+const TARGETS: readonly ConsultantTarget[] = [
+	{ name: "claude", settings: { command: "my-claude" } as ConsultantTarget["settings"] },
+	{ name: "codex", settings: { command: "my-codex" } as ConsultantTarget["settings"] },
+];
 
 function executor(definition: ToolDefinition) {
 	return definition.execute as (
@@ -61,16 +75,16 @@ function executorWithContext(definition: ToolDefinition) {
 
 /** The catalogue text of one acknowledgement call. */
 async function contractText(): Promise<string> {
-	const definition = register({ probeAll: async () => [] } as unknown as ConsultRunner);
+	const definition = register(runner(async () => [], TARGETS));
 	const result = await executor(definition)("call-text", { acknowledge: true });
 	return result.content[0].text;
 }
 
 test("pre_consult: returns the current catalogue and a versioned receipt", async () => {
 	// A stub runner keeps the probe away from the real CLIs.
-	const definition = register({
-		probeAll: async () => [{ name: "claude", available: false, error: "missing" }],
-	} as unknown as ConsultRunner);
+	const definition = register(
+		runner(async () => [{ name: "claude", available: false, error: "missing" }], TARGETS),
+	);
 	const result = await executor(definition)("call-1", { acknowledge: true });
 	assertEq(result.details.schema, 1);
 	assertEq(result.details.ack.contractVersion, ConsultContract.VERSION);
@@ -107,8 +121,18 @@ test("pre_consult: returns the current catalogue and a versioned receipt", async
 	);
 });
 
+test("pre_consult: the terms name the configured CLIs, never a vendor", async () => {
+	const definition = register(runner(async () => [], TARGETS));
+	const result = await executor(definition)("call-egress", { acknowledge: true });
+	const text = result.content[0].text;
+	assertIncludes(text, "external provider: my-claude for claude, my-codex for codex.");
+	for (const vendor of ["Anthropic", "OpenAI", "Google", "OpenRouter"]) {
+		assertNotIncludes(text, vendor, `no vendor name is assumed: ${vendor}`);
+	}
+});
+
 test("pre_consult: the tool carries workflow prompt guidelines", () => {
-	const definition = register({ probeAll: async () => [] } as unknown as ConsultRunner);
+	const definition = register(runner(async () => [], TARGETS));
 	const guidelines = definition.promptGuidelines ?? [];
 	assert(guidelines.length >= 2, "both workflow rules survive compaction");
 	assertIncludes(guidelines.join("\n"), "Consultation tier");
@@ -129,11 +153,11 @@ test("pre_consult: the tool carries workflow prompt guidelines", () => {
 });
 
 test("pre_consult: a probe failure still returns the full terms", async () => {
-	const definition = register({
-		probeAll: async () => {
+	const definition = register(
+		runner(async () => {
 			throw new Error("cli exploded");
-		},
-	} as unknown as ConsultRunner);
+		}, TARGETS),
+	);
 	const result = await executor(definition)("call-probe", { acknowledge: true });
 	const text = result.content[0].text;
 	assertIncludes(text, `pi-consult contract v${ConsultContract.VERSION}`);
@@ -142,7 +166,7 @@ test("pre_consult: a probe failure still returns the full terms", async () => {
 });
 
 test("pre_consult: a nested call is rejected", async () => {
-	const definition = register({ probeAll: async () => [] } as unknown as ConsultRunner);
+	const definition = register(runner(async () => [], TARGETS));
 	let threw = false;
 	try {
 		await executor(definition)("parent/call", { acknowledge: true });
@@ -152,9 +176,9 @@ test("pre_consult: a nested call is rejected", async () => {
 	assertEq(threw, true);
 });
 
-test("pre_consult: contract v12 states the hold, the verdict and the completion line", async () => {
+test("pre_consult: contract v13 states the hold, the verdict and the completion line", async () => {
 	const text = await contractText();
-	assertEq(ConsultContract.VERSION, 12);
+	assertEq(ConsultContract.VERSION, 13);
 	assertIncludes(text, "holds your own thinking effort");
 	assertIncludes(text, "It never leaves you at high, xhigh, or max");
 	assertIncludes(text, "you own the implementation and the\n  execution");
@@ -165,8 +189,8 @@ test("pre_consult: contract v12 states the hold, the verdict and the completion 
 	assertNotIncludes(text, "low; never high, xhigh, or max)");
 });
 
-test("pre_consult: contract v12 requires a convention audit in every closing consultation", async () => {
-	const definition = register({ probeAll: async () => [] } as unknown as ConsultRunner);
+test("pre_consult: contract v13 requires a convention audit in every closing consultation", async () => {
+	const definition = register(runner(async () => [], TARGETS));
 	const text = await contractText();
 	assertIncludes(text, "Every closing consultation audits convention compliance");
 	assertIncludes(text, "which a consultant cannot read");
@@ -180,7 +204,7 @@ test("pre_consult: contract v12 requires a convention audit in every closing con
 });
 
 test("pre_consult: the catalogue names the auditor exception and the marker rule", async () => {
-	const definition = register({ probeAll: async () => [] } as unknown as ConsultRunner);
+	const definition = register(runner(async () => [], TARGETS));
 	const text = await contractText();
 	assertIncludes(String(definition.description), "except edit, write, and powershell");
 	assertIncludes(text, "keeps edit, write, and powershell blocked");
@@ -257,7 +281,7 @@ test("pre_consult: every probe reports its availability to the effort owner", as
 		executorWithContext(definition)(id, { acknowledge: true }, undefined, undefined, ctx);
 
 	const unavailable = registerWithEffort(
-		{ probeAll: async () => [{ name: "claude", available: false, error: "missing" }] } as unknown as ConsultRunner,
+		runner(async () => [{ name: "claude", available: false, error: "missing" }], TARGETS),
 		effort,
 	);
 	await run(unavailable, "call-u1");
@@ -265,7 +289,7 @@ test("pre_consult: every probe reports its availability to the effort owner", as
 	assertEq((calls[0][0] as { available: boolean }).available, false);
 
 	const available = registerWithEffort(
-		{ probeAll: async () => [{ name: "claude", available: true }] } as unknown as ConsultRunner,
+		runner(async () => [{ name: "claude", available: true }], TARGETS),
 		effort,
 	);
 	await run(available, "call-u2");
@@ -273,11 +297,9 @@ test("pre_consult: every probe reports its availability to the effort owner", as
 	assertEq((calls[1][0] as { available: boolean }).available, true);
 
 	const throwing = registerWithEffort(
-		{
-			probeAll: async () => {
-				throw new Error("cli exploded");
-			},
-		} as unknown as ConsultRunner,
+		runner(async () => {
+			throw new Error("cli exploded");
+		}, TARGETS),
 		effort,
 	);
 	await run(throwing, "call-u3");
