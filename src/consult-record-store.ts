@@ -110,16 +110,16 @@ export class ConsultRecordStore {
 			if (typeof message !== "object" || message === null) return false;
 			const record = message as { role?: unknown; content?: unknown; toolCallId?: unknown; toolName?: unknown };
 			if (record.role === "user" || record.role === "assistant") {
-				return Array.isArray(record.content);
+				return Array.isArray(record.content) && record.content.every(ConsultRecordStore.isTextBlock);
 			}
 			if (record.role === "toolResult") {
 				return (
 					typeof record.toolCallId === "string" &&
 					typeof record.toolName === "string" &&
-					Array.isArray(record.content)
+					Array.isArray(record.content) &&
+					record.content.every(ConsultRecordStore.isTextBlock)
 				);
 			}
-			if (record.role === "system") return true;
 			return false;
 		});
 		return wellFormed ? parsed : undefined;
@@ -249,6 +249,24 @@ export class ConsultRecordStore {
 			continuedFrom: manifest.continuedFrom,
 			runs,
 		};
+	}
+
+	/** A content block this owner persists: text, or a tool call with
+	 *  string id, name, and object arguments. */
+	private static isTextBlock(block: unknown): boolean {
+		if (typeof block !== "object" || block === null) return false;
+		const part = block as { type?: unknown; text?: unknown; id?: unknown; name?: unknown; arguments?: unknown };
+		if (part.type === "text") return typeof part.text === "string";
+		if (part.type === "toolCall") {
+			return (
+				typeof part.id === "string" &&
+				typeof part.name === "string" &&
+				typeof part.arguments === "object" &&
+				part.arguments !== null
+			);
+		}
+		if (part.type === "thinking") return true;
+		return false;
 	}
 
 	private static unfinished(state: InvocationState): boolean {
