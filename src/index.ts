@@ -35,6 +35,8 @@ import { ConsultTerminateTool } from "./consult-terminate-tool.ts";
 import { ConsultTool } from "./consult-tool.ts";
 import { ConsultToolOutput } from "./consult-tool-output.ts";
 import { FallbackModels } from "./fallback-models.ts";
+import { NativeFallbackService } from "./native-fallback.ts";
+import { NativeConsultant } from "./native-consultant.ts";
 import { ConsultToolPolicy } from "./consult-tool-policy.ts";
 import { ClaudeConsultant } from "./consultants/claude-consultant.ts";
 import { CodexConsultant } from "./consultants/codex-consultant.ts";
@@ -60,6 +62,20 @@ export class ConsultExtension {
 			live = ctx;
 		});
 		const fallbackModels = new FallbackModels({ settings: () => pi.getSettings() });
+		const nativeFallback = new NativeFallbackService({
+			settings: () => config.fallback,
+			models: () => (live ? fallbackModels : undefined),
+			context: () => live,
+			native: () =>
+				live
+					? new NativeConsultant({
+							registry: live.modelRegistry as never,
+							broker,
+							artifacts,
+						})
+					: undefined,
+			classifier,
+		});
 		new ConsultSettings(store, {
 			choices: () => (live ? fallbackModels.available(live) : []),
 			defaultChoice: () => {
@@ -122,6 +138,7 @@ export class ConsultExtension {
 			foreground,
 			bridge,
 			effort,
+			fallback: (context) => nativeFallback.takeover(context),
 		}).register(pi);
 		new ConsultTerminateTool(supervisor, effort).register(pi);
 		new ConsultReplyTool(broker, new SecretScreen()).register(pi);
