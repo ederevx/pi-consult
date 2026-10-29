@@ -48,6 +48,13 @@ export interface OutputSettings {
 	maxLines: number;
 }
 
+/** Whether, and with which pi model, a failed consultation falls back. */
+export interface FallbackSettings {
+	enabled: boolean;
+	/** `provider/model-id`; absent follows pi's own default model. */
+	model?: string;
+}
+
 /** Whether, and how long, a consultant may block on the pi agent. */
 export interface DriveSettings {
 	enabled: boolean;
@@ -89,6 +96,7 @@ export class ConsultConfig {
 	readonly maxConcurrent: number;
 	readonly output: OutputSettings;
 	readonly gate: GateSettings;
+	readonly fallback: FallbackSettings;
 	readonly drive: DriveSettings;
 	readonly claude: ConsultantSettings;
 	readonly codex: ConsultantSettings;
@@ -138,6 +146,13 @@ export class ConsultConfig {
 				drive.maxRequestsPerInvocation,
 				ConsultConfig.DEFAULT_DRIVE_MAX_REQUESTS,
 			),
+		};
+
+		const fallback = ConsultConfig.record(raw.fallback);
+		const fallbackModel = ConsultConfig.str(fallback.model);
+		this.fallback = {
+			enabled: ConsultConfig.bool(fallback.enabled, true),
+			model: fallbackModel || undefined,
 		};
 
 		this.claude = ConsultConfig.consultantSettings(

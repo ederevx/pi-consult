@@ -29,6 +29,9 @@ export interface SettingsOwner {
 	current(): Map<string, string>;
 	apply(key: string, value: string): string | undefined;
 	reset(): string | undefined;
+	/** The model choices a "model" row offers, and its resolved default. */
+	modelChoices?(): { value: string; label: string }[];
+	modelDefault?(): { value: string; label: string } | undefined;
 }
 
 /** The slice of pi's command context the dock needs. */
@@ -78,8 +81,10 @@ export class ConsultSettingsPresenter {
 				description: spec.description,
 				currentValue,
 			};
-			// A cycling row is a flag or a fixed enum; everything else is edited.
+			// A cycling row is a flag or a fixed enum; a model row picks from
+			// the live catalogue; everything else is edited as text.
 			if (spec.values) item.values = [...spec.values];
+			else if (spec.kind === "model") item.submenu = (current, done) => this.picker(spec, current, done);
 			else item.submenu = (current, done) => this.editor(spec, current, done);
 			return item;
 		});
@@ -161,6 +166,45 @@ export class ConsultSettingsPresenter {
 	private refresh(): void {
 		this.displayed = this.owner.current();
 		this.view?.updateValues(this.displayed);
+	}
+
+	/** The live-catalogue picker for one model row: only available models,
+	 *  the resolved default first, and never a stale stored selection. */
+	private picker(spec: SettingSpec, currentValue: string, done: SubmenuDone): Component {
+		const fallback = this.owner.modelDefault?.();
+		const choices = this.owner.modelChoices?.() ?? [];
+		const options: string[] = [];
+		const values: string[] = [];
+		if (fallback) {
+			options.push(`Pi default (${fallback.label})`);
+			values.push("");
+		}
+		for (const choice of choices) {
+			options.push(choice.label);
+			values.push(choice.value);
+		}
+		if (options.length === 0) {
+			return new ExtensionSelectorComponent(
+				spec.label,
+				["No available model", "Cancel"],
+				() => done(),
+				() => done(),
+			);
+		}
+		return new ExtensionSelectorComponent(
+			spec.label,
+			options,
+			(option) => {
+				const value = values[options.indexOf(option)] ?? "";
+				const error = this.apply(spec.key, value);
+				if (error !== undefined) {
+					this.notify(`${spec.label}: ${error}`, "error");
+					return;
+				}
+				done();
+			},
+			() => done(),
+		);
 	}
 
 	/** The seeded editor for one non-cycling row. */

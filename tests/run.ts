@@ -44,6 +44,7 @@ import "./pre-consult.test.ts";
 import "./consult-progress.test.ts";
 import "./settings.test.ts";
 import "./settings-view.test.ts";
+import "./fallback-models.test.ts";
 import "./runner.test.ts";
 import "./artifact-store.test.ts";
 import "./gate.test.ts";
