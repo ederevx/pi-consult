@@ -21,23 +21,37 @@ class OneShotStream {
 	}
 }
 
+function firstMetadata() {
+	return {
+		fallbackFor: ["claude" as const],
+		selectedProvider: "one",
+		selectedModel: "fast",
+		provider: "one",
+		model: "fast",
+		conversationPath: "/nonexistent/conversation.json",
+	};
+}
+
+const context = {
+	modelRegistry: { getAvailable: () => [{ provider: "one", id: "fast", name: "Fast" }] },
+	scopedModels: [],
+};
+
 function service(artifacts: ArtifactStore, fallback: { enabled: boolean; model?: string }) {
 	const models = new FallbackModels({ settings: () => ({ defaultProvider: "one", defaultModel: "fast" }) });
-	const context = {
-		modelRegistry: { getAvailable: () => [{ provider: "one", id: "fast", name: "Fast" }] },
-		scopedModels: [],
-	};
 	const consultant = new NativeConsultant({
 		registry: new OneShotStream() as unknown as NativeStream,
 		broker: { submit: async () => ({ status: "answered", answer: "pi" }) } as never,
 		artifacts,
+		systemPrompt: () => "consultant preamble",
 	});
 	return new NativeFallbackService({
-		settings: () => fallback,
+		settings: () => ({ maxRounds: 16, ...fallback }),
 		models: () => models,
 		context: () => context,
 		native: () => consultant,
 		classifier: new FailureClassifier(),
+		bridge: () => true,
 	});
 }
 
@@ -53,8 +67,11 @@ test("native fallback: a forced continuation resumes the persisted transcript", 
 		brief: "first brief",
 		paths,
 		requests: [],
+		kind: "takeover",
 		results: primary,
 		signal,
+		environment: context,
+		timeoutMs: 5000,
 	});
 	assertEq(first?.status, "ok", "the first takeover serves");
 	const transcript = JSON.parse(readFileSync(first!.fallback!.conversationPath!, "utf8"));
@@ -65,10 +82,13 @@ test("native fallback: a forced continuation resumes the persisted transcript", 
 		brief: "follow up",
 		paths,
 		requests: [],
+		kind: "resume",
+		metadata: first!.fallback!,
+		messages: transcript,
 		results: primary,
 		signal,
-		conversation: transcript,
-		force: true,
+		environment: context,
+		timeoutMs: 5000,
 	});
 	assertEq(second?.status, "ok", "the continuation serves");
 	assertEq(second?.fallback?.conversationPath, first?.fallback?.conversationPath,
@@ -95,9 +115,13 @@ test("native fallback: force does not bypass the enablement or the model", async
 			brief: "b",
 			paths,
 			requests: [],
+			kind: "resume",
+			metadata: firstMetadata(),
+			messages: [],
 			results: primary,
 			signal: new AbortController().signal,
-			force: true,
+			environment: context,
+			timeoutMs: 5000,
 		}),
 		undefined,
 		"a disabled fallback refuses even a continuation",
@@ -108,11 +132,15 @@ test("native fallback: force does not bypass the enablement or the model", async
 			brief: "b",
 			paths,
 			requests: [],
+			kind: "resume",
+			metadata: { ...firstMetadata(), selectedProvider: "one", selectedModel: "deep" },
+			messages: [],
 			results: primary,
 			signal: new AbortController().signal,
-			force: true,
+			environment: context,
+			timeoutMs: 5000,
 		}),
 		undefined,
-		"an unresolvable model refuses even a continuation",
+		"an unresolvable saved model refuses the resume",
 	);
 });

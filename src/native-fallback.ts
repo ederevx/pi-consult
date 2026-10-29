@@ -23,18 +23,26 @@ export interface FallbackContext {
 	requests: readonly ConsultRequest[];
 	results: readonly ConsultantResult[];
 	signal: AbortSignal;
-	/** A continuation resumes this transcript instead of opening one. */
-	conversation?: unknown[];
-	/** A continuation runs the fallback directly, with no CLI attempts. */
-	force?: boolean;
+	/** The session that started the invocation; its scope binds the models. */
+	environment: object;
+	/** A continuation resumes this transcript under the saved selection. */
+	resume?: { metadata: FallbackMetadata; messages: unknown[] };
+	/** The request timeout that bounds the whole native loop. */
+	timeoutMs: number;
 }
+
+/** How one fallback service call starts: after failures, or as a resume. */
+export type NativeStart =
+	| { kind: "takeover"; results: readonly ConsultantResult[] }
+	| { kind: "resume"; metadata: FallbackMetadata; messages: unknown[] };
 
 export interface FallbackServiceDeps {
 	settings: () => FallbackSettings;
 	models: () => FallbackModels | undefined;
-	context: () => object | undefined;
 	native: () => NativeConsultant | undefined;
 	classifier: FailureClassifier;
+	/** Whether the bridge tools may be offered to the native model. */
+	bridge: () => boolean;
 }
 
 export class NativeFallbackService {
@@ -45,43 +53,51 @@ export class NativeFallbackService {
 	}
 
 	/**
-	 * Serve the fallback for one finished fan-out, or undefined when the
-	 * takeover does not apply. One conversation, one decision, no cascade.
+	 * Serve the fallback for one finished fan-out or continuation resume, or
+	 * undefined when it does not apply. One conversation, one decision, no
+	 * cascade.
 	 */
-	async takeover(context: FallbackContext): Promise<ConsultantResult | undefined> {
+	async takeover(context: FallbackContext & NativeStart): Promise<ConsultantResult | undefined> {
 		const settings = this.deps.settings();
 		if (!settings.enabled) return undefined;
-		if (!context.force && context.results.some((result) => result.status === "ok")) return undefined;
-		const fallbackFor = context.force
-			? context.results.map((result) => result.consultant as Exclude<RunParticipant, "fallback">)
-			: context.results
-					.filter((result) => NativeFallbackService.eligible(result, this.deps.classifier))
-					.map((result) => result.consultant as Exclude<RunParticipant, "fallback">);
+		const fallbackFor = context.kind === "resume"
+			? context.metadata.fallbackFor
+			: context.results.some((result) => result.status === "ok")
+				? []
+				: context.results
+						.filter((result) => NativeFallbackService.eligible(result, this.deps.classifier))
+						.map((result) => result.consultant as Exclude<RunParticipant, "fallback">);
 		if (fallbackFor.length === 0) return undefined;
 		const models = this.deps.models();
-		const live = this.deps.context();
 		const native = this.deps.native();
-		if (!models || !live || !native) return undefined;
-		const choice = models.resolve(live as never, settings.model);
+		if (!models || !native) return undefined;
+		// A resume pins the saved selection; a takeover resolves the live one.
+		const choice = context.kind === "resume"
+			? models.resolve(context.environment as never, `${context.metadata.selectedProvider}/${context.metadata.selectedModel}`)
+			: models.resolve(context.environment as never, settings.model);
 		if (!choice) return undefined;
-		const separator = choice.value.indexOf("/");
 		const selected = {
-			provider: choice.value.slice(0, separator),
-			id: choice.value.slice(separator + 1),
+			provider: choice.value.slice(0, choice.value.indexOf("/")),
+			id: choice.value.slice(choice.value.indexOf("/") + 1),
 		};
 
 		const outcome = await native.consult(
-			selected,
+			choice.model,
 			context.consultId,
 			context.brief,
 			context.paths,
 			context.signal,
-			context.conversation as never,
+			{
+				timeoutMs: context.timeoutMs,
+				maxRounds: settings.maxRounds,
+				bridge: this.deps.bridge(),
+			},
+			context.kind === "resume" ? (context.messages as never) : undefined,
 		);
 		return {
 			consultant: "fallback",
 			fallback: native.metadata(outcome, fallbackFor, selected),
-			status: outcome.status === "ok" ? "ok" : "error",
+			status: outcome.status === "aborted" ? "aborted" : outcome.status === "ok" ? "ok" : "error",
 			answer: outcome.answer,
 			partial: outcome.status !== "ok",
 			durationMs: outcome.durationMs,

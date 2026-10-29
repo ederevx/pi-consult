@@ -27,6 +27,16 @@ export interface NativeStream {
 	): { result(): Promise<AssistantMessage> };
 }
 
+/** One native run's configuration. */
+export interface NativeConfig {
+	/** The whole-loop bound, from the owning request timeout. */
+	timeoutMs: number;
+	/** The tool-round bound; configured, sixteen by default. */
+	maxRounds: number;
+	/** Whether the bridge tools are offered at all. */
+	bridge: boolean;
+}
+
 /** What one native conversation produced. */
 export interface NativeOutcome {
 	answer: string;
@@ -43,6 +53,8 @@ export interface NativeConsultantDeps {
 	registry: NativeStream;
 	broker: ConsultRequestBroker;
 	artifacts: ArtifactStore;
+	/** The consultant preamble the CLI runs share. */
+	systemPrompt: () => string;
 }
 
 /** The bridge tools a fallback conversation may call. */
@@ -53,24 +65,25 @@ interface DriveArguments {
 	client_request_id?: unknown;
 }
 
-export class NativeConsultant {
-	private static readonly MAX_ROUNDS = 16;
-	private static readonly SYSTEM_PROMPT = [
-		"You are an external consultant serving one consultation.",
-		"Answer the brief directly and completely.",
-		"To ask the pi agent a question or run one of its tools, call",
-		"drive_pi or use_tool; pi executes everything and returns the result.",
-		"You never execute anything yourself.",
-	].join(" ");
+/** One model tool call as pi-ai shapes it. */
+interface ModelToolCall {
+	type: "toolCall";
+	id: string;
+	name: string;
+	arguments: unknown;
+}
 
+export class NativeConsultant {
 	private readonly registry: NativeStream;
 	private readonly broker: ConsultRequestBroker;
 	private readonly artifacts: ArtifactStore;
+	private readonly systemPrompt: () => string;
 
 	constructor(deps: NativeConsultantDeps) {
 		this.registry = deps.registry;
 		this.broker = deps.broker;
 		this.artifacts = deps.artifacts;
+		this.systemPrompt = deps.systemPrompt;
 	}
 
 	/**
@@ -79,11 +92,12 @@ export class NativeConsultant {
 	 * every exchange after it are appended and re-persisted.
 	 */
 	async consult(
-		model: { provider: string; id: string },
+		model: object,
 		consultId: string,
 		brief: string,
 		paths: ConsultPaths,
 		signal: AbortSignal,
+		config: NativeConfig,
 		conversation?: Message[],
 	): Promise<NativeOutcome> {
 		const startedAt = Date.now();
@@ -91,35 +105,71 @@ export class NativeConsultant {
 		const messages: Message[] = conversation
 			? [...conversation, { role: "user", content: [{ type: "text", text: brief }] }]
 			: [{ role: "user", content: [{ type: "text", text: brief }] }];
-		const tools: Tool[] = [this.tool("drive_pi"), this.tool("use_tool")];
+		const tools: Tool[] = config.bridge ? [this.tool("drive_pi"), this.tool("use_tool")] : [];
 		const usage = { inputTokens: 0, outputTokens: 0, costUsd: 0 };
+		const sawUsage = { any: false };
+		const serving = new Map<string, { provider: string; model: string }>();
+		// The whole loop is bounded by the request timeout composed with the
+		// invocation signal; whichever fires first ends the conversation.
+		const deadline = AbortController.abortSignalTimeout
+			? AbortSignal.any([signal, AbortSignal.any([AbortSignal.timeout(config.timeoutMs)])])
+			: signal;
 		let status: NativeOutcome["status"] = "ok";
 		let error: string | undefined;
 		try {
-			for (let round = 0; round < NativeConsultant.MAX_ROUNDS; round += 1) {
-				if (signal.aborted) throw new Error("aborted");
+			for (let round = 0; round < config.maxRounds; round += 1) {
+				if (deadline.aborted) throw new Error("aborted");
 				const answer = await this.registry
-					.streamSimple(model as never, {
-						systemPrompt: NativeConsultant.SYSTEM_PROMPT,
+					.streamSimple(model, {
+						systemPrompt: this.systemPrompt(),
 						messages,
 						tools,
-					}, { signal })
+					}, { signal: deadline })
 					.result();
-				this.accumulate(usage, answer.usage);
-				const calls = answer.content.filter((part) => part.type === "toolCall");
+				serving.set(`${answer.provider}/${answer.model}`, {
+					provider: answer.provider,
+					model: answer.model,
+				});
+				this.accumulate(usage, sawUsage, answer.usage);
+				const calls = answer.content.filter(
+					(part): part is ModelToolCall => part.type === "toolCall",
+				);
 				messages.push(answer as Message);
+				if (answer.stopReason === "error") {
+					status = "error";
+					error = answer.errorMessage ?? "the fallback model reported an error";
+					break;
+				}
+				if (answer.stopReason === "length") {
+					status = "error";
+					error = "the fallback answer exceeded the model's output limit";
+					break;
+				}
 				if (calls.length === 0) {
-					return this.finish(
-						{ answer: NativeConsultant.text(answer), status: "ok", usage, startedAt, model, messages, paths },
-					);
+					return this.finish({
+						answer: NativeConsultant.text(answer),
+						status: "ok",
+						usage: sawUsage.any ? usage : undefined,
+						startedAt,
+						serving,
+						messages,
+						paths,
+					});
 				}
 				for (const call of calls) {
-					const result = await this.drive(invocationId, consultId, call.arguments);
+					// The signal races the broker wait, so an abort never
+					// lingers for the bridge deadline.
+					const result = await Promise.race([
+						this.drive(invocationId, consultId, call),
+						NativeConsultant.aborted(deadline),
+					]);
 					messages.push(result);
 				}
 			}
-			error = "the fallback conversation exceeded its tool-round bound";
-			status = "error";
+			if (status === "ok") {
+				error = "the fallback conversation exceeded its tool-round bound";
+				status = "error";
+			}
 		} catch (failure) {
 			status = signal.aborted ? "aborted" : "error";
 			error = failure instanceof Error ? failure.message : String(failure);
@@ -128,11 +178,21 @@ export class NativeConsultant {
 			answer: status === "aborted" ? "" : NativeConsultant.tail(messages),
 			status,
 			error,
-			usage,
+			usage: sawUsage.any ? usage : undefined,
 			startedAt,
-			model,
+			serving,
 			messages,
 			paths,
+		});
+	}
+
+	/** Resolves an aborted marker when the signal fires first. */
+	private static aborted(signal: AbortSignal): Promise<Message> {
+		return new Promise((resolve) => {
+			if (signal.aborted) throw new Error("aborted");
+			signal.addEventListener("abort", () => {
+				resolve({ role: "toolResult", toolCallId: "", toolName: "aborted", content: [], isError: true } as never);
+			}, { once: true });
 		});
 	}
 
@@ -164,13 +224,14 @@ export class NativeConsultant {
 	private async drive(
 		invocationId: string,
 		consultId: string,
-		raw: unknown,
+		call: ModelToolCall,
 	): Promise<Message> {
-		const args = (raw ?? {}) as DriveArguments;
+		const args = (call.arguments ?? {}) as DriveArguments;
+		const isQuestion = call.name === "drive_pi";
 		const clientRequestId = typeof args.client_request_id === "string" && args.client_request_id
 			? args.client_request_id
 			: randomUUID();
-		const payload = "prompt" in args
+		const payload = isQuestion
 			? typeof args.prompt === "string" ? args.prompt : ""
 			: {
 					kind: "tool",
@@ -187,18 +248,20 @@ export class NativeConsultant {
 		const text = outcome.answer ?? `[${outcome.status}]`;
 		return {
 			role: "toolResult",
-			toolCallId: clientRequestId,
-			toolName: "drive_pi" in args ? "drive_pi" : "use_tool",
+			toolCallId: call.id,
+			toolName: call.name,
 			content: [{ type: "text", text }],
-			isError: outcome.status !== "answered",
+			isError: outcome.status !== "answered" || outcome.isError === true,
 		} as Message;
 	}
 
 	private accumulate(
 		total: { inputTokens: number; outputTokens: number; costUsd: number },
+		saw: { any: boolean },
 		usage: { input: number; output: number; cost: { total: number } } | undefined,
 	): void {
 		if (!usage) return;
+		saw.any = true;
 		total.inputTokens += usage.input;
 		total.outputTokens += usage.output;
 		total.costUsd += usage.cost.total;
@@ -208,30 +271,53 @@ export class NativeConsultant {
 		answer: string;
 		status: NativeOutcome["status"];
 		error?: string;
-		usage: { inputTokens: number; outputTokens: number; costUsd: number };
+		usage: { inputTokens: number; outputTokens: number; costUsd: number } | undefined;
 		startedAt: number;
-		model: { provider: string; id: string };
+		serving: Map<string, { provider: string; model: string }>;
 		messages: Message[];
 		paths: ConsultPaths;
 	}): Promise<NativeOutcome> {
 		const conversationPath = `${state.paths.dir}/fallback-conversation.json`;
-		await this.artifacts
-			.write(conversationPath, JSON.stringify(state.messages))
-			.catch(() => undefined);
+		// The transcript is advertised only once it is durably written; a
+		// failed write is reported, never silently resumed.
+		try {
+			await this.artifacts.write(conversationPath, JSON.stringify(state.messages));
+		} catch (error) {
+			return {
+				answer: state.answer,
+				status: "error",
+				error: `the fallback transcript could not be persisted: ${
+					error instanceof Error ? error.message : String(error)
+				}`,
+				usage: state.usage,
+				durationMs: Date.now() - state.startedAt,
+				provider: NativeConsultant.lastServe(state.serving).provider,
+				model: NativeConsultant.lastServe(state.serving).model,
+			};
+		}
+		const served = NativeConsultant.lastServe(state.serving);
 		return {
 			answer: state.answer,
 			status: state.status,
 			error: state.error,
-			usage: { ...state.usage },
+			usage: state.usage ? { ...state.usage } : undefined,
 			durationMs: Date.now() - state.startedAt,
 			conversationPath,
-			provider: state.model.provider,
-			model: state.model.id,
+			provider: served.provider,
+			model: served.model,
 		};
 	}
 
+	/** The identity that answered last; routing may change it mid-loop. */
+	private static lastServe(serving: Map<string, { provider: string; model: string }>): {
+		provider: string;
+		model: string;
+	} {
+		return [...serving.values()].pop() ?? { provider: "", model: "" };
+	}
+
 	/** The provenance metadata this outcome carries into its run. */
-	private metadata(outcome: NativeOutcome, fallbackFor: string[], selected: { provider: string; id: string }): FallbackMetadata {
+	metadata(outcome: NativeOutcome, fallbackFor: string[], selected: { provider: string; id: string }): FallbackMetadata {
 		return {
 			fallbackFor,
 			selectedProvider: selected.provider,

@@ -66,6 +66,7 @@ export class ConsultSettings {
 		{ key: "drive.tools.allow", label: "Bridge tools", path: ["drive", "tools", "allow"], kind: "json", description: "Tool names a consultant may ask pi to run (JSON array; pi still decides every run)" },
 		{ key: "fallback.enabled", label: "Native fallback", path: ["fallback", "enabled"], kind: "boolean", values: ["off", "on"], description: "Let an available pi model serve a consultation whose consultant failed" },
 		{ key: "fallback.model", label: "Fallback model", path: ["fallback", "model"], kind: "model", description: "The pi model that serves a failed consultation; unset follows pi's default" },
+		{ key: "fallback.maxRounds", label: "Fallback round bound", path: ["fallback", "maxRounds"], kind: "number", description: "Tool rounds one fallback conversation may take before it stops" },
 		{ key: "drive.maxRequestsPerInvocation", label: "Bridge request limit", path: ["drive", "maxRequestsPerInvocation"], kind: "number", description: "Bridge requests one invocation may make before further ones are busy" },
 	];
 

@@ -24,6 +24,8 @@ export interface FallbackChoice {
 	value: string;
 	/** The dock row's label. */
 	label: string;
+	/** The registry's own model object, streamed exactly as configured. */
+	model: object;
 }
 
 export interface FallbackModelsDeps {
@@ -43,7 +45,7 @@ export class FallbackModels {
 	 * with the registry's available catalogue, or the whole catalogue when
 	 * the session scopes nothing.
 	 */
-	available(ctx: ExtensionContext): FallbackChoice[] {
+	available(ctx: { modelRegistry: { getAvailable(): object[] }; scopedModels: readonly { model: object }[] }): FallbackChoice[] {
 		const catalogue = ctx.modelRegistry.getAvailable();
 		const scoped = ctx.scopedModels.map((entry) => entry.model);
 		const allowed = scoped.length > 0
@@ -54,6 +56,7 @@ export class FallbackModels {
 			.map((model) => ({
 				value: FallbackModels.identifier(model),
 				label: `${model.name} (${FallbackModels.identifier(model)})`,
+				model,
 			}));
 	}
 
@@ -65,7 +68,7 @@ export class FallbackModels {
 	resolve(
 		ctx: ExtensionContext,
 		configured?: string,
-	): { value: string; label: string } | undefined {
+	): FallbackChoice | undefined {
 		const available = this.available(ctx);
 		if (configured) {
 			const exact = available.find((choice) => choice.value === configured);
@@ -75,17 +78,21 @@ export class FallbackModels {
 		}
 		const defaults = this.settings();
 		if (!defaults.defaultModel) return undefined;
-		const qualified = defaults.defaultProvider
-			? available.find((choice) => choice.value === `${defaults.defaultProvider}/${defaults.defaultModel}`)
-			: undefined;
-		if (qualified) return qualified;
+		if (defaults.defaultProvider) {
+			// A named provider is part of the default's identity: an exact
+			// match or nothing, never another provider's same-named model.
+			const exact = available.find(
+				(choice) => choice.value === `${defaults.defaultProvider}/${defaults.defaultModel}`,
+			);
+			return exact;
+		}
 		const unqualified = available.filter((choice) =>
 			choice.value.endsWith(`/${defaults.defaultModel}`));
 		return unqualified.length === 1 ? unqualified[0] : undefined;
 	}
 
 	/** The exact identifier a model is stored and matched by. */
-	private static identifier(model: { provider: string; id: string }): string {
+	private static identifier(model: { provider: string; name: string; id: string }): string {
 		return `${model.provider}/${model.id}`;
 	}
 }
