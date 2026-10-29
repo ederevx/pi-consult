@@ -40,6 +40,7 @@ import type { ConsultIndex } from "./consult-index.ts";
 import type { ConsultRecordStore } from "./consult-record-store.ts";
 import type { ConsultInvocation, InvocationRequestSpec, InvocationSpec } from "./consult-invocation.ts";
 import type { NativeStart } from "./native-fallback.ts";
+import type { BoundEnvironment } from "./fallback-models.ts";
 import type { ConsultSupervisor } from "./consult-supervisor.ts";
 import { ConsultResultView } from "./consult-result-view.ts";
 import type { BranchEntry, ReceiptLedger } from "./receipt-ledger.ts";
@@ -74,6 +75,9 @@ export interface ConsultToolDeps {
 	bridge: BridgeLauncher;
 	/** pi's thinking-level cycle; engaged by a consult, settled by its receipt. */
 	effort?: AgentEffortPolicy;
+	/** Snapshots the session that starts an invocation: registry, copied
+	 *  scope, and default model, read once through the live API. */
+	bindEnvironment?: (ctx: ExtensionToolContext) => BoundEnvironment;
 	/** Serves the native fallback after a failed primary fan-out, or
 	 *  directly when a continuation resumes a native transcript. */
 	fallback?: (
@@ -422,7 +426,7 @@ export class ConsultTool {
 				continuedFrom: continuation?.consultId,
 				requests,
 				providerSessions,
-				environment: ConsultTool.environment(ctx),
+				environment: this.deps.bindEnvironment?.(ctx) ?? { modelRegistry: undefined, scopedModels: [], defaults: {} },
 				timeoutMs: params.timeout_s
 					? params.timeout_s * 1000
 					: this.deps.config.consultant(nativeResume.targets[0] ?? "claude").timeoutMs,
@@ -484,7 +488,7 @@ export class ConsultTool {
 			continuedFrom: continuation?.consultId,
 			requests,
 			providerSessions,
-			environment: ConsultTool.environment(ctx),
+			environment: this.deps.bindEnvironment?.(ctx) ?? { modelRegistry: undefined, scopedModels: [], defaults: {} },
 			timeoutMs: requests[0]?.timeoutMs ?? this.deps.config.claude.timeoutMs,
 			fallback: this.deps.fallback,
 		};
@@ -604,22 +608,7 @@ export class ConsultTool {
 		return ctx.sessionManager.getBranch() as unknown as BranchEntry[];
 	}
 
-	/** A snapshot of the session that started the invocation: its registry,
-	 *  copied scope, and default model. Nothing is read through a context
-	 *  the host may have invalidated by the time the fallback runs. */
-	private static environment(ctx: ExtensionToolContext): object {
-		// A context without a scope (embedders, tests) snapshots an empty
-		// one: the registry's whole catalogue stays eligible. The defaults
-		// are snapshotted too, so a detached takeover never reads through a
-		// context or API the host may have invalidated since.
-		const scoped = (ctx as { scopedModels?: unknown }).scopedModels;
-		const settings = (ctx as unknown as { getSettings?: () => { defaultProvider?: string; defaultModel?: string } }).getSettings?.();
-		return {
-			modelRegistry: (ctx as { modelRegistry?: unknown }).modelRegistry,
-			scopedModels: Array.isArray(scoped) ? [...scoped] : [],
-			defaults: settings ? { defaultProvider: settings.defaultProvider, defaultModel: settings.defaultModel } : {},
-		};
-	}
+
 
 	private targets(target: ConsultTarget): ConsultantName[] {
 		if (target === "both") return ["claude", "codex"];
