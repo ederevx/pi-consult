@@ -11,6 +11,7 @@
 import { randomUUID } from "node:crypto";
 import type { Readable, Writable } from "node:stream";
 
+import pkg from "../package.json" with { type: "json" };
 import { BridgeProtocol, type DriveStatus } from "./bridge-protocol.ts";
 
 /** What became of one drive: the control server's answer, or why there is none. */
@@ -30,7 +31,7 @@ type JsonRpcId = string | number;
 export class McpStdioServer {
 	static readonly DEFAULT_PROTOCOL_VERSION = "2025-06-18";
 	static readonly SERVER_NAME = "pi-consult-bridge";
-	static readonly SERVER_VERSION = "0.11.0";
+	static readonly SERVER_VERSION = pkg.version;
 	static readonly TOOL_NAME = "drive_pi";
 
 	private readonly input: Readable;

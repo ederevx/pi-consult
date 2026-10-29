@@ -12,21 +12,28 @@
  */
 
 import type { ConsultantAvailability, ConsultantName } from "./contracts.ts";
+import type { ConsultantSettings } from "./consult-config.ts";
 import type { GateSnapshot } from "./receipt-ledger.ts";
+
+/** What one consultant's own CLI is, so the terms name it without a literal. */
+export interface ConsultantTarget {
+	name: ConsultantName;
+	settings: ConsultantSettings;
+}
 
 export class ConsultContract {
 	/** Bump when the acknowledgement terms change; old receipts stop counting. */
-	static readonly VERSION = 12;
+	static readonly VERSION = 13;
 
 	/** The acknowledgement text the agent accepts by calling `pre_consult`. */
-	contractText(): string {
+	contractText(targets: readonly ConsultantTarget[]): string {
 		return [
 			`pi-consult contract v${ConsultContract.VERSION}`,
 			"",
-			"Calling consult sends your brief to an external provider: Anthropic for",
-			"claude, OpenAI for codex. A consultant may also read files it is pointed",
-			"at and send their contents to that provider. What the consultant reads",
-			"therefore also leaves this machine.",
+			`Calling consult sends your brief to an external provider: ${ConsultContract.egress(targets)}.`,
+			"A consultant may also read files it is pointed at and send their contents",
+			"to that provider. What the consultant reads therefore also leaves this",
+			"machine.",
 			"",
 			"- Never put secrets in a brief, and never point a consultant at a file",
 			"  that holds them: credentials, tokens, API keys, private keys, passwords,",
@@ -249,7 +256,10 @@ export class ConsultContract {
 	}
 
 	/** The full catalogue returned by `pre_consult`. */
-	catalogText(availability: readonly ConsultantAvailability[]): string {
+	catalogText(
+		availability: readonly ConsultantAvailability[],
+		targets: readonly ConsultantTarget[],
+	): string {
 		const lines: string[] = [];
 		lines.push("pre_consult - pi-consult catalog (call again any time)");
 		lines.push("");
@@ -271,7 +281,7 @@ export class ConsultContract {
 				"its requestId, so the blocked consultant can continue.",
 		);
 		lines.push("");
-		lines.push(this.contractText());
+		lines.push(this.contractText(targets));
 		lines.push("");
 		lines.push("Gate:");
 		lines.push(
@@ -341,6 +351,16 @@ export class ConsultContract {
 			"as your final line, only after an approved consultant or independent " +
 			"verdict and with no consult or audit running or undelivered."
 		);
+	}
+
+	/**
+	 * Which provider a brief reaches, named by the CLI that carries it: the CLI
+	 * decides the vendor and account it is signed in to, so a configured
+	 * command is the only truthful source and no vendor name is assumed.
+	 */
+	private static egress(targets: readonly ConsultantTarget[]): string {
+		if (targets.length === 0) return "the provider its CLI is signed in to";
+		return targets.map((target) => `${target.settings.command} for ${target.name}`).join(", ");
 	}
 
 	/** A one-line status for the `/consult-status` command. */

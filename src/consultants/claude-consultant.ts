@@ -36,7 +36,7 @@ export class ClaudeConsultant implements Consultant {
 		"Read(**/.aws/**)",
 	].join(",");
 
-	private readonly settings: ConsultantSettings;
+	readonly settings: ConsultantSettings;
 	private readonly runner: ProcessRunner;
 
 	constructor(settings: ConsultantSettings, runner: ProcessRunner) {

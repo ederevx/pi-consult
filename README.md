@@ -17,7 +17,10 @@ The package has no runtime dependencies; it uses the host-provided
 `@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`, and `typebox`. The
 `command` for each
 consultant is resolved through `PATH` with the project as working directory, so
-a project-planted `./claude` runs only if `.` is on `PATH`.
+a project-planted `./claude` runs only if `.` is on `PATH`. No model, provider,
+or vendor is assumed anywhere: each consultant CLI decides the model and the
+account it is signed in to, and the acknowledgement terms name that configured
+`command` rather than a vendor name.
 
 ## Configuration
 
@@ -28,7 +31,7 @@ Missing or malformed values fall back to the defaults.
 
 ```json
 {
-  "defaultModel": "openrouter/deepseek/deepseek-v4.1-flash",
+  "defaultModel": "<your model>",
   "piConsult": {
     "enabled": true,
     "confirmFirstConsult": false,
