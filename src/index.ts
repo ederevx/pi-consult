@@ -6,7 +6,7 @@
  * processes are spawned only by a `consult` call.
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { AgentAvailability } from "./agent-availability.ts";
 import { AgentEffortPolicy } from "./agent-effort-policy.ts";
@@ -34,6 +34,7 @@ import { ConsultSupervisor } from "./consult-supervisor.ts";
 import { ConsultTerminateTool } from "./consult-terminate-tool.ts";
 import { ConsultTool } from "./consult-tool.ts";
 import { ConsultToolOutput } from "./consult-tool-output.ts";
+import { FallbackModels } from "./fallback-models.ts";
 import { ConsultToolPolicy } from "./consult-tool-policy.ts";
 import { ClaudeConsultant } from "./consultants/claude-consultant.ts";
 import { CodexConsultant } from "./consultants/codex-consultant.ts";
@@ -52,7 +53,23 @@ export class ConsultExtension {
 	register(pi: ExtensionAPI): void {
 		const store = new ConsultSettingsStore();
 		const config = ConsultConfig.load(store);
-		new ConsultSettings(store).register(pi);
+		// The live session context arrives with session_start; the picker and
+		// the resolution read it at use, never at registration.
+		let live: ExtensionContext | undefined;
+		pi.on("session_start", (_event, ctx: ExtensionContext) => {
+			live = ctx;
+		});
+		const fallbackModels = new FallbackModels({ settings: () => pi.getSettings() });
+		new ConsultSettings(store, {
+			choices: () => (live ? fallbackModels.available(live) : []),
+			defaultChoice: () => {
+				const context = live;
+				if (!context) return undefined;
+				const configured = ConsultConfig.load(store).fallback.model;
+				return fallbackModels.resolve(context, configured);
+			},
+			unset: () => store.unset(["fallback", "model"]),
+		}).register(pi);
 		if (!config.enabled) return;
 		const classifier = new ToolClassifier(config.gate);
 		const contract = new ConsultContract();

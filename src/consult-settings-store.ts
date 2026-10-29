@@ -100,6 +100,24 @@ export class ConsultSettingsStore {
 		return this.write(raw);
 	}
 
+	/** Delete one key path inside the namespace, preserving every other key. */
+	unset(path: readonly string[]): string | undefined {
+		const loaded = this.load();
+		if (loaded.error !== undefined) return loaded.error;
+		const raw = loaded.raw;
+		const namespace = raw[ConsultSettingsStore.NAMESPACE];
+		if (!ConsultSettingsStore.isRecord(namespace)) return undefined;
+		let node = namespace;
+		for (let index = 0; index < path.length - 1; index += 1) {
+			const child = node[path[index]];
+			if (!ConsultSettingsStore.isRecord(child)) return undefined;
+			node = child;
+		}
+		delete node[path[path.length - 1]];
+		raw[ConsultSettingsStore.NAMESPACE] = namespace;
+		return this.write(raw);
+	}
+
 	/** Delete the whole namespace, preserving every other top-level key. */
 	reset(): string | undefined {
 		const loaded = this.load();
