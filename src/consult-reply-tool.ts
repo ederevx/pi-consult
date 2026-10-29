@@ -71,11 +71,19 @@ export class ConsultReplyTool {
 		});
 	}
 
-	/** Deliver one answer to a waiting consultant. */
+	/** Deliver one answer to a waiting consultant. A named-tool request is
+	 *  answered only by the executor that claimed it; a manual reply may
+	 *  decline it, never answer or overwrite the execution. */
 	async execute(params: ConsultReplyParams): Promise<AgentToolResult<undefined>> {
 		const requestId = params.requestId?.trim();
 		if (!requestId) {
 			return this.failure("consult_reply needs the requestId from the drive message.");
+		}
+		const pending = this.broker.list().find((request) => request.requestId === requestId);
+		if (pending && this.broker.isTool(requestId) && params.status === "answered") {
+			return this.failure(
+				`${requestId} is a tool request: its output comes from consult_execute, not a manual answer. Decline it instead if you will not run it.`,
+			);
 		}
 		const hits = this.screen.scan(params.answer ?? "");
 		if (hits.length > 0) {

@@ -16,6 +16,9 @@ import { BriefComposer } from "../src/brief-composer.ts";
 import { ConsultConfig } from "../src/consult-config.ts";
 import { ConsultControlServer } from "../src/consult-control-server.ts";
 import { ConsultDelivery } from "../src/consult-delivery.ts";
+import { ConsultExecuteTool } from "../src/consult-execute-tool.ts";
+import { ConsultToolOutput } from "../src/consult-tool-output.ts";
+import { ConsultToolPolicy } from "../src/consult-tool-policy.ts";
 import { ConsultDriveDispatcher } from "../src/consult-drive-dispatcher.ts";
 import { ConsultForeground } from "../src/consult-foreground.ts";
 import { ConsultIndex } from "../src/consult-index.ts";
@@ -130,6 +133,7 @@ export interface ConsultFixture {
 	delivery: ConsultDelivery;
 	terminate: ConsultTerminateTool;
 	reply: ConsultReplyTool;
+	execute: ConsultExecuteTool;
 }
 
 /** Build the real owners over the given configuration. */
@@ -193,5 +197,10 @@ export function buildConsultFixture(
 		}),
 		terminate: new ConsultTerminateTool(supervisor, effort as never),
 		reply: new ConsultReplyTool(broker, screen),
+		execute: new ConsultExecuteTool(
+			broker,
+			new ConsultToolPolicy(config.drive.tools),
+			new ConsultToolOutput(screen),
+		),
 	};
 }

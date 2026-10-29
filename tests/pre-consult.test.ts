@@ -176,9 +176,9 @@ test("pre_consult: a nested call is rejected", async () => {
 	assertEq(threw, true);
 });
 
-test("pre_consult: contract v13 states the hold, the verdict and the completion line", async () => {
+test("pre_consult: contract v14 states the hold, the verdict and the completion line", async () => {
 	const text = await contractText();
-	assertEq(ConsultContract.VERSION, 13);
+	assertEq(ConsultContract.VERSION, 14);
 	assertIncludes(text, "holds your own thinking effort");
 	assertIncludes(text, "It never leaves you at high, xhigh, or max");
 	assertIncludes(text, "you own the implementation and the\n  execution");
@@ -189,7 +189,7 @@ test("pre_consult: contract v13 states the hold, the verdict and the completion 
 	assertNotIncludes(text, "low; never high, xhigh, or max)");
 });
 
-test("pre_consult: contract v13 requires a convention audit in every closing consultation", async () => {
+test("pre_consult: contract v14 requires a convention audit in every closing consultation", async () => {
 	const definition = register(runner(async () => [], TARGETS));
 	const text = await contractText();
 	assertIncludes(text, "Every closing consultation audits convention compliance");

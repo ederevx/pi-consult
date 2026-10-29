@@ -114,6 +114,78 @@ test("bridge e2e: the real bridge process carries a question to pi and back", as
 	}
 });
 
+
+test("bridge e2e: the real bridge pipes a requested tool run back to the consultant", async () => {
+	const fixture = buildConsultFixture(configFile(fakeClaude(), fakeCodex()));
+	const paths = await fixture.artifacts.prepare("sess-e2e2", "c-e2e111111111");
+	const connection = await fixture.bridge.open("c-e2e111111111", "claude", paths);
+	assert(connection !== undefined, "the bridge is prepared");
+	const probe = new McpProbe(connection.command, connection.args);
+	try {
+		probe.request({
+			jsonrpc: "2.0",
+			id: 1,
+			method: "initialize",
+			params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "probe" } },
+		});
+		await probe.next();
+		probe.request({ jsonrpc: "2.0", method: "notifications/initialized" });
+		probe.request({
+			jsonrpc: "2.0",
+			id: 2,
+			method: "tools/list",
+		});
+		const listed = await probe.next();
+		const names = (listed.result as { tools: Array<{ name: string }> }).tools.map((tool) => tool.name);
+		assert(names.includes("use_tool"), "use_tool is listed after the capability handshake");
+
+		probe.request({
+			jsonrpc: "2.0",
+			id: 3,
+			method: "tools/call",
+			params: {
+				name: "use_tool",
+				arguments: { name: "bash", arguments: { command: "git log --oneline -1" } },
+			},
+		});
+
+		let posted: { details: { requestId: string } } | undefined;
+		for (let attempt = 0; attempt < 100 && !posted; attempt += 1) {
+			await delay(50);
+			const last = fixture.pi.messages.at(-1);
+			if (last && JSON.stringify(last.message).includes("consult_execute")) {
+				posted = last.message as { details: { requestId: string } };
+			}
+		}
+		assert(posted !== undefined, "pi received the tool request");
+		assertIncludes(
+			JSON.stringify(posted),
+			"git log --oneline -1",
+			"the exact arguments travelled to pi",
+		);
+
+		const executed = await fixture.execute.execute(
+			{ requestId: posted.details.requestId },
+			undefined,
+			{
+				tools: [{ name: "bash" }],
+				executeTool: async () => ({
+					content: [{ type: "text", text: "2868f84 Release v0.4.51" }],
+				}),
+			} as never,
+		);
+		assertEq(executed.isError, undefined, "the run is authorized");
+
+		const call = await probe.next();
+		const result = call.result as { content?: Array<{ text?: string }>; isError?: boolean };
+		assertEq(result?.isError, false, "the tool call succeeds");
+		assertIncludes(result?.content?.[0]?.text ?? "", "2868f84", "the tool output came back");
+	} finally {
+		probe.kill();
+		await fixture.control.close();
+	}
+});
+
 test("bridge e2e: a missing descriptor exits non-zero and stays silent", async () => {
 	const fixture = buildConsultFixture(configFile(fakeClaude(), fakeCodex()));
 	const probe = new McpProbe(process.execPath, [

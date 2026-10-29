@@ -52,6 +52,7 @@ export class ConsultSettings {
 		{ key: "gate.trustReadOnlyHint", label: "Trust read-only hints", path: ["gate", "trustReadOnlyHint"], kind: "boolean", values: ["off", "on"], description: "Trust a tool's self-declared readOnlyHint" },
 		{ key: "drive.enabled", label: "Consultant bridge", path: ["drive", "enabled"], kind: "boolean", values: ["off", "on"], description: "Let a consultant ask pi a question and block on the answer" },
 		{ key: "drive.deadlineMs", label: "Bridge deadline (ms)", path: ["drive", "deadlineMs"], kind: "number", description: "How long a consultant waits for pi before the request expires" },
+		{ key: "drive.tools.allow", label: "Bridge tools", path: ["drive", "tools", "allow"], kind: "json", description: "Tool names a consultant may ask pi to run (JSON array; pi still decides every run)" },
 	];
 
 	private readonly store: ConsultSettingsStore;

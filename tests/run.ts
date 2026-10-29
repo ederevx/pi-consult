@@ -53,6 +53,7 @@ import "./consult-step-renderer.test.ts";
 import "./consult-foreground.test.ts";
 import "./availability.test.ts";
 import "./mcp-bridge.test.ts";
+import "./consult-execute.test.ts";
 import "./bridge-e2e.test.ts";
 
 await registry.runAll();
