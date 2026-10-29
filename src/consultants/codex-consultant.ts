@@ -26,7 +26,7 @@ export class CodexConsultant implements Consultant {
 	private static readonly READ_ONLY = 'sandbox_mode="read-only"';
 	private static readonly NO_APPROVAL = 'approval_policy="never"';
 
-	private readonly settings: ConsultantSettings;
+	readonly settings: ConsultantSettings;
 	private readonly runner: ProcessRunner;
 
 	constructor(settings: ConsultantSettings, runner: ProcessRunner) {

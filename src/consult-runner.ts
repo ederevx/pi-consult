@@ -7,6 +7,7 @@
  * the consultant session id it was given, so a continuation can resume it.
  */
 
+import type { ConsultantTarget } from "./consult-contract.ts";
 import type {
 	Consultant,
 	ConsultantAvailability,
@@ -35,6 +36,14 @@ export class ConsultRunner {
 	/** Whether an adapter is registered for a consultant. */
 	has(name: ConsultantName): boolean {
 		return this.consultants.has(name);
+	}
+
+	/** The registered consultants and their configured CLIs, in name order. */
+	targets(): ConsultantTarget[] {
+		return [...this.consultants.values()].map((consultant) => ({
+			name: consultant.name,
+			settings: consultant.settings,
+		}));
 	}
 
 	/** Probe every registered consultant for presence and version. */

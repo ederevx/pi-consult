@@ -223,7 +223,7 @@ test("mcp server: initialize, tools/list, and tools/call happy path", async () =
 	assertEq(init.id, 1);
 	assertEq(init.result.protocolVersion, "2025-03-26");
 	assertEq(init.result.serverInfo.name, "pi-consult-bridge");
-	assertEq(init.result.serverInfo.version, "0.11.0");
+	assertEq(init.result.serverInfo.version, McpStdioServer.SERVER_VERSION);
 	assertEq(init.result.capabilities.tools.listChanged, false);
 
 	source.write(rpc(2, "tools/list", {}));
