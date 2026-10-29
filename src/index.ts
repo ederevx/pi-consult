@@ -72,16 +72,19 @@ export class ConsultExtension {
 		const effort = new AgentEffortPolicy(config);
 		const formatter = new AnswerFormatter(config.output);
 		const delivery = new ConsultDelivery(pi, identity, formatter, effort);
-		const supervisor = new ConsultSupervisor(runner, records, delivery);
+		const control = new ConsultControlServer({ root: config.artifactDir });
+		const supervisor = new ConsultSupervisor(runner, records, delivery, (consultId) => {
+			for (const consultant of ["claude", "codex"] as const) {
+				control.revoke(`${consultId}:${consultant}`);
+			}
+		});
 		const broker = new ConsultRequestBroker(
 			new ConsultDriveDispatcher({ pi, supervisor }),
 			config.drive.deadlineMs,
+			config.drive.maxRequestsPerInvocation,
 		);
-		const bridge = new BridgeLauncher(
-			new ConsultControlServer({ broker, root: config.artifactDir }),
-			artifacts,
-			config.drive,
-		);
+		control.bind(broker);
+		const bridge = new BridgeLauncher(control, artifacts, config.drive);
 
 		effort.register(pi);
 		new AuditorSession().register(pi);

@@ -53,6 +53,7 @@ export class ConsultSettings {
 		{ key: "drive.enabled", label: "Consultant bridge", path: ["drive", "enabled"], kind: "boolean", values: ["off", "on"], description: "Let a consultant ask pi a question and block on the answer" },
 		{ key: "drive.deadlineMs", label: "Bridge deadline (ms)", path: ["drive", "deadlineMs"], kind: "number", description: "How long a consultant waits for pi before the request expires" },
 		{ key: "drive.tools.allow", label: "Bridge tools", path: ["drive", "tools", "allow"], kind: "json", description: "Tool names a consultant may ask pi to run (JSON array; pi still decides every run)" },
+		{ key: "drive.maxRequestsPerInvocation", label: "Bridge request limit", path: ["drive", "maxRequestsPerInvocation"], kind: "number", description: "Bridge requests one invocation may make before further ones are busy" },
 	];
 
 	private readonly store: ConsultSettingsStore;

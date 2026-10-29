@@ -21,11 +21,22 @@ export class ConsultSupervisor {
 	private readonly receipts = new Map<string, ConsultReceipt>();
 	private readonly finishing = new Map<string, Promise<ConsultReceipt>>();
 
-	constructor(runner: ConsultRunner, records: ConsultRecordStore, delivery: ConsultDelivery) {
+	constructor(
+		runner: ConsultRunner,
+		records: ConsultRecordStore,
+		delivery: ConsultDelivery,
+		/** Called once per invocation that stopped running, so its bridge
+		 *  capability can be revoked by the owner that minted it. */
+		settled?: (consultId: string) => void,
+	) {
 		this.runner = runner;
 		this.records = records;
 		this.delivery = delivery;
+		this.settled = settled;
 	}
+
+	private readonly settled?: (consultId: string) => void;
+	private readonly notified = new Set<string>();
 
 	/** Register, record the manifest, then start one invocation. A manifest
 	 *  that cannot be written never blocks the consult: without one, nothing
@@ -35,8 +46,12 @@ export class ConsultSupervisor {
 		this.invocations.set(spec.consultId, invocation);
 		await this.records.saveRun(invocation).catch(() => undefined);
 		invocation.start();
+		// Settlement is reported as soon as the run ends, before any
+		// persistence is awaited: a stalled record write must not keep a
+		// finished invocation's bridge capability alive.
 		void invocation
 			.done()
+			.finally(() => this.settledOnce(invocation.consultId))
 			.then((results) => this.finish(invocation, results))
 			.catch(() => undefined);
 		return invocation;
@@ -84,11 +99,14 @@ export class ConsultSupervisor {
 		};
 	}
 
-	/** Explicit termination: abort this process's invocation, then record it. */
+	/** Explicit termination: abort this process's invocation, then record it.
+	 *  The settlement callback fires before the receipt is awaited, so the
+	 *  invocation's bridge capability stops admitting work at once. */
 	async terminate(consultId: string): Promise<boolean> {
 		const invocation = this.invocations.get(consultId);
 		if (!invocation) return false;
 		invocation.terminate();
+		this.settledOnce(consultId);
 		await this.receipt(invocation).catch(() => undefined);
 		return true;
 	}
@@ -113,6 +131,14 @@ export class ConsultSupervisor {
 			this.receipts.delete(invocation.consultId);
 			this.finishing.delete(invocation.consultId);
 		}
+	}
+
+	/** Report settlement exactly once per invocation, whatever the record
+	 *  persistence did with the result. */
+	private settledOnce(consultId: string): void {
+		if (this.notified.has(consultId)) return;
+		this.notified.add(consultId);
+		this.settled?.(consultId);
 	}
 
 	private finish(

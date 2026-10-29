@@ -17,9 +17,15 @@ class RecordingDispatcher {
 	}
 }
 
-function makeBroker(deadlineMs = 5000): { broker: ConsultRequestBroker; dispatcher: RecordingDispatcher } {
+function makeBroker(
+	deadlineMs = 5000,
+	maxRequestsPerInvocation = 256,
+): { broker: ConsultRequestBroker; dispatcher: RecordingDispatcher } {
 	const dispatcher = new RecordingDispatcher();
-	return { broker: new ConsultRequestBroker(dispatcher as never, deadlineMs), dispatcher };
+	return {
+		broker: new ConsultRequestBroker(dispatcher as never, deadlineMs, maxRequestsPerInvocation),
+		dispatcher,
+	};
 }
 
 /** Write an MCP request into the server and read one reply. */
@@ -176,7 +182,7 @@ test("broker: a reused client request id with different content is refused", asy
 	const first = broker.submit("c-r:claude", "c-r", "claude", "same", "one question");
 	await Promise.resolve();
 	const requestId = dispatcher.posted[0].requestId;
-	broker.finishTool(requestId, { status: "answered", answer: "first" });
+	broker.reply(requestId, "answered", "first");
 	assertEq(
 		JSON.stringify(await first),
 		JSON.stringify({ status: "answered", answer: "first" }),
@@ -218,7 +224,13 @@ test("broker: deadline during execution aborts the claim and settles once", asyn
 		"the consultant is told of the deadline",
 	);
 	await aborted;
+	// The slot is held while the claimed run is still executing: an immediate
+	// busy answer, not a pending wait, is what that refusal looks like.
+	const held = await broker.submit("c-d:claude", "c-d", "claude", "r2", "after the deadline");
+	assertEq(held.status, "busy", "the execution slot is still occupied after the deadline");
 	assertEq(broker.finishTool(requestId, { status: "answered", answer: "late" }), false, "a late result settles nothing");
+	const after = broker.submit("c-d:claude", "c-d", "claude", "r2", "after the deadline");
+	assertEq((await after).status, "deadline_exceeded", "the next request is accepted once the run ends");
 });
 
 test("mcp server: use_tool is listed and served when the handler has it", async () => {
@@ -284,4 +296,65 @@ test("bridge protocol: the ready frame carries capabilities", () => {
 	const bare = BridgeProtocol.parse(BridgeProtocol.encode({ type: "ready", invocationId: "c-1:claude" }));
 	assert(bare?.type === "ready");
 	assertEq((bare as { capabilities?: string[] }).capabilities, undefined, "an old server advertises nothing");
+});
+
+test("broker: the per-invocation request limit refuses further requests", async () => {
+	const { broker } = makeBroker(5000, 2);
+	const first = broker.submit("c-l:claude", "c-l", "claude", "r1", "one");
+	await Promise.resolve();
+	broker.reply(broker.list()[0].requestId, "answered", "one");
+	assertEq((await first).status, "answered");
+	broker.submit("c-l:claude", "c-l", "claude", "r2", "two");
+	await Promise.resolve();
+	broker.reply(broker.list()[0].requestId, "answered", "two");
+	const third = await broker.submit("c-l:claude", "c-l", "claude", "r3", "three");
+	assertEq(third.status, "busy", "the third request is past the limit");
+	const other = await Promise.race([
+		broker.submit("c-o:claude", "c-o", "claude", "r1", "another invocation"),
+		new Promise((resolve) => setTimeout(() => resolve({ status: "settled" }), 50)),
+	]);
+	assertEq(other.status, "settled", "another invocation is not limited by this one");
+	broker.forget("c-l:claude");
+	broker.cancelAll();
+	const replay = broker.submit("c-l:claude", "c-l", "claude", "r1", "one");
+	await Promise.resolve();
+	assertEq(broker.list().length, 1, "a forgotten invocation admits its ids again");
+	void replay;
+	broker.cancelAll();
+});
+
+test("broker: a settled response frees the slot only when the execution ends", async () => {
+	const { broker, dispatcher } = makeBroker(50);
+	const waiting = broker.submit("c-s:claude", "c-s", "claude", "r1", {
+		kind: "tool",
+		name: "read",
+		arguments: { path: "x" },
+	});
+	await Promise.resolve();
+	const requestId = dispatcher.posted[0].requestId;
+	assert(broker.claimTool(requestId) !== undefined, "the request is claimed");
+	assertEq((await waiting).status, "deadline_exceeded");
+	const blocked = broker.submit("c-s:claude", "c-s", "claude", "r2", "next");
+	assertEq((await blocked).status, "busy", "the slot is held while the tool runs");
+	assertEq(broker.finishTool(requestId, { status: "answered", answer: "late" }), false);
+	const after = broker.submit("c-s:claude", "c-s", "claude", "r2", "next");
+	assertEq((await after).status, "deadline_exceeded", "the next request is admitted after release");
+	broker.cancelAll();
+});
+
+test("broker: forget settles a pending request and leaves no record", async () => {
+	const { broker } = makeBroker();
+	broker.submit("c-f:claude", "c-f", "claude", "r1", "pending question");
+	await Promise.resolve();
+	assertEq(broker.list().length, 1, "the request is pending");
+	broker.forget("c-f:claude");
+	assertEq(broker.list().length, 0, "the pending request is settled");
+	const keys = (broker as unknown as { history: Map<string, unknown> }).history;
+	assertEq([...keys.keys()].filter((key) => key.startsWith("c-f:")).length, 0,
+		"no replay record survives the forget");
+	const readmitted = broker.submit("c-f:claude", "c-f", "claude", "r1", "pending question");
+	await Promise.resolve();
+	assertEq(broker.list().length, 1, "the retired ids are admitted again");
+	void readmitted;
+	broker.cancelAll();
 });
