@@ -106,10 +106,22 @@ export class ConsultRecordStore {
 			return undefined;
 		}
 		if (!Array.isArray(parsed)) return undefined;
-		const wellFormed = parsed.every((message) =>
-			typeof message === "object" &&
-			message !== null &&
-			typeof (message as { role?: unknown }).role === "string");
+		const wellFormed = parsed.every((message) => {
+			if (typeof message !== "object" || message === null) return false;
+			const record = message as { role?: unknown; content?: unknown; toolCallId?: unknown; toolName?: unknown };
+			if (record.role === "user" || record.role === "assistant") {
+				return Array.isArray(record.content);
+			}
+			if (record.role === "toolResult") {
+				return (
+					typeof record.toolCallId === "string" &&
+					typeof record.toolName === "string" &&
+					Array.isArray(record.content)
+				);
+			}
+			if (record.role === "system") return true;
+			return false;
+		});
 		return wellFormed ? parsed : undefined;
 	}
 

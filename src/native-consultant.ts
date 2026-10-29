@@ -40,7 +40,7 @@ export interface NativeConfig {
 /** What one native conversation produced. */
 export interface NativeOutcome {
 	answer: string;
-	status: "ok" | "error" | "aborted";
+	status: "ok" | "error" | "aborted" | "timeout";
 	error?: string;
 	usage?: { inputTokens?: number; outputTokens?: number; costUsd?: number };
 	durationMs: number;
@@ -114,19 +114,28 @@ export class NativeConsultant {
 		let final: { provider: string; model: string } | undefined;
 		// The whole loop is bounded by the request timeout composed with the
 		// invocation signal; whichever fires first ends the conversation.
-		const deadline = AbortSignal.any([signal, AbortSignal.timeout(config.timeoutMs)]);
+		const timeout = AbortSignal.timeout(config.timeoutMs);
+		const deadline = AbortSignal.any([signal, timeout]);
+		const expired = (): boolean => timeout.aborted && !signal.aborted;
 		let status: NativeOutcome["status"] = "ok";
 		let error: string | undefined;
 		try {
 			for (let round = 0; round < config.maxRounds; round += 1) {
 				if (deadline.aborted) throw new Error("aborted");
-				const answer = await this.registry
-					.streamSimple(model, {
-						systemPrompt: this.systemPrompt(),
-						messages,
-						tools,
-					}, { signal: deadline })
-					.result();
+				// The bound races the stream itself: a registry that ignores
+				// the signal still cannot outlive its deadline.
+				const answer = await Promise.race([
+					this.registry
+						.streamSimple(model, {
+							systemPrompt: this.systemPrompt(),
+							messages,
+							tools,
+						}, { signal: deadline })
+						.result(),
+					new Promise<never>((_, reject) => {
+						deadline.addEventListener("abort", () => reject(new Error("aborted by the caller")), { once: true });
+					}),
+				]);
 				const identity = `${answer.provider}/${answer.model}`;
 				if (!serving.has(identity)) {
 					serving.set(identity, { provider: answer.provider, model: answer.model });
@@ -138,7 +147,7 @@ export class NativeConsultant {
 				);
 				messages.push(answer as Message);
 				if (answer.stopReason === "aborted") {
-					status = signal.aborted || deadline.aborted ? "aborted" : "error";
+					status = signal.aborted ? "aborted" : expired() ? "timeout" : "error";
 					error = "the fallback model stopped mid-answer";
 					break;
 				}
@@ -173,8 +182,14 @@ export class NativeConsultant {
 				status = "error";
 			}
 		} catch (failure) {
-			status = signal.aborted ? "aborted" : "error";
-			error = failure instanceof Error ? failure.message : String(failure);
+			// A cancellation is aborted; a deadline expiry on its own is a
+			// timeout, so the receipt names which bound ended the run.
+			status = signal.aborted ? "aborted" : expired() ? "timeout" : "error";
+			error = status === "aborted"
+				? "aborted by the caller"
+				: status === "timeout"
+					? `the fallback exceeded its ${config.timeoutMs} ms bound`
+					: failure instanceof Error ? failure.message : String(failure);
 		}
 		return this.finish({
 			answer: status === "aborted" ? "" : NativeConsultant.tail(messages),
@@ -183,6 +198,7 @@ export class NativeConsultant {
 			usage: sawUsage.any ? usage : undefined,
 			startedAt,
 			serving,
+			final,
 			messages,
 			paths,
 		});
@@ -238,7 +254,13 @@ export class NativeConsultant {
 		if (isQuestion && typeof args.prompt !== "string") {
 			return result("drive_pi needs a prompt string");
 		}
-		if (!isQuestion && (typeof args.name !== "string" || typeof args.arguments !== "object" || args.arguments === null)) {
+		if (
+			!isQuestion &&
+			(typeof args.name !== "string" ||
+				typeof args.arguments !== "object" ||
+				args.arguments === null ||
+				Array.isArray(args.arguments))
+		) {
 			return result("use_tool needs a tool name and an arguments object");
 		}
 		const clientRequestId = typeof args.client_request_id === "string" && args.client_request_id
@@ -253,6 +275,7 @@ export class NativeConsultant {
 				};
 		// An abort cancels the broker request instead of waiting out its
 		// deadline; the model sees the loop end either way.
+		if (signal.aborted) throw new Error("aborted by the caller");
 		const waiter = this.broker.submit(
 			invocationId,
 			consultId,
@@ -261,15 +284,17 @@ export class NativeConsultant {
 			payload,
 		);
 		const abort = new Promise<never>((_, reject) => {
-			if (signal.aborted) reject(new Error("aborted"));
-			else signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+			signal.addEventListener("abort", () => reject(new Error("aborted by the caller")), { once: true });
 		});
+		const stop = (): void => signal.removeEventListener("abort", () => undefined);
 		let outcome;
 		try {
 			outcome = await Promise.race([waiter, abort]);
-		} catch {
+		} catch (failure) {
 			this.broker.cancel(invocationId, clientRequestId);
-			throw new Error("aborted");
+			throw failure;
+		} finally {
+			stop();
 		}
 		const text = outcome.answer ?? `[${outcome.status}]`;
 		return result(text, outcome.status !== "answered" || outcome.isError === true);
@@ -341,8 +366,8 @@ export class NativeConsultant {
 			fallbackFor,
 			selectedProvider: selected.provider,
 			selectedModel: selected.id,
-			provider: outcome.provider || selected.provider,
-			model: outcome.model || selected.id,
+			provider: outcome.provider,
+			model: outcome.model,
 			servedBy: outcome.servedBy,
 			conversationPath: outcome.conversationPath,
 		};
