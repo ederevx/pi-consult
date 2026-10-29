@@ -653,10 +653,10 @@ export class AgentEffortPolicy {
 			name === "claude" || name === "codex" || name === "fallback");
 	}
 
-	/** Persisted consult→consultants maps, keeping only well-formed non-empty entries. */
-	private static consulted(value: unknown): Record<string, ConsultantName[]> {
+	/** Persisted consult→run maps, keeping only well-formed non-empty entries. */
+	private static consulted(value: unknown): Record<string, RunParticipant[]> {
 		if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
-		const out: Record<string, ConsultantName[]> = {};
+		const out: Record<string, RunParticipant[]> = {};
 		for (const [id, names] of Object.entries(value as Record<string, unknown>)) {
 			if (!Array.isArray(names)) continue;
 			const valid = AgentEffortPolicy.runNames(
