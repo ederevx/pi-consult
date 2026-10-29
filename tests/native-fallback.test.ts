@@ -25,7 +25,15 @@ class ScriptedStream {
 }
 
 function assistant(content: object[], usage = { input: 1, output: 2, cost: { total: 0.01 } }): object {
-	return { role: "assistant", content, usage, stopReason: "stop" };
+	return {
+		role: "assistant",
+		content,
+		usage,
+		stopReason: "stop",
+		provider: "one",
+		model: "fast",
+		api: "openai-completions",
+	};
 }
 
 function textPart(text: string): object {
@@ -44,8 +52,11 @@ function native(stream: ScriptedStream, artifacts: ArtifactStore): NativeConsult
 		registry: stream as unknown as NativeStream,
 		broker: broker(),
 		artifacts,
+		systemPrompt: () => "consultant preamble",
 	});
 }
+
+const CONFIG = { timeoutMs: 5000, maxRounds: 16, bridge: true };
 
 function failure(name: "claude", status: ConsultantResult["status"], error?: string): ConsultantResult {
 	return {
@@ -70,6 +81,7 @@ test("native consultant: a text-only round answers and persists the transcript",
 		"the brief",
 		paths,
 		new AbortController().signal,
+		CONFIG,
 	);
 	assertEq(outcome.status, "ok");
 	assertEq(outcome.answer, "the plan");
@@ -95,6 +107,7 @@ test("native consultant: tool rounds route through the broker and keep going", a
 		"the brief",
 		paths,
 		new AbortController().signal,
+		CONFIG,
 	);
 	assertEq(outcome.status, "ok");
 	assertEq(outcome.answer, "now I know");
@@ -113,18 +126,28 @@ test("native fallback service: takeover follows the decision table", async () =>
 	const consultant = native(stream, artifacts);
 	const make = (fallback: { enabled: boolean; model?: string }) =>
 		new NativeFallbackService({
-			settings: () => fallback,
+			settings: () => ({ maxRounds: 16, ...fallback }),
 			models: () => models,
 			context: () => context,
 			native: () => consultant,
 			classifier: new FailureClassifier(),
+			bridge: () => true,
 		});
 	const paths = await artifacts.prepare("s", "c-ccc111222333");
 	const signal = new AbortController().signal;
-	const base = { consultId: "c-ccc111222333", brief: "b", paths, requests: [], signal };
+	const base = {
+		consultId: "c-ccc111222333",
+		brief: "b",
+		paths,
+		requests: [],
+		signal,
+		environment: context,
+		timeoutMs: 5000,
+	};
 
 	const served = await make({ enabled: true }).takeover({
 		...base,
+		kind: "takeover",
 		results: [failure("claude", "auth", "invalid api key")],
 	});
 	assertEq(served?.status, "ok", "an auth failure is taken over");
@@ -133,23 +156,32 @@ test("native fallback service: takeover follows the decision table", async () =>
 	assertEq(served?.fallback?.selectedModel, "fast", "the selected model is recorded");
 
 	assertEq(
-		await make({ enabled: true }).takeover({ ...base, results: [failure("claude", "timeout", "slow")] }),
+		await make({ enabled: true }).takeover({
+			...base,
+			kind: "takeover",
+			results: [failure("claude", "timeout", "slow")],
+		}),
 		undefined,
 		"a timeout never falls back",
 	);
 	assertEq(
-		await make({ enabled: true }).takeover({ ...base, results: [{ ...failure("claude", "ok") }] }),
+		await make({ enabled: true }).takeover({ ...base, kind: "takeover", results: [{ ...failure("claude", "ok") }] }),
 		undefined,
 		"a successful CLI run never falls back",
 	);
 	assertEq(
-		await make({ enabled: false }).takeover({ ...base, results: [failure("claude", "auth", "invalid api key")] }),
+		await make({ enabled: false }).takeover({
+			...base,
+			kind: "takeover",
+			results: [failure("claude", "auth", "invalid api key")],
+		}),
 		undefined,
 		"a disabled fallback never runs",
 	);
 	assertEq(
 		await make({ enabled: true, model: "one/deep" }).takeover({
 			...base,
+			kind: "takeover",
 			results: [failure("claude", "auth", "invalid api key")],
 		}),
 		undefined,
@@ -158,6 +190,7 @@ test("native fallback service: takeover follows the decision table", async () =>
 	assertEq(
 		await make({ enabled: true }).takeover({
 			...base,
+			kind: "takeover",
 			results: [failure("claude", "error", "rate limit exceeded")],
 		}) !== undefined,
 		true,
@@ -170,11 +203,12 @@ test("native fallback service: both-target skips when either CLI succeeds", asyn
 	const models = new FallbackModels({ settings: () => ({ defaultProvider: "one", defaultModel: "fast" }) });
 	const context = { modelRegistry: { getAvailable: () => [{ provider: "one", id: "fast", name: "F" }] }, scopedModels: [] };
 	const service = new NativeFallbackService({
-		settings: () => ({ enabled: true }),
+		settings: () => ({ enabled: true, maxRounds: 16 }),
 		models: () => models,
 		context: () => context,
 		native: () => native(new ScriptedStream([]), artifacts),
 		classifier: new FailureClassifier(),
+		bridge: () => true,
 	});
 	const paths = await artifacts.prepare("s", "c-ddd111222333");
 	const result = await service.takeover({
@@ -182,11 +216,14 @@ test("native fallback service: both-target skips when either CLI succeeds", asyn
 		brief: "b",
 		paths,
 		requests: [],
+		kind: "takeover",
 		results: [
 			failure("claude", "auth", "invalid api key"),
 			{ ...failure("codex", "ok") },
 		],
 		signal: new AbortController().signal,
+		environment: context,
+		timeoutMs: 5000,
 	});
 	assertEq(result, undefined, "one successful perspective means no takeover");
 });
@@ -196,11 +233,12 @@ test("native fallback service: an aborted signal refuses the takeover", async ()
 	const models = new FallbackModels({ settings: () => ({ defaultProvider: "one", defaultModel: "fast" }) });
 	const context = { modelRegistry: { getAvailable: () => [{ provider: "one", id: "fast", name: "F" }] }, scopedModels: [] };
 	const service = new NativeFallbackService({
-		settings: () => ({ enabled: true }),
+		settings: () => ({ enabled: true, maxRounds: 16 }),
 		models: () => models,
 		context: () => context,
 		native: () => native(new ScriptedStream([]), artifacts),
 		classifier: new FailureClassifier(),
+		bridge: () => true,
 	});
 	const paths = await artifacts.prepare("s", "c-eee111222333");
 	const controller = new AbortController();
@@ -210,8 +248,11 @@ test("native fallback service: an aborted signal refuses the takeover", async ()
 		brief: "b",
 		paths,
 		requests: [],
+		kind: "takeover",
 		results: [failure("claude", "auth", "invalid api key")],
 		signal: controller.signal,
+		environment: context,
+		timeoutMs: 5000,
 	});
 	assert(result === undefined || result.status !== "ok", "an aborted invocation is not served");
 });

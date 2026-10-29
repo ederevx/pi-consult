@@ -40,6 +40,7 @@ import { ConsultStepRenderer } from "./consult-step-renderer.ts";
 import type { ConsultIndex } from "./consult-index.ts";
 import type { ConsultRecordStore } from "./consult-record-store.ts";
 import type { ConsultInvocation, InvocationRequestSpec, InvocationSpec } from "./consult-invocation.ts";
+import type { NativeStart } from "./native-fallback.ts";
 import type { ConsultSupervisor } from "./consult-supervisor.ts";
 import { ConsultResultView } from "./consult-result-view.ts";
 import type { BranchEntry, ReceiptLedger } from "./receipt-ledger.ts";
@@ -76,16 +77,18 @@ export interface ConsultToolDeps {
 	effort?: AgentEffortPolicy;
 	/** Serves the native fallback after a failed primary fan-out, or
 	 *  directly when a continuation resumes a native transcript. */
-	fallback?: (context: {
-		consultId: string;
-		brief: string;
-		paths: ConsultPaths;
-		requests: readonly ConsultRequest[];
-		results: readonly ConsultantResult[];
-		signal: AbortSignal;
-		conversation?: unknown[];
-		force?: boolean;
-	}) => Promise<ConsultantResult | undefined>;
+	fallback?: (
+		context: {
+			consultId: string;
+			brief: string;
+			paths: ConsultPaths;
+			requests: readonly ConsultRequest[];
+			results: readonly ConsultantResult[];
+			signal: AbortSignal;
+			environment: object;
+			timeoutMs: number;
+		} & NativeStart,
+	) => Promise<ConsultantResult | undefined>;
 }
 
 /** A resolved continuation request. */
@@ -259,25 +262,40 @@ export class ConsultTool {
 			return this.failure(ctx, `unknown consult id: ${params.continue}`);
 		}
 		if (continuation) {
-			// A target without a saved session would silently start fresh while
-			// the result still reports continuedFrom; refuse instead. A target
-			// the fallback served resumes its private transcript natively.
-			for (const name of targets) {
-				if (continuation.resumeFor.has(name)) continue;
-				if (continuation.fallback?.metadata.fallbackFor.includes(name)) continue;
+			// A fallback-served consult resumes its private transcript, or
+			// refuses when that transcript is gone; it never silently falls
+			// back to a fresh CLI session under a continuedFrom label.
+			const native = targets.every((name) =>
+				continuation.fallback?.metadata.fallbackFor.includes(name));
+			if (native && !continuation.fallback?.messages.length) {
 				return this.failure(
 					ctx,
-					`consult ${continuation.consultId} has no saved ${name} session to ` +
-						"continue; omit continue to consult fresh.",
+					`consult ${continuation.consultId} was served by the native fallback, ` +
+						"whose transcript is missing or unreadable; it cannot be continued.",
 				);
+			}
+			// A target without a saved session would silently start fresh while
+			// the result still reports continuedFrom; refuse instead.
+			if (!native) {
+				for (const name of targets) {
+					if (continuation.resumeFor.has(name)) continue;
+					return this.failure(
+						ctx,
+						`consult ${continuation.consultId} has no saved ${name} session to ` +
+							"continue; omit continue to consult fresh.",
+					);
+				}
 			}
 		}
 		// A native continuation serves every requested target itself; no CLI
 		// attempt intervenes, so the spec carries the resume straight through.
-		const nativeResume = continuation?.fallback &&
-			targets.every((name) => continuation.fallback!.metadata.fallbackFor.includes(name))
-			? { targets, messages: continuation.fallback.messages }
-			: undefined;
+		let nativeResume: { targets: readonly ConsultantName[]; metadata: FallbackMetadata; messages: unknown[] } | undefined;
+		if (continuation?.fallback) {
+			const saved = continuation.fallback;
+			if (targets.every((name) => saved.metadata.fallbackFor.includes(name))) {
+				nativeResume = { targets, metadata: saved.metadata, messages: saved.messages };
+			}
+		}
 
 		const consultId = this.deps.index.nextId();
 		const sessionId = this.sessionId(ctx);
@@ -388,7 +406,7 @@ export class ConsultTool {
 		continuation: Continuation | undefined,
 		paths: ConsultPaths,
 		ctx: ExtensionToolContext,
-		nativeResume: { targets: readonly ConsultantName[]; messages: unknown[] } | undefined,
+		nativeResume: { targets: readonly ConsultantName[]; metadata: FallbackMetadata; messages: unknown[] } | undefined,
 	): Promise<InvocationSpec> {
 		const providerSessions: Partial<Record<ConsultantName, string>> = {};
 		const requests: InvocationRequestSpec[] = [];
@@ -404,21 +422,15 @@ export class ConsultTool {
 				continuedFrom: continuation?.consultId,
 				requests,
 				providerSessions,
+				environment: ctx,
+				timeoutMs: this.deps.config.claude.timeoutMs,
 				fallback: (context) =>
 					this.deps.fallback?.({
 						...context,
-						results: nativeResume.targets.map((name) => ({
-							consultant: name,
-							status: "auth",
-							answer: "",
-							partial: false,
-							durationMs: 0,
-							exitCode: null,
-							warnings: [],
-						})),
-						conversation: nativeResume.messages,
-						force: true,
-					}),
+						kind: "resume",
+						metadata: nativeResume.metadata,
+						messages: nativeResume.messages,
+					} as never),
 			};
 		}
 		for (const name of targets) {
@@ -450,6 +462,8 @@ export class ConsultTool {
 			continuedFrom: continuation?.consultId,
 			requests,
 			providerSessions,
+			environment: ctx,
+			timeoutMs: requests[0]?.timeoutMs,
 			fallback: this.deps.fallback,
 		};
 	}
@@ -504,8 +518,7 @@ export class ConsultTool {
 					messages: JSON.parse(readFileSync(fallback.fallback.conversationPath!, "utf8")),
 				};
 			} catch {
-				// A missing transcript cannot be resumed; the CLI sessions and
-				// a fresh consult remain available.
+				continuation.fallback = { metadata: fallback.fallback, messages: [] };
 			}
 		}
 		return continuation;
