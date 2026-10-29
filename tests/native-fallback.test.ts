@@ -117,10 +117,12 @@ test("native consultant: tool rounds route through the broker and keep going", a
 
 test("native fallback service: takeover follows the decision table", async () => {
 	const artifacts = new ArtifactStore(join(scratchDir(), `svc-${Date.now()}`));
-	const models = new FallbackModels({ settings: () => ({ defaultProvider: "one", defaultModel: "fast" }) });
+	const defaults = { defaultProvider: "one", defaultModel: "fast" };
+	const models = new FallbackModels({ settings: () => defaults });
 	const context = {
 		modelRegistry: { getAvailable: () => [{ provider: "one", id: "fast", name: "Fast" }] },
 		scopedModels: [],
+		defaults,
 	};
 	const stream = new ScriptedStream([assistant([textPart("served")])]);
 	const consultant = native(stream, artifacts);
@@ -201,7 +203,11 @@ test("native fallback service: takeover follows the decision table", async () =>
 test("native fallback service: both-target skips when either CLI succeeds", async () => {
 	const artifacts = new ArtifactStore(join(scratchDir(), `svc2-${Date.now()}`));
 	const models = new FallbackModels({ settings: () => ({ defaultProvider: "one", defaultModel: "fast" }) });
-	const context = { modelRegistry: { getAvailable: () => [{ provider: "one", id: "fast", name: "F" }] }, scopedModels: [] };
+	const context = {
+		modelRegistry: { getAvailable: () => [{ provider: "one", id: "fast", name: "F" }] },
+		scopedModels: [],
+		defaults: { defaultProvider: "one", defaultModel: "fast" },
+	};
 	const service = new NativeFallbackService({
 		settings: () => ({ enabled: true, maxRounds: 16 }),
 		models: () => models,
@@ -231,7 +237,11 @@ test("native fallback service: both-target skips when either CLI succeeds", asyn
 test("native fallback service: an aborted signal refuses the takeover", async () => {
 	const artifacts = new ArtifactStore(join(scratchDir(), `svc3-${Date.now()}`));
 	const models = new FallbackModels({ settings: () => ({ defaultProvider: "one", defaultModel: "fast" }) });
-	const context = { modelRegistry: { getAvailable: () => [{ provider: "one", id: "fast", name: "F" }] }, scopedModels: [] };
+	const context = {
+		modelRegistry: { getAvailable: () => [{ provider: "one", id: "fast", name: "F" }] },
+		scopedModels: [],
+		defaults: { defaultProvider: "one", defaultModel: "fast" },
+	};
 	const service = new NativeFallbackService({
 		settings: () => ({ enabled: true, maxRounds: 16 }),
 		models: () => models,

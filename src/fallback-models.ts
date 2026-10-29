@@ -18,10 +18,11 @@ export interface DefaultModelSettings {
 
 /** A bound fallback environment: registry, copied scope, defaults. */
 export interface BoundEnvironment {
-	modelRegistry: { getAvailable(): CatalogueModel[] };
+	modelRegistry: { getAvailable(): CatalogueModel[] } | undefined;
 	scopedModels: readonly { model: CatalogueModel }[];
-	/** The default model settings snapshotted with the environment. */
-	defaults?: DefaultModelSettings;
+	/** The default model settings snapshotted with the environment; `{}` is
+	 *  an authoritative snapshot that resolves no default. */
+	defaults: DefaultModelSettings;
 }
 
 /** The registry's own catalogue entry, as this owner reads it. */
@@ -61,6 +62,7 @@ export class FallbackModels {
 	/** The environment one fallback resolves against: snapshotted at the
 	 *  invocation that owns it, never a live context. */
 	available(ctx: BoundEnvironment): FallbackChoice[] {
+		if (!ctx.modelRegistry) return [];
 		const catalogue = ctx.modelRegistry.getAvailable();
 		const scoped = ctx.scopedModels.map((entry) => entry.model);
 		const allowed = scoped.length > 0
@@ -91,9 +93,9 @@ export class FallbackModels {
 			const unqualified = available.filter((choice) => choice.value.endsWith(`/${configured}`));
 			return unqualified.length === 1 ? unqualified[0] : undefined;
 		}
-		const defaults = ctx.defaults && (ctx.defaults.defaultModel || ctx.defaults.defaultProvider)
-			? ctx.defaults
-			: this.settings();
+		// The snapshot is authoritative; the live getter serves only the
+		// settings picker, which reads at its own command time.
+		const defaults = ctx.defaults;
 		if (!defaults.defaultModel) return undefined;
 		if (defaults.defaultProvider) {
 			// A named provider is part of the default's identity: an exact
