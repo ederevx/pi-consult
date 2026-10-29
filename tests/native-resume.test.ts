@@ -35,6 +35,7 @@ function firstMetadata() {
 const context = {
 	modelRegistry: { getAvailable: () => [{ provider: "one", id: "fast", name: "Fast" }] },
 	scopedModels: [],
+	defaults: { defaultProvider: "one", defaultModel: "fast" },
 };
 
 function service(artifacts: ArtifactStore, fallback: { enabled: boolean; model?: string }) {
@@ -158,6 +159,9 @@ test("record store: malformed fallback transcripts never resume", async () => {
 		["null-content-block", [{ role: "assistant", content: [null] }]],
 		["non-text-content", [{ role: "toolResult", toolCallId: "x", toolName: "drive_pi", content: [{ type: "text", text: 42 }] }]],
 		["unsupported-system", [{ role: "system" }]],
+		["bare-thinking", [{ role: "assistant", content: [{ type: "thinking" }] }]],
+		["array-tool-arguments", [{ role: "assistant", content: [{ type: "toolCall", id: "1", name: "drive_pi", arguments: [] }] }]],
+		["thinking-in-user", [{ role: "user", content: [{ type: "thinking", thinking: "x" }] }]],
 		["nonarray", { role: "user", content: [] }],
 	];
 	for (const [name, payload] of cases) {
@@ -304,4 +308,50 @@ test("fallback models: a bound environment's defaults drive the resolution", asy
 	};
 	assertEq(models.resolve(environment as never)?.value, "one/fast",
 		"the snapshot's qualified default wins, even ambiguous unqualified");
+});
+
+test("native consultant: cancellation during submission ends the wait at once", async () => {
+	const { NativeConsultant } = await import("../src/native-consultant.ts");
+	const { ArtifactStore } = await import("../src/artifact-store.ts");
+	const artifacts = new ArtifactStore(join(scratchDir(), `sub-${Date.now()}`));
+	const paths = await artifacts.prepare("s", "c-aka111222333");
+	const controller = new AbortController();
+	let cancelled = "";
+	const consultant = new NativeConsultant({
+		registry: {
+			streamSimple: () => ({
+				result: async () => ({
+					role: "assistant",
+					content: [{ type: "toolCall", id: "c1", name: "drive_pi", arguments: { prompt: "p" } }],
+					usage: { input: 1, output: 1, cost: { total: 0 } },
+					stopReason: "stop",
+					provider: "one",
+					model: "fast",
+				}),
+			}),
+		} as never,
+		broker: {
+			submit: async () => {
+				// The caller cancels while the submission itself runs; the
+				// abort event fires before the race listener is registered.
+				controller.abort();
+				return new Promise(() => undefined);
+			},
+			cancel: async () => {
+				cancelled = "yes";
+			},
+		} as never,
+		artifacts,
+		systemPrompt: () => "p",
+	});
+	const outcome = await consultant.consult(
+		{ provider: "one", id: "fast", name: "Fast" },
+		"c-aka111222333",
+		"b",
+		paths,
+		controller.signal,
+		{ timeoutMs: 200, maxRounds: 2, bridge: true },
+	);
+	assertEq(outcome.status, "aborted", "the wait ends at the abort, not the bound");
+	assertEq(cancelled, "yes", "the broker request is cancelled");
 });

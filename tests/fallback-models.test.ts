@@ -9,10 +9,12 @@ import { join } from "node:path";
 function context(
 	catalogue: Array<{ provider: string; id: string; name: string }>,
 	scope: Array<{ provider: string; id: string; name: string }> = [],
+	defaults: { defaultProvider?: string; defaultModel?: string } = {},
 ): object {
 	return {
 		modelRegistry: { getAvailable: () => catalogue },
 		scopedModels: scope.map((model) => ({ model })),
+		defaults,
 	};
 }
 
@@ -24,6 +26,14 @@ const CATALOGUE = [
 
 function models(defaults: { defaultProvider?: string; defaultModel?: string }): FallbackModels {
 	return new FallbackModels({ settings: () => defaults });
+}
+
+/** A context whose snapshot carries the same defaults the test names. */
+function defaulted(
+	defaults: { defaultProvider?: string; defaultModel?: string },
+	catalogue = CATALOGUE,
+): object {
+	return { modelRegistry: { getAvailable: () => catalogue }, scopedModels: [], defaults };
 }
 
 test("fallback models: an empty scope lists the whole catalogue", () => {
@@ -51,14 +61,14 @@ test("fallback models: a configured model resolves exactly or uniquely", () => {
 });
 
 test("fallback models: the pi default resolves only when eligible", () => {
-	const ctx = context(CATALOGUE) as never;
-	assertEq(models({ defaultProvider: "one", defaultModel: "fast" }).resolve(ctx)?.value, "one/fast",
-		"a qualified default resolves");
-	assertEq(models({ defaultModel: "deep" }).resolve(ctx)?.value, "one/deep",
-		"a unique unqualified default resolves");
-	assertEq(models({ defaultModel: "fast" }).resolve(ctx), undefined,
+	assertEq(models({ defaultProvider: "one", defaultModel: "fast" })
+		.resolve(defaulted({ defaultProvider: "one", defaultModel: "fast" }) as never)?.value,
+		"one/fast", "a qualified default resolves");
+	assertEq(models({ defaultModel: "deep" }).resolve(defaulted({ defaultModel: "deep" }) as never)?.value,
+		"one/deep", "a unique unqualified default resolves");
+	assertEq(models({ defaultModel: "fast" }).resolve(defaulted({ defaultModel: "fast" }) as never), undefined,
 		"an ambiguous default resolves to nothing, never the first model");
-	assertEq(models({}).resolve(ctx), undefined, "no default setting resolves to nothing");
+	assertEq(models({}).resolve(defaulted({}) as never), undefined, "no default setting resolves to nothing");
 });
 
 test("fallback models: an out-of-scope default is unavailable", () => {
