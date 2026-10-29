@@ -38,6 +38,15 @@ export interface SettingsContext {
 	ui?: Partial<Pick<ExtensionUIContext, "custom" | "notify">>;
 }
 
+/** How a presentation attempt ended. */
+export type Presentation =
+	/** The dock was shown and has closed. */
+	| { shown: true }
+	/** No TUI can host a dock; the caller lists the settings instead. */
+	| { shown: false }
+	/** Presentation failed. */
+	| { shown: false; failure: string };
+
 /** The SettingsList submenu completion callback. */
 type SubmenuDone = (
 	selectedValue?: string,
@@ -110,29 +119,32 @@ export class ConsultSettingsPresenter {
 	}
 
 	/**
-	 * Mount the dock in pi's settings layout. Returns false when no TUI is
-	 * available or the mount failed, so the caller can list the settings
-	 * instead.
+	 * Mount the dock in pi's settings layout. A missing TUI reports no dock; a
+	 * failed presentation reports why, so the caller can say so instead of
+	 * leaving the command looking inert.
 	 */
-	async present(ctx: SettingsContext): Promise<boolean> {
+	async present(ctx: SettingsContext): Promise<Presentation> {
 		const custom = ctx.ui?.custom;
-		if (ctx.mode !== "tui" || !ctx.hasUI || typeof custom !== "function") return false;
-		const items = this.items();
+		if (ctx.mode !== "tui" || !ctx.hasUI || typeof custom !== "function") {
+			return { shown: false };
+		}
 		this.ctx = ctx;
 		try {
+			const items = this.items();
 			await custom.call(ctx.ui, (_tui, theme, _keybindings, done) => {
 				const view = new ConsultSettingsView(
 					items,
 					theme as ViewTheme,
 					(id, value) => this.changed(id, value),
 					() => done(undefined),
+					(message) => this.notify(message, "error"),
 				);
 				this.view = view;
 				return view;
 			});
-			return true;
-		} catch {
-			return false;
+			return { shown: true };
+		} catch (failure) {
+			return { shown: false, failure: ConsultSettingsPresenter.message(failure) };
 		} finally {
 			this.view = undefined;
 			this.ctx = undefined;
