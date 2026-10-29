@@ -16,7 +16,7 @@
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import type { ConsultConfig } from "./consult-config.ts";
-import type { ConsultDetails, ConsultRun, ConsultantAvailability, ConsultantName } from "./contracts.ts";
+import type { ConsultDetails, ConsultRun, ConsultantAvailability, ConsultantName, RunParticipant } from "./contracts.ts";
 import { FailureClassifier } from "./failure-classifier.ts";
 
 type Level = ReturnType<ExtensionAPI["getThinkingLevel"]>;
@@ -158,7 +158,7 @@ export class AgentEffortPolicy {
 
 	/** The model received this consult's final receipt (delivered or returned)
 	 *  or it was terminated. */
-	settle(consultId: string, details?: ConsultDetails, answers?: ReadonlyMap<ConsultantName, string>): void {
+	settle(consultId: string, details?: ConsultDetails, answers?: ReadonlyMap<RunParticipant, string>): void {
 		if (!this.owed.delete(consultId)) return;
 		if (details?.phase === "complete") {
 			this.consulted.set(
@@ -173,7 +173,11 @@ export class AgentEffortPolicy {
 			) {
 				this.approved.add(consultId);
 			}
-			for (const run of details.runs) this.account(run);
+			// A native fallback run is not a consultant CLI: it must never
+			// count toward a CLI's expiry, while its approval still counts.
+			for (const run of details.runs) {
+				if (run.consultant !== "fallback") this.account(run);
+			}
 		}
 		this.persist();
 	}

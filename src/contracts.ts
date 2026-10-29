@@ -10,6 +10,23 @@ export type ConsultantName = "claude" | "codex";
 /** A consult request's audience: one consultant, or both concurrently. */
 export type ConsultTarget = ConsultantName | "both";
 
+/** Who can serve one run: a consultant CLI, or the native fallback. */
+export type RunParticipant = ConsultantName | "fallback";
+
+/** Provenance of a native fallback run: what it replaced and who served it. */
+export interface FallbackMetadata {
+	/** The consultant CLIs whose eligible failures triggered the takeover. */
+	fallbackFor: ConsultantName[];
+	/** The configured model to resume, provider and id as selected. */
+	selectedProvider: string;
+	selectedModel: string;
+	/** The provider and model that actually answered; may differ by routing. */
+	provider: string;
+	model: string;
+	/** The persisted private transcript a continuation resumes. */
+	conversationPath?: string;
+}
+
 /** The custom-message type a delivered background result uses. */
 export const RESULT_MESSAGE = "pi-consult-result";
 
@@ -50,7 +67,9 @@ export interface ConsultantUsage {
 
 /** One consultant's outcome inside a `consult` call. */
 export interface ConsultRun {
-	consultant: ConsultantName;
+	consultant: RunParticipant;
+	/** Present exactly when the run was served by the native fallback. */
+	fallback?: FallbackMetadata;
 	status: RunStatus;
 	sessionId?: string;
 	answerPath?: string;
@@ -69,7 +88,7 @@ export interface ConsultRun {
  * branch, so the gate and continuation lookup can be rebuilt from it.
  */
 export interface ConsultDetails {
-	schema: 2;
+	schema: 2 | 3;
 	consultId: string;
 	/** `complete` carries final runs; `running` is a detachable receipt. */
 	phase: ConsultPhase;
@@ -169,7 +188,9 @@ export interface ConsultRequest {
 
 /** One consultant's parsed answer, before it is stored or formatted. */
 export interface ConsultantResult {
-	consultant: ConsultantName;
+	consultant: RunParticipant;
+	/** Present exactly when the result was served by the native fallback. */
+	fallback?: FallbackMetadata;
 	status: RunStatus;
 	sessionId?: string;
 	answer: string;

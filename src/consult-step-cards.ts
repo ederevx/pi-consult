@@ -9,7 +9,7 @@
  * transcript and collapses with pi's own expand toggle.
  */
 
-import type { ConsultTarget, ConsultantName } from "./contracts.ts";
+import type { ConsultTarget, ConsultantName, RunParticipant } from "./contracts.ts";
 import type { StepObserver } from "./consult-invocation.ts";
 
 /** One run's settings, as the start card shows them. */
@@ -81,7 +81,7 @@ export class ConsultStepCards implements StepObserver {
 	private readonly consultId: string;
 	private readonly append: AppendFn;
 	private readonly coalesceMs: number;
-	private readonly states = new Map<ConsultantName, ConsultantState>();
+	private readonly states = new Map<RunParticipant, ConsultantState>();
 	private closed = false;
 
 	constructor(

@@ -15,10 +15,10 @@ import type {
 	ConsultDetails,
 	ConsultReceipt,
 	ConsultRun,
-	ConsultantName,
 	ConsultantResult,
 	InvocationState,
 	RunManifest,
+	RunParticipant,
 } from "./contracts.ts";
 
 export class ConsultRecordStore {
@@ -51,7 +51,7 @@ export class ConsultRecordStore {
 		results: readonly ConsultantResult[],
 	): Promise<ConsultReceipt> {
 		const runs: ConsultRun[] = [];
-		const answers = new Map<ConsultantName, string>();
+		const answers = new Map<RunParticipant, string>();
 		for (const result of results) {
 			const answerPath = invocation.paths.answer(result.consultant);
 			const warnings = [...result.warnings];
@@ -72,6 +72,7 @@ export class ConsultRecordStore {
 			answers.set(result.consultant, result.answer);
 			runs.push({
 				consultant: result.consultant,
+				fallback: result.fallback,
 				status: result.status,
 				sessionId: result.sessionId,
 				answerPath: stored ? answerPath : undefined,
@@ -142,10 +143,10 @@ export class ConsultRecordStore {
 	receiptFor(
 		invocation: ConsultInvocation,
 		runs: ConsultRun[],
-		answers: Map<ConsultantName, string>,
+		answers: Map<RunParticipant, string>,
 	): ConsultReceipt {
 		const details: ConsultDetails = {
-			schema: 2,
+			schema: 3,
 			consultId: invocation.consultId,
 			phase: "complete",
 			ok: runs.some((run) => run.status === "ok"),
@@ -164,8 +165,10 @@ export class ConsultRecordStore {
 		} catch {
 			return undefined;
 		}
-		if (!details || details.schema !== 2 || !Array.isArray(details.runs)) return undefined;
-		const answers = new Map<ConsultantName, string>();
+		if (!details || (details.schema !== 2 && details.schema !== 3) || !Array.isArray(details.runs)) {
+			return undefined;
+		}
+		const answers = new Map<RunParticipant, string>();
 		for (const run of details.runs) {
 			if (!run.answerPath) continue;
 			try {
