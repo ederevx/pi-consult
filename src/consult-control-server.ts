@@ -17,7 +17,9 @@ import { BridgeProtocol, type BridgeFrame } from "./bridge-protocol.ts";
 import type { ConsultRequestBroker, RequestPayload } from "./consult-request-broker.ts";
 
 export interface ControlServerDeps {
-	broker: ConsultRequestBroker;
+	/** The broker frames are turned into; bound late when composition is
+	 *  circular (the supervisor's revoke hook needs this server). */
+	broker?: ConsultRequestBroker;
 	/** The artifact root; the socket lives in its private `run/` directory. */
 	root: string;
 }
@@ -26,16 +28,30 @@ export class ConsultControlServer {
 	private static readonly SOCKET_NAME = "bridge.sock";
 	/** What this server serves; an older bridge reads none of it. */
 	private static readonly CAPABILITIES = ["use_tool"];
-	private readonly broker: ConsultRequestBroker;
 	private readonly root: string;
 	private readonly tokens = new Map<string, string>();
 	private readonly sockets = new Set<Socket>();
+	/** Each admitted connection's invocation, so a revoked one is closed. */
+	private readonly admitted = new Map<Socket, string>();
 	private server: Server | undefined;
 	private endpoint = "";
 
+	private brokerInstance?: ConsultRequestBroker;
+
 	constructor(deps: ControlServerDeps) {
-		this.broker = deps.broker;
+		this.brokerInstance = deps.broker;
 		this.root = deps.root;
+	}
+
+	/** Attach the broker once it exists. */
+	bind(broker: ConsultRequestBroker): void {
+		this.brokerInstance = broker;
+	}
+
+	private get broker(): ConsultRequestBroker {
+		const broker = this.brokerInstance;
+		if (!broker) throw new Error("the control server has no broker bound");
+		return broker;
 	}
 
 	/** Start listening on first use and return the endpoint. */
@@ -67,11 +83,27 @@ export class ConsultControlServer {
 		return token;
 	}
 
+	/** End one invocation's capability: its tokens stop admitting, its
+	 *  admitted sockets close, and its broker records are retired. */
+	revoke(invocationId: string): void {
+		for (const [token, owner] of [...this.tokens]) {
+			if (owner === invocationId) this.tokens.delete(token);
+		}
+		for (const [socket, owner] of [...this.admitted]) {
+			if (owner === invocationId) {
+				this.admitted.delete(socket);
+				socket.destroy();
+			}
+		}
+		this.broker.forget(invocationId);
+	}
+
 	/** Stop listening, drop capabilities, and unlink the endpoint. */
 	async close(): Promise<void> {
 		this.broker.cancelAll();
 		for (const socket of [...this.sockets]) socket.destroy();
 		this.sockets.clear();
+		this.admitted.clear();
 		this.tokens.clear();
 		const server = this.server;
 		this.server = undefined;
@@ -98,6 +130,7 @@ export class ConsultControlServer {
 		socket.on("error", () => undefined);
 		socket.on("close", () => {
 			this.sockets.delete(socket);
+			this.admitted.delete(socket);
 		});
 	}
 
@@ -110,6 +143,7 @@ export class ConsultControlServer {
 				socket.destroy();
 				return admitted;
 			}
+			this.admitted.set(socket, known);
 			this.send(socket, { type: "ready", invocationId: known, capabilities: ConsultControlServer.CAPABILITIES });
 			return known;
 		}
@@ -159,6 +193,7 @@ export class ConsultControlServer {
 					status: outcome.status,
 					answer: outcome.answer,
 					isError: outcome.isError,
+					truncated: outcome.truncated,
 				});
 			})
 			.catch(() => undefined);

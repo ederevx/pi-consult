@@ -163,6 +163,7 @@ export function buildConsultFixture(
 	const broker = new ConsultRequestBroker(
 		new ConsultDriveDispatcher({ pi: pi as never, supervisor }),
 		config.drive.deadlineMs,
+		config.drive.maxRequestsPerInvocation,
 	);
 	const control = new ConsultControlServer({ broker, root: config.artifactDir });
 	const screen = new SecretScreen();
