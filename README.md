@@ -258,6 +258,19 @@ cancelled by a timeout. The endpoint is a Unix socket under the artifact
 directory, admitted only by a per-run random token written 0600 next to the
 brief, and both directions are bounded in size.
 
+### Native fallback
+
+When `fallback.enabled` is on (the default) and every requested consultant
+CLI of a consultation fails on availability, credentials, quota, throttling,
+or a provider error — never a timeout or an abort — one private conversation
+with the selected pi model serves it instead. The fallback model is chosen in
+`/consult-settings` from only the models the session can actually use
+(`fallback.model`; unset follows pi's own default), the conversation's only
+tools are the bridge pair, its transcript is persisted for `continue` to
+resume, and every answer opens with a disclosure naming the serving model,
+its cost, and the consultants it replaced. One decision per invocation; a
+native failure never cascades further.
+
 ### Consultant-requested tool usage
 
 The bridge also carries `use_tool`: the consultant names one of pi's own tools
