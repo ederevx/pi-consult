@@ -8,7 +8,7 @@
  * results. It runs once per invocation and never cascades past it.
  */
 
-import type { ConsultRequest, ConsultantResult, RunParticipant } from "./contracts.ts";
+import type { ConsultRequest, ConsultantResult, FallbackMetadata, RunParticipant } from "./contracts.ts";
 import type { ConsultPaths } from "./artifact-store.ts";
 import type { FallbackModels } from "./fallback-models.ts";
 import type { FallbackSettings } from "./consult-config.ts";
@@ -39,7 +39,8 @@ export type NativeStart =
 export interface FallbackServiceDeps {
 	settings: () => FallbackSettings;
 	models: () => FallbackModels | undefined;
-	native: () => NativeConsultant | undefined;
+	/** Builds the consultant bound to one invocation's own environment. */
+	native: (environment: object) => NativeConsultant | undefined;
 	classifier: FailureClassifier;
 	/** Whether the bridge tools may be offered to the native model. */
 	bridge: () => boolean;
@@ -69,7 +70,7 @@ export class NativeFallbackService {
 						.map((result) => result.consultant as Exclude<RunParticipant, "fallback">);
 		if (fallbackFor.length === 0) return undefined;
 		const models = this.deps.models();
-		const native = this.deps.native();
+		const native = this.deps.native(context.environment);
 		if (!models || !native) return undefined;
 		// A resume pins the saved selection; a takeover resolves the live one.
 		const choice = context.kind === "resume"

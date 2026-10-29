@@ -124,7 +124,7 @@ test("native fallback: force does not bypass the enablement or the model", async
 			timeoutMs: 5000,
 		}),
 		undefined,
-		"a disabled fallback refuses even a continuation",
+		"a disabled fallback refuses even a continuation; the tool layer reports the refusal",
 	);
 	assertEq(
 		await service(artifacts, { enabled: true, model: "one/deep" }).takeover({
