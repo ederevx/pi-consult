@@ -10,12 +10,18 @@
  * model id or provider name is hardcoded here.
  */
 
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-
 /** The pi settings the default resolution reads. */
 export interface DefaultModelSettings {
 	defaultProvider?: string;
 	defaultModel?: string;
+}
+
+/** A bound fallback environment: registry, copied scope, defaults. */
+export interface BoundEnvironment {
+	modelRegistry: { getAvailable(): CatalogueModel[] };
+	scopedModels: readonly { model: CatalogueModel }[];
+	/** The default model settings snapshotted with the environment. */
+	defaults?: DefaultModelSettings;
 }
 
 /** The registry's own catalogue entry, as this owner reads it. */
@@ -36,7 +42,7 @@ export interface FallbackChoice {
 }
 
 export interface FallbackModelsDeps {
-	/** Reads pi's live default model settings. */
+	/** Reads the default model settings; a snapshot once one is bound. */
 	settings: () => DefaultModelSettings;
 }
 
@@ -52,10 +58,9 @@ export class FallbackModels {
 	 * with the registry's available catalogue, or the whole catalogue when
 	 * the session scopes nothing.
 	 */
-	available(ctx: {
-		modelRegistry: { getAvailable(): CatalogueModel[] };
-		scopedModels: readonly { model: CatalogueModel }[];
-	}): FallbackChoice[] {
+	/** The environment one fallback resolves against: snapshotted at the
+	 *  invocation that owns it, never a live context. */
+	available(ctx: BoundEnvironment): FallbackChoice[] {
 		const catalogue = ctx.modelRegistry.getAvailable();
 		const scoped = ctx.scopedModels.map((entry) => entry.model);
 		const allowed = scoped.length > 0
@@ -76,7 +81,7 @@ export class FallbackModels {
 	 * missing, ambiguous, or out of scope is unavailable, never a guess.
 	 */
 	resolve(
-		ctx: ExtensionContext,
+		ctx: BoundEnvironment,
 		configured?: string,
 	): FallbackChoice | undefined {
 		const available = this.available(ctx);
@@ -86,7 +91,9 @@ export class FallbackModels {
 			const unqualified = available.filter((choice) => choice.value.endsWith(`/${configured}`));
 			return unqualified.length === 1 ? unqualified[0] : undefined;
 		}
-		const defaults = this.settings();
+		const defaults = ctx.defaults && (ctx.defaults.defaultModel || ctx.defaults.defaultProvider)
+			? ctx.defaults
+			: this.settings();
 		if (!defaults.defaultModel) return undefined;
 		if (defaults.defaultProvider) {
 			// A named provider is part of the default's identity: an exact

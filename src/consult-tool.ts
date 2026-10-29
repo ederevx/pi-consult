@@ -435,9 +435,16 @@ export class ConsultTool {
 					})) ?? {
 						// The gates refused the resume: the consultation still
 						// runs, and the failed run says why instead of an
-						// empty receipt that looks like a fresh consult.
+						// empty receipt. The refusal names no responder: the
+						// saved provenance belongs to the earlier invocation.
 						consultant: "fallback" as const,
-						fallback: nativeResume.metadata,
+						fallback: {
+							...nativeResume.metadata,
+							provider: "",
+							model: "",
+							servedBy: [],
+							conversationPath: undefined,
+						},
 						status: "unavailable" as const,
 						answer: "",
 						partial: false,
@@ -602,11 +609,15 @@ export class ConsultTool {
 	 *  the host may have invalidated by the time the fallback runs. */
 	private static environment(ctx: ExtensionToolContext): object {
 		// A context without a scope (embedders, tests) snapshots an empty
-		// one: the registry's whole catalogue stays eligible.
+		// one: the registry's whole catalogue stays eligible. The defaults
+		// are snapshotted too, so a detached takeover never reads through a
+		// context or API the host may have invalidated since.
 		const scoped = (ctx as { scopedModels?: unknown }).scopedModels;
+		const settings = (ctx as unknown as { getSettings?: () => { defaultProvider?: string; defaultModel?: string } }).getSettings?.();
 		return {
 			modelRegistry: (ctx as { modelRegistry?: unknown }).modelRegistry,
 			scopedModels: Array.isArray(scoped) ? [...scoped] : [],
+			defaults: settings ? { defaultProvider: settings.defaultProvider, defaultModel: settings.defaultModel } : {},
 		};
 	}
 
