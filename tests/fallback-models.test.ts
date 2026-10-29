@@ -132,3 +132,19 @@ test("consult settings: a model row without the live catalogue refuses everythin
 		"without a session there is no available model to select",
 	);
 });
+
+test("fallback models: a bound context without a defaults field resolves nothing", () => {
+	// The command context carries registry and scope but never a defaults
+	// field; the shared binder adds one before any resolution happens, and
+	// a context that reaches resolve() unbound resolves no default rather
+	// than throwing.
+	const unbound = {
+		modelRegistry: { getAvailable: () => [{ provider: "one", id: "fast", name: "Fast" }] },
+		scopedModels: [],
+	} as never;
+	const picker = models({});
+	assertEq(picker.resolve(unbound), undefined,
+		"an unbound context resolves no default instead of throwing");
+	const bound = { ...(unbound as object), defaults: { defaultProvider: "one", defaultModel: "fast" } } as never;
+	assertEq(picker.resolve(bound)?.value, "one/fast", "the bound context resolves its default");
+});

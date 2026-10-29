@@ -93,9 +93,9 @@ export class FallbackModels {
 			const unqualified = available.filter((choice) => choice.value.endsWith(`/${configured}`));
 			return unqualified.length === 1 ? unqualified[0] : undefined;
 		}
-		// The snapshot is authoritative; the live getter serves only the
-		// settings picker, which reads at its own command time.
-		const defaults = ctx.defaults;
+		// The snapshot is authoritative; a context whose binder never ran
+		// resolves no default rather than throwing on the missing field.
+		const defaults = ctx.defaults ?? {};
 		if (!defaults.defaultModel) return undefined;
 		if (defaults.defaultProvider) {
 			// A named provider is part of the default's identity: an exact
