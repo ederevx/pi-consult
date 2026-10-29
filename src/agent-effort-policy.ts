@@ -34,7 +34,7 @@ interface EffortEntry {
 	auditors: string[];
 	independent: string[];
 	auditFailed: boolean;
-	consulted: Record<string, ConsultantName[]>;
+	consulted: Record<string, RunParticipant[]>;
 	nudged?: string;
 }
 
@@ -86,7 +86,7 @@ export class AgentEffortPolicy {
 	private auditors = new Set<string>();
 	private independent = new Set<string>();
 	private auditFailed = false;
-	private consulted = new Map<string, ConsultantName[]>();
+	private consulted = new Map<string, RunParticipant[]>();
 	private nudged: string | undefined;
 	private readonly spawns = new Set<string>();
 	private unsupported = false;
@@ -513,11 +513,16 @@ export class AgentEffortPolicy {
 		return serving.length > 0 ? `${serving.join(", ")} has not expired in this cycle` : undefined;
 	}
 
-	/** The consult's every consultant expired: no verdict can come. */
-	private outOfAgent(consultId: string): ConsultantName[] | undefined {
+	/** The consult's every answerable participant expired: no verdict can
+	 *  come. The native fallback never expires on its own, so a consult it
+	 *  served stays answerable even after every CLI has. */
+	private outOfAgent(consultId: string): RunParticipant[] | undefined {
 		const names = this.consulted.get(consultId) ?? [];
 		if (names.length === 0) return undefined;
-		return names.every((name) => this.expired.has(name) || this.unavailable.has(name)) ? names : undefined;
+		if (names.includes("fallback")) return undefined;
+		return names.every((name) => this.expired.has(name) || this.unavailable.has(name))
+			? names
+			: undefined;
 	}
 
 	/** Tell the agent once per distinct refusal what still closes the cycle. */
@@ -614,8 +619,8 @@ export class AgentEffortPolicy {
 			const raw = (entry.data ?? {}) as Record<string, unknown>;
 			const strings = (value: unknown): string[] =>
 				Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
-			const names = (value: unknown): ConsultantName[] =>
-				AgentEffortPolicy.consultantNames(strings(value));
+			const names = (value: unknown): RunParticipant[] =>
+				AgentEffortPolicy.runNames(strings(value));
 			const failures: Partial<Record<ConsultantName, number>> = {};
 			const rawFailures = (typeof raw.failures === "object" && raw.failures !== null ? raw.failures : {}) as Record<string, unknown>;
 			for (const name of AgentEffortPolicy.NAMES) {
@@ -641,9 +646,11 @@ export class AgentEffortPolicy {
 		return undefined;
 	}
 
-	/** The known consultant names among already-stringified values. */
-	private static consultantNames(value: readonly string[]): ConsultantName[] {
-		return value.filter((name): name is ConsultantName => name === "claude" || name === "codex");
+	/** The persisted run names, the native participant included, so a
+	 *  fallback-served consult stays answerable across a reload. */
+	private static runNames(value: readonly string[]): RunParticipant[] {
+		return value.filter((name): name is RunParticipant =>
+			name === "claude" || name === "codex" || name === "fallback");
 	}
 
 	/** Persisted consult→consultants maps, keeping only well-formed non-empty entries. */
@@ -652,7 +659,7 @@ export class AgentEffortPolicy {
 		const out: Record<string, ConsultantName[]> = {};
 		for (const [id, names] of Object.entries(value as Record<string, unknown>)) {
 			if (!Array.isArray(names)) continue;
-			const valid = AgentEffortPolicy.consultantNames(
+			const valid = AgentEffortPolicy.runNames(
 				names.filter((name): name is string => typeof name === "string"),
 			);
 			if (valid.length > 0) out[id] = valid;

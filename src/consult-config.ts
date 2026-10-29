@@ -53,6 +53,8 @@ export interface FallbackSettings {
 	enabled: boolean;
 	/** `provider/model-id`; absent follows pi's own default model. */
 	model?: string;
+	/** The native conversation's tool-round bound. */
+	maxRounds: number;
 }
 
 /** Whether, and how long, a consultant may block on the pi agent. */
@@ -88,6 +90,7 @@ export class ConsultConfig {
 	];
 	private static readonly DEFAULT_DRIVE_TOOLS_ALLOW = ["read", "grep", "find", "ls", "bash"];
 	static readonly DEFAULT_DRIVE_MAX_REQUESTS = 256;
+	static readonly DEFAULT_FALLBACK_MAX_ROUNDS = 16;
 
 	readonly enabled: boolean;
 	readonly confirmFirstConsult: boolean;
@@ -153,6 +156,10 @@ export class ConsultConfig {
 		this.fallback = {
 			enabled: ConsultConfig.bool(fallback.enabled, true),
 			model: fallbackModel || undefined,
+			maxRounds: ConsultConfig.positiveNumber(
+				fallback.maxRounds,
+				ConsultConfig.DEFAULT_FALLBACK_MAX_ROUNDS,
+			),
 		};
 
 		this.claude = ConsultConfig.consultantSettings(

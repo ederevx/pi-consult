@@ -56,8 +56,12 @@ export interface InvocationSpec {
 	requests: readonly InvocationRequestSpec[];
 	/** Provider session ids known before the run starts (Claude picks its own). */
 	providerSessions?: Partial<Record<ConsultantName, string>>;
+	/** The session that started the invocation; its scope binds the models. */
+	environment?: object;
+	/** The request timeout that bounds a native fallback loop. */
+	timeoutMs?: number;
 	/** Serves the native fallback after the primary fan-out, when it applies.
-	 *  A continuation forces it directly, with no CLI attempts first. */
+	 *  A continuation starts it directly, with no CLI attempts first. */
 	fallback?: (context: {
 		consultId: string;
 		brief: string;

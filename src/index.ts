@@ -53,7 +53,11 @@ import { ToolClassifier } from "./tool-classifier.ts";
 export class ConsultExtension {
 	/** Construct every owner once and register every handler. */
 	register(pi: ExtensionAPI): void {
-		const store = new ConsultSettingsStore();
+		this.registerWith(pi, new ConsultSettingsStore());
+	}
+
+	/** The same registration over an explicit settings owner. */
+	registerWith(pi: ExtensionAPI, store: ConsultSettingsStore): void {
 		const config = ConsultConfig.load(store);
 		// The live session context arrives with session_start; the picker and
 		// the resolution read it at use, never at registration.
@@ -61,33 +65,31 @@ export class ConsultExtension {
 		pi.on("session_start", (_event, ctx: ExtensionContext) => {
 			live = ctx;
 		});
+		const failureClassifier = new FailureClassifier();
 		const fallbackModels = new FallbackModels({ settings: () => pi.getSettings() });
 		const nativeFallback = new NativeFallbackService({
-			settings: () => config.fallback,
-			models: () => (live ? fallbackModels : undefined),
-			context: () => live,
+			settings: () => ConsultConfig.load(store).fallback,
+			models: () => fallbackModels,
 			native: () =>
 				live
 					? new NativeConsultant({
-							registry: live.modelRegistry as never,
+							registry: live.modelRegistry,
 							broker,
 							artifacts,
+							systemPrompt: () => new BriefComposer().systemPrompt(),
 						})
 					: undefined,
-			classifier,
+			classifier: failureClassifier,
+			bridge: () => ConsultConfig.load(store).drive.enabled,
 		});
 		new ConsultSettings(store, {
 			choices: () => (live ? fallbackModels.available(live) : []),
-			defaultChoice: () => {
-				const context = live;
-				if (!context) return undefined;
-				const configured = ConsultConfig.load(store).fallback.model;
-				return fallbackModels.resolve(context, configured);
-			},
+			// The unset row names pi's own default, never the stored override.
+			defaultChoice: () => (live ? fallbackModels.resolve(live) : undefined),
 			unset: () => store.unset(["fallback", "model"]),
 		}).register(pi);
 		if (!config.enabled) return;
-		const classifier = new ToolClassifier(config.gate);
+		const toolClassifier = new ToolClassifier(config.gate);
 		const contract = new ConsultContract();
 		const ledger = new ReceiptLedger(ConsultContract.VERSION);
 		const processes = new ProcessRunner();
@@ -107,8 +109,8 @@ export class ConsultExtension {
 		const delivery = new ConsultDelivery(pi, identity, formatter, effort);
 		const control = new ConsultControlServer({ root: config.artifactDir });
 		const supervisor = new ConsultSupervisor(runner, records, delivery, (consultId) => {
-			for (const consultant of ["claude", "codex"] as const) {
-				control.revoke(`${consultId}:${consultant}`);
+			for (const participant of ["claude", "codex", "fallback"] as const) {
+				control.revoke(`${consultId}:${participant}`);
 			}
 		});
 		const broker = new ConsultRequestBroker(
@@ -147,8 +149,8 @@ export class ConsultExtension {
 			new ConsultToolPolicy(config.drive.tools),
 			new ConsultToolOutput(new SecretScreen()),
 		).register(pi);
-		new ImplementationGate(ledger, classifier, contract).register(pi);
-		new AgentAvailability(new FailureClassifier(), () => index.latest()?.consultId ?? null).register(pi);
+		new ImplementationGate(ledger, toolClassifier, contract).register(pi);
+		new AgentAvailability(failureClassifier, () => index.latest()?.consultId ?? null).register(pi);
 		new SessionLifecycle(
 			ledger,
 			supervisor,
