@@ -1,0 +1,118 @@
+import { ArtifactStore } from "../src/artifact-store.ts";
+import { FallbackModels } from "../src/fallback-models.ts";
+import { FailureClassifier } from "../src/failure-classifier.ts";
+import { NativeConsultant, type NativeStream } from "../src/native-consultant.ts";
+import { NativeFallbackService } from "../src/native-fallback.ts";
+import { assertEq, scratchDir, test } from "./harness.ts";
+import { join } from "node:path";
+import { readFileSync } from "node:fs";
+
+/** A registry whose one model answers text on every round. */
+class OneShotStream {
+	streamSimple(): { result: () => Promise<object> } {
+		return {
+			result: async () => ({
+				role: "assistant",
+				content: [{ type: "text", text: "served again" }],
+				usage: { input: 1, output: 1, cost: { total: 0.005 } },
+				stopReason: "stop",
+			}),
+		};
+	}
+}
+
+function service(artifacts: ArtifactStore, fallback: { enabled: boolean; model?: string }) {
+	const models = new FallbackModels({ settings: () => ({ defaultProvider: "one", defaultModel: "fast" }) });
+	const context = {
+		modelRegistry: { getAvailable: () => [{ provider: "one", id: "fast", name: "Fast" }] },
+		scopedModels: [],
+	};
+	const consultant = new NativeConsultant({
+		registry: new OneShotStream() as unknown as NativeStream,
+		broker: { submit: async () => ({ status: "answered", answer: "pi" }) } as never,
+		artifacts,
+	});
+	return new NativeFallbackService({
+		settings: () => fallback,
+		models: () => models,
+		context: () => context,
+		native: () => consultant,
+		classifier: new FailureClassifier(),
+	});
+}
+
+test("native fallback: a forced continuation resumes the persisted transcript", async () => {
+	const artifacts = new ArtifactStore(join(scratchDir(), `resume-${Date.now()}`));
+	const paths = await artifacts.prepare("s", "c-aba111222333");
+	const signal = new AbortController().signal;
+	const primary = [
+		{ consultant: "claude" as const, status: "auth" as const, answer: "", partial: false, durationMs: 1, exitCode: 1, error: "invalid api key", warnings: [] },
+	];
+	const first = await service(artifacts, { enabled: true }).takeover({
+		consultId: "c-aba111222333",
+		brief: "first brief",
+		paths,
+		requests: [],
+		results: primary,
+		signal,
+	});
+	assertEq(first?.status, "ok", "the first takeover serves");
+	const transcript = JSON.parse(readFileSync(first!.fallback!.conversationPath!, "utf8"));
+
+	// A continuation forces the takeover and resumes that transcript.
+	const second = await service(artifacts, { enabled: true }).takeover({
+		consultId: "c-aba111222333",
+		brief: "follow up",
+		paths,
+		requests: [],
+		results: primary,
+		signal,
+		conversation: transcript,
+		force: true,
+	});
+	assertEq(second?.status, "ok", "the continuation serves");
+	assertEq(second?.fallback?.conversationPath, first?.fallback?.conversationPath,
+		"the resumed conversation is re-persisted to its own path");
+	const resumed = JSON.parse(readFileSync(second!.fallback!.conversationPath!, "utf8"));
+	assertEq(
+		resumed.some((message: { role: string; content?: Array<{ text?: string }> }) =>
+			message.role === "user" &&
+			message.content?.some((part) => part.text === "follow up")),
+		true,
+		"the follow-up brief rides on the resumed transcript",
+	);
+});
+
+test("native fallback: force does not bypass the enablement or the model", async () => {
+	const artifacts = new ArtifactStore(join(scratchDir(), `force-${Date.now()}`));
+	const paths = await artifacts.prepare("s", "c-aca111222333");
+	const primary = [
+		{ consultant: "claude" as const, status: "auth" as const, answer: "", partial: false, durationMs: 1, exitCode: 1, error: "invalid api key", warnings: [] },
+	];
+	assertEq(
+		await service(artifacts, { enabled: false }).takeover({
+			consultId: "c-aca111222333",
+			brief: "b",
+			paths,
+			requests: [],
+			results: primary,
+			signal: new AbortController().signal,
+			force: true,
+		}),
+		undefined,
+		"a disabled fallback refuses even a continuation",
+	);
+	assertEq(
+		await service(artifacts, { enabled: true, model: "one/deep" }).takeover({
+			consultId: "c-aca111222333",
+			brief: "b",
+			paths,
+			requests: [],
+			results: primary,
+			signal: new AbortController().signal,
+			force: true,
+		}),
+		undefined,
+		"an unresolvable model refuses even a continuation",
+	);
+});

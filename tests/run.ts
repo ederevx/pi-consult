@@ -47,6 +47,7 @@ import "./settings-view.test.ts";
 import "./fallback-models.test.ts";
 import "./fallback-receipts.test.ts";
 import "./native-fallback.test.ts";
+import "./native-resume.test.ts";
 import "./runner.test.ts";
 import "./artifact-store.test.ts";
 import "./gate.test.ts";
