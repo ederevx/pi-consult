@@ -309,20 +309,7 @@ export class ConsultTool {
 		const spec = await this.spec(
 			consultId, sessionId, params, targets, composed, continuation, paths, ctx, nativeResume);
 		const invocation = await this.deps.supervisor.start(spec);
-		if (nativeResume) {
-			// The native resume refuses loudly when the fallback is disabled
-			// or its pinned model no longer resolves; an empty consultation
-			// would silently claim a continuation that never ran.
-			invocation.done().then(() => undefined).catch(() => undefined);
-			const settled = await invocation.done();
-			if (!settled.some((run) => run.consultant === "fallback")) {
-				return this.failure(
-					ctx,
-					`the native continuation of ${params.continue} could not run: the fallback ` +
-						"is disabled or its saved model is no longer available",
-				);
-			}
-		}
+
 		this.deps.effort?.engage(ctx, consultId);
 		const steps = ctx.mode === "tui" && this.append
 			? new ConsultStepCards(consultId, this.stepAppend(sessionId)) : undefined;
@@ -435,17 +422,30 @@ export class ConsultTool {
 				continuedFrom: continuation?.consultId,
 				requests,
 				providerSessions,
-				environment: ctx,
+				environment: ConsultTool.environment(ctx),
 				timeoutMs: params.timeout_s
 					? params.timeout_s * 1000
 					: this.deps.config.consultant(nativeResume.targets[0] ?? "claude").timeoutMs,
-				fallback: (context) =>
-					this.deps.fallback?.({
+				fallback: async (context) =>
+					(await this.deps.fallback?.({
 						...context,
 						kind: "resume" as const,
 						metadata: nativeResume.metadata,
 						messages: nativeResume.messages,
-					}),
+					})) ?? {
+						// The gates refused the resume: the consultation still
+						// runs, and the failed run says why instead of an
+						// empty receipt that looks like a fresh consult.
+						consultant: "fallback" as const,
+						fallback: nativeResume.metadata,
+						status: "unavailable" as const,
+						answer: "",
+						partial: false,
+						durationMs: 0,
+						exitCode: null,
+						error: "the native fallback is disabled or its saved model is no longer available",
+						warnings: [],
+					},
 			};
 		}
 		for (const name of targets) {
@@ -477,8 +477,8 @@ export class ConsultTool {
 			continuedFrom: continuation?.consultId,
 			requests,
 			providerSessions,
-			environment: ctx,
-			timeoutMs: requests[0]?.timeoutMs,
+			environment: ConsultTool.environment(ctx),
+			timeoutMs: requests[0]?.timeoutMs ?? this.deps.config.claude.timeoutMs,
 			fallback: this.deps.fallback,
 		};
 	}
@@ -595,6 +595,19 @@ export class ConsultTool {
 
 	private branch(ctx: ExtensionToolContext): BranchEntry[] {
 		return ctx.sessionManager.getBranch() as unknown as BranchEntry[];
+	}
+
+	/** A snapshot of the session that started the invocation: its registry,
+	 *  copied scope, and default model. Nothing is read through a context
+	 *  the host may have invalidated by the time the fallback runs. */
+	private static environment(ctx: ExtensionToolContext): object {
+		// A context without a scope (embedders, tests) snapshots an empty
+		// one: the registry's whole catalogue stays eligible.
+		const scoped = (ctx as { scopedModels?: unknown }).scopedModels;
+		return {
+			modelRegistry: (ctx as { modelRegistry?: unknown }).modelRegistry,
+			scopedModels: Array.isArray(scoped) ? [...scoped] : [],
+		};
 	}
 
 	private targets(target: ConsultTarget): ConsultantName[] {
