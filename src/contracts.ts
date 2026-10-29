@@ -143,7 +143,7 @@ export interface BridgeConnection {
 /** One final or pending consult result with the answers it renders. */
 export interface ConsultReceipt {
 	details: ConsultDetails;
-	answers: Map<ConsultantName, string>;
+	answers: Map<RunParticipant, string>;
 }
 
 /** The durable per-invocation manifest, written before any process spawns. */
