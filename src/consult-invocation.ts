@@ -21,6 +21,7 @@ import type {
 	InvocationState,
 } from "./contracts.ts";
 
+
 /** One consultant's request parameters, before ids and progress are bound. */
 export interface InvocationRequestSpec {
 	consultant: ConsultantName;
@@ -55,6 +56,15 @@ export interface InvocationSpec {
 	requests: readonly InvocationRequestSpec[];
 	/** Provider session ids known before the run starts (Claude picks its own). */
 	providerSessions?: Partial<Record<ConsultantName, string>>;
+	/** Serves the native fallback after the primary fan-out, when it applies. */
+	fallback?: (context: {
+		consultId: string;
+		brief: string;
+		paths: ConsultPaths;
+		requests: readonly ConsultRequest[];
+		results: readonly ConsultantResult[];
+		signal: AbortSignal;
+	}) => Promise<ConsultantResult | undefined>;
 }
 
 export class ConsultInvocation {
@@ -98,17 +108,40 @@ export class ConsultInvocation {
 	start(): void {
 		if (this.completion) return;
 		this.state = "running";
-		this.completion = this.runner.run(this.requests(), this.controller.signal).then(
-			(results) => {
-				this.results = results;
-				this.state = this.controller.signal.aborted ? "terminated" : "completed";
+		this.completion = this.runner
+			.run(this.requests(), this.controller.signal)
+			.then(async (results) => {
+				// The fallback decision comes after the primary fan-out, once,
+				// and only while the invocation is still live.
+				if (this.spec.fallback && !this.controller.signal.aborted) {
+					const requests = this.requests();
+					const extra = await this.spec.fallback({
+						consultId: this.consultId,
+						brief: this.spec.brief,
+						paths: this.paths,
+						requests,
+						results,
+						signal: this.controller.signal,
+					});
+					if (extra) {
+						this.feed.register("fallback");
+						this.feed.event("fallback", "native fallback took over the consultation");
+						return [...results, extra];
+					}
+				}
 				return results;
-			},
-			(error: unknown) => {
-				this.state = "failed";
-				throw error;
-			},
-		);
+			})
+			.then(
+				(results) => {
+					this.results = results;
+					this.state = this.controller.signal.aborted ? "terminated" : "completed";
+					return results;
+				},
+				(error: unknown) => {
+					this.state = "failed";
+					throw error;
+				},
+			);
 		void this.completion.catch(() => undefined).finally(() => this.feed.closeAndFlush());
 	}
 

@@ -16,7 +16,7 @@
 import { randomUUID } from "node:crypto";
 
 import type { ConsultDriveDispatcher, DriveRequest } from "./consult-drive-dispatcher.ts";
-import type { ConsultantName } from "./contracts.ts";
+import type { RunParticipant } from "./contracts.ts";
 import type { DriveStatus } from "./bridge-protocol.ts";
 
 /** What the consultant's blocked call receives. */
@@ -88,7 +88,7 @@ export class ConsultRequestBroker {
 	submit(
 		invocationId: string,
 		consultId: string,
-		consultant: ConsultantName,
+		consultant: RunParticipant,
 		clientRequestId: string,
 		payload: string | RequestPayload,
 	): Promise<DriveOutcome> {

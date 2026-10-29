@@ -72,6 +72,15 @@ export interface ConsultToolDeps {
 	bridge: BridgeLauncher;
 	/** pi's thinking-level cycle; engaged by a consult, settled by its receipt. */
 	effort?: AgentEffortPolicy;
+	/** Serves the native fallback after a failed primary fan-out. */
+	fallback?: (context: {
+		consultId: string;
+		brief: string;
+		paths: ConsultPaths;
+		requests: readonly ConsultRequest[];
+		results: readonly ConsultantResult[];
+		signal: AbortSignal;
+	}) => Promise<ConsultantResult | undefined>;
 }
 
 /** A resolved continuation request. */
@@ -397,6 +406,7 @@ export class ConsultTool {
 			continuedFrom: continuation?.consultId,
 			requests,
 			providerSessions,
+			fallback: this.deps.fallback,
 		};
 	}
 

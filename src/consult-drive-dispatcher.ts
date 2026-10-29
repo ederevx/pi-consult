@@ -11,7 +11,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import type { ConsultSupervisor } from "./consult-supervisor.ts";
-import type { ConsultantName } from "./contracts.ts";
+import type { RunParticipant } from "./contracts.ts";
 import type { RequestPayload } from "./consult-request-broker.ts";
 
 /** One consultant request as the broker records it. */
@@ -19,7 +19,7 @@ export interface DriveRequest {
 	requestId: string;
 	invocationId: string;
 	consultId: string;
-	consultant: ConsultantName;
+	consultant: RunParticipant;
 	clientRequestId: string;
 	createdAt: number;
 }
