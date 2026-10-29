@@ -11,9 +11,12 @@
 import type { DriveToolSettings } from "./consult-config.ts";
 
 export class ConsultToolPolicy {
-	/** Tools no allow-list entry can ever exempt: pi's own mutations beyond
-	 *  the operator's list, and this extension's control surface. */
+	/** Tools no allow-list entry can ever exempt: pi's own mutations, and
+	 *  this extension's and pi-teams' control surface. */
 	private static readonly NEVER = new Set([
+		"edit",
+		"write",
+		"powershell",
 		"consult",
 		"pre_consult",
 		"consult_execute",

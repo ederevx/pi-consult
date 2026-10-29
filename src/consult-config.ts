@@ -60,7 +60,8 @@ export interface DriveSettings {
 
 /** The consultant-requested tool policy's configurable values. */
 export interface DriveToolSettings {
-	/** Tool names pi may be asked to run; pi still decides every run. */
+	/** Tool names pi may be asked to run; pi still decides every run. An
+	 *  explicitly empty list allows none. */
 	allow: string[];
 }
 
@@ -120,15 +121,18 @@ export class ConsultConfig {
 
 		const drive = ConsultConfig.record(raw.drive);
 		const toolSettings = ConsultConfig.record(drive.tools);
-		const toolAllow = ConsultConfig.stringList(toolSettings.allow);
 		this.drive = {
 			enabled: ConsultConfig.bool(drive.enabled, true),
 			deadlineMs: ConsultConfig.positiveNumber(
 				drive.deadlineMs,
 				ConsultConfig.DEFAULT_DRIVE_DEADLINE_MS,
 			),
+			// An explicit empty array allows no tools; only an absent or invalid
+			// value falls back to the default list.
 			tools: {
-				allow: toolAllow.length > 0 ? toolAllow : [...ConsultConfig.DEFAULT_DRIVE_TOOLS_ALLOW],
+				allow: Array.isArray(toolSettings.allow)
+					? ConsultConfig.stringList(toolSettings.allow)
+					: [...ConsultConfig.DEFAULT_DRIVE_TOOLS_ALLOW],
 			},
 			maxRequestsPerInvocation: ConsultConfig.positiveNumber(
 				drive.maxRequestsPerInvocation,

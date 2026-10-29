@@ -183,6 +183,8 @@ test("pre_consult: contract v14 states the hold, the verdict and the completion 
 	assertIncludes(text, "It never leaves you at high, xhigh, or max");
 	assertIncludes(text, "you own the implementation and the\n  execution");
 	assertIncludes(text, "Consultant verdict: approved - <one-line reason>.");
+	assertIncludes(text, "pi authorizes it and runs it with consult_execute");
+	assertIncludes(text, "The consultant never executes");
 	assertIncludes(text, "Consultation cycle: complete - <consult id> verified.");
 	assertIncludes(text, "Never write the line earlier, and never quote, indent, or fence it.");
 	assertIncludes(text, "/consult-effort release");

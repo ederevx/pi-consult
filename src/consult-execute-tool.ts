@@ -98,17 +98,27 @@ export class ConsultExecuteTool {
 			const outcome = await ctx.executeTool(claim.payload.name, claim.payload.arguments, {
 				signal: executionSignal,
 			});
-			const text = (outcome.content ?? []) as { type?: string; text?: string }[];
-			const omitted = text.filter((part) => part.type !== "text" && part.text === undefined).length;
-			const answer = this.output.bound(outcome, omitted);
-			this.broker.finishTool(requestId, answer);
-			return this.success(
-				`ran ${claim.payload.name} for the consultant waiting on ${requestId}; the output was piped back.`,
-			);
+			const answer = this.output.bound(outcome, claim.request.clientRequestId);
+			return this.deliver(requestId, claim.payload.name, this.broker.finishTool(requestId, answer));
 		} catch {
-			this.broker.finishTool(requestId, { status: "answered", answer: "the tool run failed unexpectedly", isError: true });
-			return this.success(`the ${claim.payload.name} run failed; the consultant was told so.`);
+			const answer = this.output.bound(
+				{
+					content: [{ type: "text", text: "the tool run failed unexpectedly" }],
+					isError: true,
+				},
+				claim.request.clientRequestId,
+			);
+			return this.deliver(requestId, claim.payload.name, this.broker.finishTool(requestId, answer));
 		}
+	}
+
+	/** The receipt states what actually reached the consultant. */
+	private deliver(requestId: string, name: string, delivered: boolean): AgentToolResult<undefined> {
+		return this.success(
+			delivered
+				? `ran ${name} for the consultant waiting on ${requestId}; the output was piped back.`
+				: `ran ${name}, but the consultant's request had already settled; nothing was delivered.`,
+		);
 	}
 
 	private success(text: string): AgentToolResult<undefined> {
