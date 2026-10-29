@@ -10,7 +10,7 @@ execution, at low thinking effort, and consults again at any roadblock.
 ## Install
 
 ```bash
-pi install git:github.com/ederevx/pi-consult@v0.17.0
+pi install git:github.com/ederevx/pi-consult@v0.17.1
 ```
 
 The package has no runtime dependencies; it uses the host-provided
