@@ -18,6 +18,13 @@ export interface DefaultModelSettings {
 	defaultModel?: string;
 }
 
+/** The registry's own catalogue entry, as this owner reads it. */
+export interface CatalogueModel {
+	provider: string;
+	id: string;
+	name: string;
+}
+
 /** One selectable model, identified exactly as it is transmitted. */
 export interface FallbackChoice {
 	/** `provider/model-id`, the stored and matched identifier. */
@@ -25,7 +32,7 @@ export interface FallbackChoice {
 	/** The dock row's label. */
 	label: string;
 	/** The registry's own model object, streamed exactly as configured. */
-	model: object;
+	model: CatalogueModel;
 }
 
 export interface FallbackModelsDeps {
@@ -45,7 +52,10 @@ export class FallbackModels {
 	 * with the registry's available catalogue, or the whole catalogue when
 	 * the session scopes nothing.
 	 */
-	available(ctx: { modelRegistry: { getAvailable(): object[] }; scopedModels: readonly { model: object }[] }): FallbackChoice[] {
+	available(ctx: {
+		modelRegistry: { getAvailable(): CatalogueModel[] };
+		scopedModels: readonly { model: CatalogueModel }[];
+	}): FallbackChoice[] {
 		const catalogue = ctx.modelRegistry.getAvailable();
 		const scoped = ctx.scopedModels.map((entry) => entry.model);
 		const allowed = scoped.length > 0
@@ -92,7 +102,7 @@ export class FallbackModels {
 	}
 
 	/** The exact identifier a model is stored and matched by. */
-	private static identifier(model: { provider: string; name: string; id: string }): string {
+	private static identifier(model: CatalogueModel): string {
 		return `${model.provider}/${model.id}`;
 	}
 }

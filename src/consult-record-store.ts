@@ -95,6 +95,24 @@ export class ConsultRecordStore {
 		return receipt;
 	}
 
+	/** Load and validate one persisted fallback transcript: an array of
+	 *  message records, or undefined when it is missing or malformed. */
+	async conversation(path: string | undefined): Promise<unknown[] | undefined> {
+		if (!path) return undefined;
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(await this.artifacts.read(path));
+		} catch {
+			return undefined;
+		}
+		if (!Array.isArray(parsed)) return undefined;
+		const wellFormed = parsed.every((message) =>
+			typeof message === "object" &&
+			message !== null &&
+			typeof (message as { role?: unknown }).role === "string");
+		return wellFormed ? parsed : undefined;
+	}
+
 	/** Read a finished consult's receipt back from disk. */
 	async load(consultId: string): Promise<ConsultReceipt | undefined> {
 		for (const paths of await this.artifacts.listConsults()) {
