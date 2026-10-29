@@ -24,8 +24,8 @@ const CATALOGUE = [
 	{ provider: "two", id: "fast", name: "Other Fast" },
 ];
 
-function models(defaults: { defaultProvider?: string; defaultModel?: string }): FallbackModels {
-	return new FallbackModels({ settings: () => defaults });
+function models(_defaults?: { defaultProvider?: string; defaultModel?: string }): FallbackModels {
+	return new FallbackModels();
 }
 
 /** A context whose snapshot carries the same defaults the test names. */
