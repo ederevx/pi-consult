@@ -27,9 +27,20 @@ export interface SettingSpec {
 	/** The dock's left-column label. */
 	label: string;
 	path: readonly string[];
-	kind: "boolean" | "enum" | "number" | "json" | "string";
+	kind: "boolean" | "enum" | "number" | "json" | "string" | "model";
 	values?: readonly string[];
 	description: string;
+}
+
+/** The live model catalogue a "model" row selects from; injected so the
+ *  command works without a session context. */
+export interface ModelChoices {
+	/** Every eligible fallback model, identifier plus label. */
+	choices(): { value: string; label: string }[];
+	/** The model an unset selection resolves to, when one does. */
+	defaultChoice(): { value: string; label: string } | undefined;
+	/** Remove the stored model override; returns an error, or undefined. */
+	unset(): string | undefined;
 }
 
 export class ConsultSettings {
@@ -53,14 +64,18 @@ export class ConsultSettings {
 		{ key: "drive.enabled", label: "Consultant bridge", path: ["drive", "enabled"], kind: "boolean", values: ["off", "on"], description: "Let a consultant ask pi a question and block on the answer" },
 		{ key: "drive.deadlineMs", label: "Bridge deadline (ms)", path: ["drive", "deadlineMs"], kind: "number", description: "How long a consultant waits for pi before the request expires" },
 		{ key: "drive.tools.allow", label: "Bridge tools", path: ["drive", "tools", "allow"], kind: "json", description: "Tool names a consultant may ask pi to run (JSON array; pi still decides every run)" },
+		{ key: "fallback.enabled", label: "Native fallback", path: ["fallback", "enabled"], kind: "boolean", values: ["off", "on"], description: "Let an available pi model serve a consultation whose consultant failed" },
+		{ key: "fallback.model", label: "Fallback model", path: ["fallback", "model"], kind: "model", description: "The pi model that serves a failed consultation; unset follows pi's default" },
 		{ key: "drive.maxRequestsPerInvocation", label: "Bridge request limit", path: ["drive", "maxRequestsPerInvocation"], kind: "number", description: "Bridge requests one invocation may make before further ones are busy" },
 	];
 
 	private readonly store: ConsultSettingsStore;
+	private readonly models: ModelChoices | undefined;
 	private warned = false;
 
-	constructor(store: ConsultSettingsStore = new ConsultSettingsStore()) {
+	constructor(store: ConsultSettingsStore = new ConsultSettingsStore(), models?: ModelChoices) {
 		this.store = store;
+		this.models = models;
 	}
 
 	/** Register the command and the legacy-configuration notice with pi. */
@@ -97,6 +112,10 @@ export class ConsultSettings {
 	apply(key: string, value: string): string | undefined {
 		const spec = ConsultSettings.SPECS.find((candidate) => candidate.key === key);
 		if (!spec) return `unknown setting: ${key}`;
+		// An empty model row removes the override, so the live default serves.
+		if (spec.kind === "model" && value === "") {
+			return this.models ? this.models.unset() : this.store.unset(spec.path);
+		}
 		const parsed = this.parse(spec, value);
 		if (parsed.error !== undefined) return parsed.error;
 		return this.store.set(spec.path, parsed.value);
@@ -209,7 +228,24 @@ export class ConsultSettings {
 		return lines.join("\n");
 	}
 
+	/** The model choices a "model" row offers, for the dock's picker. */
+	modelChoices(): { value: string; label: string }[] {
+		return this.models ? this.models.choices() : [];
+	}
+
+	/** The choice an unset model row resolves to, for the dock's picker. */
+	modelDefault(): { value: string; label: string } | undefined {
+		return this.models?.defaultChoice();
+	}
+
 	private parse(spec: SettingSpec, value: string): { value?: unknown; error?: string } {
+		if (spec.kind === "model") {
+			const available = this.modelChoices();
+			if (!available.some((choice) => choice.value === value)) {
+				return { error: `model is not available: ${value}` };
+			}
+			return { value };
+		}
 		if (spec.kind === "boolean") {
 			const text = value.toLowerCase();
 			if (["on", "true", "yes", "1"].includes(text)) return { value: true };
