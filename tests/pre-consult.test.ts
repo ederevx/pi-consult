@@ -90,6 +90,7 @@ test("pre_consult: returns the current catalogue and a versioned receipt", async
 	assertEq(result.details.ack.contractVersion, ConsultContract.VERSION);
 	const text = result.content[0].text;
 	assertIncludes(text, `pi-consult contract v${ConsultContract.VERSION}`);
+	assertIncludes(text, "native fallback conversation with the configured pi model");
 	assertIncludes(text, "Consultation tier: sanity check - <one-line reason>.");
 	assertIncludes(text, "Consultation tier: audit - <one-line reason>.");
 	assertNotIncludes(text, "not needed", "no consultation can be skipped");
@@ -161,6 +162,7 @@ test("pre_consult: a probe failure still returns the full terms", async () => {
 	const result = await executor(definition)("call-probe", { acknowledge: true });
 	const text = result.content[0].text;
 	assertIncludes(text, `pi-consult contract v${ConsultContract.VERSION}`);
+	assertIncludes(text, "native fallback conversation with the configured pi model");
 	assertIncludes(text, "End every task with a consultation");
 	assertEq(result.details.ack.contractVersion, ConsultContract.VERSION);
 });
@@ -176,9 +178,9 @@ test("pre_consult: a nested call is rejected", async () => {
 	assertEq(threw, true);
 });
 
-test("pre_consult: contract v14 states the hold, the verdict and the completion line", async () => {
+test("pre_consult: contract v15 states the hold, the verdict and the completion line", async () => {
 	const text = await contractText();
-	assertEq(ConsultContract.VERSION, 14);
+	assertEq(ConsultContract.VERSION, 15);
 	assertIncludes(text, "holds your own thinking effort");
 	assertIncludes(text, "It never leaves you at high, xhigh, or max");
 	assertIncludes(text, "you own the implementation and the\n  execution");
@@ -191,7 +193,7 @@ test("pre_consult: contract v14 states the hold, the verdict and the completion 
 	assertNotIncludes(text, "low; never high, xhigh, or max)");
 });
 
-test("pre_consult: contract v14 requires a convention audit in every closing consultation", async () => {
+test("pre_consult: contract v15 requires a convention audit in every closing consultation", async () => {
 	const definition = register(runner(async () => [], TARGETS));
 	const text = await contractText();
 	assertIncludes(text, "Every closing consultation audits convention compliance");
