@@ -47,6 +47,8 @@ export interface NativeOutcome {
 	conversationPath?: string;
 	provider: string;
 	model: string;
+	/** Every identity that answered, in first-seen order. */
+	servedBy: string[];
 }
 
 export interface NativeConsultantDeps {
@@ -109,11 +111,10 @@ export class NativeConsultant {
 		const usage = { inputTokens: 0, outputTokens: 0, costUsd: 0 };
 		const sawUsage = { any: false };
 		const serving = new Map<string, { provider: string; model: string }>();
+		let final: { provider: string; model: string } | undefined;
 		// The whole loop is bounded by the request timeout composed with the
 		// invocation signal; whichever fires first ends the conversation.
-		const deadline = AbortController.abortSignalTimeout
-			? AbortSignal.any([signal, AbortSignal.any([AbortSignal.timeout(config.timeoutMs)])])
-			: signal;
+		const deadline = AbortSignal.any([signal, AbortSignal.timeout(config.timeoutMs)]);
 		let status: NativeOutcome["status"] = "ok";
 		let error: string | undefined;
 		try {
@@ -126,15 +127,21 @@ export class NativeConsultant {
 						tools,
 					}, { signal: deadline })
 					.result();
-				serving.set(`${answer.provider}/${answer.model}`, {
-					provider: answer.provider,
-					model: answer.model,
-				});
+				const identity = `${answer.provider}/${answer.model}`;
+				if (!serving.has(identity)) {
+					serving.set(identity, { provider: answer.provider, model: answer.model });
+				}
+				final = { provider: answer.provider, model: answer.model };
 				this.accumulate(usage, sawUsage, answer.usage);
 				const calls = answer.content.filter(
 					(part): part is ModelToolCall => part.type === "toolCall",
 				);
 				messages.push(answer as Message);
+				if (answer.stopReason === "aborted") {
+					status = signal.aborted || deadline.aborted ? "aborted" : "error";
+					error = "the fallback model stopped mid-answer";
+					break;
+				}
 				if (answer.stopReason === "error") {
 					status = "error";
 					error = answer.errorMessage ?? "the fallback model reported an error";
@@ -152,18 +159,13 @@ export class NativeConsultant {
 						usage: sawUsage.any ? usage : undefined,
 						startedAt,
 						serving,
+						final,
 						messages,
 						paths,
 					});
 				}
 				for (const call of calls) {
-					// The signal races the broker wait, so an abort never
-					// lingers for the bridge deadline.
-					const result = await Promise.race([
-						this.drive(invocationId, consultId, call),
-						NativeConsultant.aborted(deadline),
-					]);
-					messages.push(result);
+					messages.push(await this.drive(invocationId, consultId, call, deadline));
 				}
 			}
 			if (status === "ok") {
@@ -183,16 +185,6 @@ export class NativeConsultant {
 			serving,
 			messages,
 			paths,
-		});
-	}
-
-	/** Resolves an aborted marker when the signal fires first. */
-	private static aborted(signal: AbortSignal): Promise<Message> {
-		return new Promise((resolve) => {
-			if (signal.aborted) throw new Error("aborted");
-			signal.addEventListener("abort", () => {
-				resolve({ role: "toolResult", toolCallId: "", toolName: "aborted", content: [], isError: true } as never);
-			}, { once: true });
 		});
 	}
 
@@ -225,34 +217,62 @@ export class NativeConsultant {
 		invocationId: string,
 		consultId: string,
 		call: ModelToolCall,
+		signal: AbortSignal,
 	): Promise<Message> {
-		const args = (call.arguments ?? {}) as DriveArguments;
+		const result = (text: string, isError = true): Message =>
+			({
+				role: "toolResult",
+				toolCallId: call.id,
+				toolName: call.name,
+				content: [{ type: "text", text }],
+				isError,
+			}) as Message;
+		if (call.name !== "drive_pi" && call.name !== "use_tool") {
+			return result(`unknown tool ${call.name}; only drive_pi and use_tool exist`);
+		}
+		if (typeof call.arguments !== "object" || call.arguments === null || Array.isArray(call.arguments)) {
+			return result("arguments must be an object");
+		}
+		const args = call.arguments as DriveArguments;
 		const isQuestion = call.name === "drive_pi";
+		if (isQuestion && typeof args.prompt !== "string") {
+			return result("drive_pi needs a prompt string");
+		}
+		if (!isQuestion && (typeof args.name !== "string" || typeof args.arguments !== "object" || args.arguments === null)) {
+			return result("use_tool needs a tool name and an arguments object");
+		}
 		const clientRequestId = typeof args.client_request_id === "string" && args.client_request_id
 			? args.client_request_id
 			: randomUUID();
 		const payload = isQuestion
-			? typeof args.prompt === "string" ? args.prompt : ""
+			? args.prompt!
 			: {
 					kind: "tool",
-					name: typeof args.name === "string" ? args.name : "",
-					arguments: (args.arguments ?? {}) as Record<string, unknown>,
+					name: args.name!,
+					arguments: args.arguments as Record<string, unknown>,
 				};
-		const outcome = await this.broker.submit(
+		// An abort cancels the broker request instead of waiting out its
+		// deadline; the model sees the loop end either way.
+		const waiter = this.broker.submit(
 			invocationId,
 			consultId,
 			"fallback" as RunParticipant,
 			clientRequestId,
 			payload,
 		);
+		const abort = new Promise<never>((_, reject) => {
+			if (signal.aborted) reject(new Error("aborted"));
+			else signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+		});
+		let outcome;
+		try {
+			outcome = await Promise.race([waiter, abort]);
+		} catch {
+			this.broker.cancel(invocationId, clientRequestId);
+			throw new Error("aborted");
+		}
 		const text = outcome.answer ?? `[${outcome.status}]`;
-		return {
-			role: "toolResult",
-			toolCallId: call.id,
-			toolName: call.name,
-			content: [{ type: "text", text }],
-			isError: outcome.status !== "answered" || outcome.isError === true,
-		} as Message;
+		return result(text, outcome.status !== "answered" || outcome.isError === true);
 	}
 
 	private accumulate(
@@ -274,6 +294,7 @@ export class NativeConsultant {
 		usage: { inputTokens: number; outputTokens: number; costUsd: number } | undefined;
 		startedAt: number;
 		serving: Map<string, { provider: string; model: string }>;
+		final?: { provider: string; model: string };
 		messages: Message[];
 		paths: ConsultPaths;
 	}): Promise<NativeOutcome> {
@@ -291,11 +312,12 @@ export class NativeConsultant {
 				}`,
 				usage: state.usage,
 				durationMs: Date.now() - state.startedAt,
-				provider: NativeConsultant.lastServe(state.serving).provider,
-				model: NativeConsultant.lastServe(state.serving).model,
+				provider: state.final?.provider ?? "",
+				model: state.final?.model ?? "",
+				servedBy: [...state.serving.values()].map((one) => `${one.provider}/${one.model}`),
 			};
 		}
-		const served = NativeConsultant.lastServe(state.serving);
+		const served = state.final ?? [...state.serving.values()].pop();
 		return {
 			answer: state.answer,
 			status: state.status,
@@ -303,27 +325,25 @@ export class NativeConsultant {
 			usage: state.usage ? { ...state.usage } : undefined,
 			durationMs: Date.now() - state.startedAt,
 			conversationPath,
-			provider: served.provider,
-			model: served.model,
+			provider: served?.provider ?? "",
+			model: served?.model ?? "",
+			servedBy: [...state.serving.values()].map((one) => `${one.provider}/${one.model}`),
 		};
 	}
 
-	/** The identity that answered last; routing may change it mid-loop. */
-	private static lastServe(serving: Map<string, { provider: string; model: string }>): {
-		provider: string;
-		model: string;
-	} {
-		return [...serving.values()].pop() ?? { provider: "", model: "" };
-	}
-
 	/** The provenance metadata this outcome carries into its run. */
-	metadata(outcome: NativeOutcome, fallbackFor: string[], selected: { provider: string; id: string }): FallbackMetadata {
+	metadata(
+		outcome: NativeOutcome,
+		fallbackFor: string[],
+		selected: { provider: string; id: string },
+	): FallbackMetadata {
 		return {
 			fallbackFor,
 			selectedProvider: selected.provider,
 			selectedModel: selected.id,
-			provider: outcome.provider,
-			model: outcome.model,
+			provider: outcome.provider || selected.provider,
+			model: outcome.model || selected.id,
+			servedBy: outcome.servedBy,
 			conversationPath: outcome.conversationPath,
 		};
 	}

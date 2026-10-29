@@ -256,3 +256,49 @@ test("native fallback service: an aborted signal refuses the takeover", async ()
 	});
 	assert(result === undefined || result.status !== "ok", "an aborted invocation is not served");
 });
+
+test("runner: native execution shares the consultant concurrency budget", async () => {
+	const { ConsultRunner } = await import("../src/consult-runner.ts");
+	const runner = new ConsultRunner([], 1);
+	const running: number[] = [];
+	let peak = 0;
+	const job = (name: number) => runner.native(async () => {
+		running.push(name);
+		peak = Math.max(peak, running.length);
+		await new Promise((resolve) => setTimeout(resolve, 40));
+		running.pop();
+		return name;
+	}, new AbortController().signal);
+	const [one, two] = await Promise.all([job(1), job(2)]);
+	assertEq(peak, 1, "with a budget of one, two native runs never stream together");
+	assert(JSON.stringify([one, two]) === "[1,2]", "both runs complete");
+});
+
+test("invocation: the hook receives the bound context and failed primaries survive", async () => {
+	const { ConsultInvocation } = await import("../src/consult-invocation.ts");
+	const { ConsultRunner } = await import("../src/consult-runner.ts");
+	const seen: unknown[] = [];
+	const paths = { dir: ".", brief: "b.md" };
+	const invocation = new ConsultInvocation({
+		consultId: "c-hook",
+		sessionId: "s",
+		cwd: ".",
+		targets: ["claude"],
+		brief: "the brief",
+		paths: paths as never,
+		requests: [],
+		providerSessions: {},
+		environment: { bound: true },
+		timeoutMs: 5000,
+		fallback: async (context) => {
+			seen.push(context);
+			throw new Error("native exploded");
+		},
+	}, new ConsultRunner([], 1) as never);
+	const results = await invocation.done().catch(() => invocation.settled() ?? []);
+	assertEq(results?.length, 0, "the failed hook adds no run");
+	assertEq((seen[0] as { kind: string }).kind, "takeover");
+	assert(JSON.stringify((seen[0] as { environment: object }).environment) === '{"bound":true}',
+		"the hook sees the invocation's bound environment");
+	assertEq((seen[0] as { timeoutMs: number }).timeoutMs, 5000);
+});

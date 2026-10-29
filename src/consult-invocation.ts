@@ -57,9 +57,9 @@ export interface InvocationSpec {
 	/** Provider session ids known before the run starts (Claude picks its own). */
 	providerSessions?: Partial<Record<ConsultantName, string>>;
 	/** The session that started the invocation; its scope binds the models. */
-	environment?: object;
+	environment: object;
 	/** The request timeout that bounds a native fallback loop. */
-	timeoutMs?: number;
+	timeoutMs: number;
 	/** Serves the native fallback after the primary fan-out, when it applies.
 	 *  A continuation starts it directly, with no CLI attempts first. */
 	fallback?: (context: {
@@ -69,9 +69,9 @@ export interface InvocationSpec {
 		requests: readonly ConsultRequest[];
 		results: readonly ConsultantResult[];
 		signal: AbortSignal;
-		conversation?: unknown[];
-		force?: boolean;
-	}) => Promise<ConsultantResult | undefined>;
+		environment: object;
+		timeoutMs: number;
+	} & ({ kind: "takeover" } | { kind: "resume"; metadata: unknown; messages: unknown[] })) => Promise<ConsultantResult | undefined>;
 }
 
 export class ConsultInvocation {
@@ -118,18 +118,26 @@ export class ConsultInvocation {
 		this.completion = this.runner
 			.run(this.requests(), this.controller.signal)
 			.then(async (results) => {
-				// The fallback decision comes after the primary fan-out, once,
-				// and only while the invocation is still live.
+				// Primary results are retained before the fallback runs, so a
+				// failed takeover never loses what the CLIs produced. The
+				// native loop shares the runner's concurrency budget.
+				this.results = results;
 				if (this.spec.fallback && !this.controller.signal.aborted) {
-					const requests = this.spec.requests;
-					const extra = await this.spec.fallback({
-						consultId: this.consultId,
-						brief: this.spec.brief,
-						paths: this.paths,
-						requests,
-						results,
-						signal: this.controller.signal,
-					});
+					const extra = await this.runner.native(
+						() =>
+							this.spec.fallback?.({
+								kind: "takeover" as const,
+								consultId: this.consultId,
+								brief: this.spec.brief,
+								paths: this.paths,
+								requests: this.spec.requests,
+								results,
+								signal: this.controller.signal,
+								environment: this.spec.environment,
+								timeoutMs: this.spec.timeoutMs,
+							}) ?? Promise.resolve(undefined),
+						this.controller.signal,
+					);
 					if (extra) {
 						this.feed.register("fallback");
 						this.feed.event("fallback", "native fallback took over the consultation");

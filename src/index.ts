@@ -70,15 +70,17 @@ export class ConsultExtension {
 		const nativeFallback = new NativeFallbackService({
 			settings: () => ConsultConfig.load(store).fallback,
 			models: () => fallbackModels,
-			native: () =>
-				live
+			native: (environment) => {
+				const registry = (environment as { modelRegistry?: object }).modelRegistry;
+				return registry
 					? new NativeConsultant({
-							registry: live.modelRegistry,
+							registry: registry as never,
 							broker,
 							artifacts,
 							systemPrompt: () => new BriefComposer().systemPrompt(),
 						})
-					: undefined,
+					: undefined;
+			},
 			classifier: failureClassifier,
 			bridge: () => ConsultConfig.load(store).drive.enabled,
 		});

@@ -15,7 +15,6 @@ import type {
 	ExtensionToolContext,
 } from "@earendil-works/pi-coding-agent";
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
 import { Type } from "typebox";
@@ -87,7 +86,7 @@ export interface ConsultToolDeps {
 			signal: AbortSignal;
 			environment: object;
 			timeoutMs: number;
-		} & NativeStart,
+		} & ({ kind: "takeover" } | { kind: "resume"; metadata: FallbackMetadata; messages: unknown[] }),
 	) => Promise<ConsultantResult | undefined>;
 }
 
@@ -310,6 +309,20 @@ export class ConsultTool {
 		const spec = await this.spec(
 			consultId, sessionId, params, targets, composed, continuation, paths, ctx, nativeResume);
 		const invocation = await this.deps.supervisor.start(spec);
+		if (nativeResume) {
+			// The native resume refuses loudly when the fallback is disabled
+			// or its pinned model no longer resolves; an empty consultation
+			// would silently claim a continuation that never ran.
+			invocation.done().then(() => undefined).catch(() => undefined);
+			const settled = await invocation.done();
+			if (!settled.some((run) => run.consultant === "fallback")) {
+				return this.failure(
+					ctx,
+					`the native continuation of ${params.continue} could not run: the fallback ` +
+						"is disabled or its saved model is no longer available",
+				);
+			}
+		}
 		this.deps.effort?.engage(ctx, consultId);
 		const steps = ctx.mode === "tui" && this.append
 			? new ConsultStepCards(consultId, this.stepAppend(sessionId)) : undefined;
@@ -423,14 +436,16 @@ export class ConsultTool {
 				requests,
 				providerSessions,
 				environment: ctx,
-				timeoutMs: this.deps.config.claude.timeoutMs,
+				timeoutMs: params.timeout_s
+					? params.timeout_s * 1000
+					: this.deps.config.consultant(nativeResume.targets[0] ?? "claude").timeoutMs,
 				fallback: (context) =>
 					this.deps.fallback?.({
 						...context,
-						kind: "resume",
+						kind: "resume" as const,
 						metadata: nativeResume.metadata,
 						messages: nativeResume.messages,
-					} as never),
+					}),
 			};
 		}
 		for (const name of targets) {
@@ -500,26 +515,20 @@ export class ConsultTool {
 		return record ? this.continuationFrom(record.details) : undefined;
 	}
 
-	private continuationFrom(details: ConsultDetails): Continuation {
+	private async continuationFrom(details: ConsultDetails): Promise<Continuation> {
 		const resumeFor = new Map<ConsultantName, { sessionId: string; cwd: string }>();
 		for (const run of details.runs) {
 			if (run.sessionId) {
 				resumeFor.set(run.consultant, { sessionId: run.sessionId, cwd: details.cwd });
 			}
 		}
-		const fallback = details.runs.find(
-			(run) => run.consultant === "fallback" && run.status === "ok" && run.fallback?.conversationPath,
-		);
 		const continuation: Continuation = { consultId: details.consultId, resumeFor };
+		const fallback = details.runs.find(
+			(run) => run.consultant === "fallback" && run.status === "ok" && run.fallback,
+		);
 		if (fallback?.fallback) {
-			try {
-				continuation.fallback = {
-					metadata: fallback.fallback,
-					messages: JSON.parse(readFileSync(fallback.fallback.conversationPath!, "utf8")),
-				};
-			} catch {
-				continuation.fallback = { metadata: fallback.fallback, messages: [] };
-			}
+			const messages = await this.deps.records.conversation(fallback.fallback.conversationPath);
+			continuation.fallback = { metadata: fallback.fallback, messages: messages ?? [] };
 		}
 		return continuation;
 	}
