@@ -34,7 +34,7 @@ import { ConsultSupervisor } from "./consult-supervisor.ts";
 import { ConsultTerminateTool } from "./consult-terminate-tool.ts";
 import { ConsultTool } from "./consult-tool.ts";
 import { ConsultToolOutput } from "./consult-tool-output.ts";
-import { FallbackModels } from "./fallback-models.ts";
+import { FallbackModels, type BoundEnvironment } from "./fallback-models.ts";
 import { NativeFallbackService } from "./native-fallback.ts";
 import { NativeConsultant } from "./native-consultant.ts";
 import { ConsultToolPolicy } from "./consult-tool-policy.ts";
@@ -143,6 +143,17 @@ export class ConsultExtension {
 			bridge,
 			effort,
 			fallback: (context) => nativeFallback.takeover(context),
+			bindEnvironment: (ctx) => {
+				const settings = pi.getSettings();
+				return {
+					modelRegistry: (ctx as { modelRegistry?: BoundEnvironment["modelRegistry"] }).modelRegistry,
+					scopedModels: [...(ctx as { scopedModels?: BoundEnvironment["scopedModels"] }).scopedModels ?? []],
+					defaults: {
+						defaultProvider: settings.defaultProvider,
+						defaultModel: settings.defaultModel,
+					},
+				};
+			},
 		}).register(pi);
 		new ConsultTerminateTool(supervisor, effort).register(pi);
 		new ConsultReplyTool(broker, new SecretScreen()).register(pi);

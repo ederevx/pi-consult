@@ -109,15 +109,18 @@ export class ConsultRecordStore {
 		const wellFormed = parsed.every((message) => {
 			if (typeof message !== "object" || message === null) return false;
 			const record = message as { role?: unknown; content?: unknown; toolCallId?: unknown; toolName?: unknown };
-			if (record.role === "user" || record.role === "assistant") {
-				return Array.isArray(record.content) && record.content.every(ConsultRecordStore.isTextBlock);
+			if (record.role === "user") {
+				return Array.isArray(record.content) && record.content.every(ConsultRecordStore.isText);
+			}
+			if (record.role === "assistant") {
+				return Array.isArray(record.content) && record.content.every(ConsultRecordStore.isAssistantBlock);
 			}
 			if (record.role === "toolResult") {
 				return (
 					typeof record.toolCallId === "string" &&
 					typeof record.toolName === "string" &&
 					Array.isArray(record.content) &&
-					record.content.every(ConsultRecordStore.isTextBlock)
+					record.content.every(ConsultRecordStore.isText)
 				);
 			}
 			return false;
@@ -251,21 +254,29 @@ export class ConsultRecordStore {
 		};
 	}
 
-	/** A content block this owner persists: text, or a tool call with
-	 *  string id, name, and object arguments. */
-	private static isTextBlock(block: unknown): boolean {
+	/** A user or tool-result content block: text only. */
+	private static isText(block: unknown): boolean {
 		if (typeof block !== "object" || block === null) return false;
-		const part = block as { type?: unknown; text?: unknown; id?: unknown; name?: unknown; arguments?: unknown };
+		const part = block as { type?: unknown; text?: unknown };
+		return part.type === "text" && typeof part.text === "string";
+	}
+
+	/** An assistant content block: text, thinking with its text, or a
+	 *  tool call with string id, string name, and object arguments. */
+	private static isAssistantBlock(block: unknown): boolean {
+		if (typeof block !== "object" || block === null) return false;
+		const part = block as { type?: unknown; text?: unknown; thinking?: unknown; id?: unknown; name?: unknown; arguments?: unknown };
 		if (part.type === "text") return typeof part.text === "string";
+		if (part.type === "thinking") return typeof part.thinking === "string";
 		if (part.type === "toolCall") {
 			return (
 				typeof part.id === "string" &&
 				typeof part.name === "string" &&
 				typeof part.arguments === "object" &&
-				part.arguments !== null
+				part.arguments !== null &&
+				!Array.isArray(part.arguments)
 			);
 		}
-		if (part.type === "thinking") return true;
 		return false;
 	}
 
