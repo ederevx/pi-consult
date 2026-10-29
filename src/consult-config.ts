@@ -54,6 +54,8 @@ export interface DriveSettings {
 	deadlineMs: number;
 	/** Which tools pi may be asked to run for a consultant. */
 	tools: DriveToolSettings;
+	/** Request admission bound per invocation, so replay history stays bounded. */
+	maxRequestsPerInvocation: number;
 }
 
 /** The consultant-requested tool policy's configurable values. */
@@ -77,6 +79,7 @@ export class ConsultConfig {
 		"transcript_read",
 	];
 	private static readonly DEFAULT_DRIVE_TOOLS_ALLOW = ["read", "grep", "find", "ls", "bash"];
+	static readonly DEFAULT_DRIVE_MAX_REQUESTS = 256;
 
 	readonly enabled: boolean;
 	readonly confirmFirstConsult: boolean;
@@ -127,6 +130,10 @@ export class ConsultConfig {
 			tools: {
 				allow: toolAllow.length > 0 ? toolAllow : [...ConsultConfig.DEFAULT_DRIVE_TOOLS_ALLOW],
 			},
+			maxRequestsPerInvocation: ConsultConfig.positiveNumber(
+				drive.maxRequestsPerInvocation,
+				ConsultConfig.DEFAULT_DRIVE_MAX_REQUESTS,
+			),
 		};
 
 		this.claude = ConsultConfig.consultantSettings(

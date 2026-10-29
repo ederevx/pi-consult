@@ -7,7 +7,10 @@
  * invocation, and resolves every request exactly once. It is the only place
  * a pending consultation request lives. A request is either a prose question
  * or a named-tool request; the agent services a tool request through
- * `consult_execute`, which claims it atomically before execution.
+ * `consult_execute`, which claims it atomically before execution. Settling a
+ * response never frees a claimed request's execution slot: only the executor
+ * that ran the tool releases it, so an abort-ignoring tool cannot overlap the
+ * next request. Replay records live per invocation and leave with it.
  */
 
 import { randomUUID } from "node:crypto";
@@ -22,6 +25,8 @@ export interface DriveOutcome {
 	answer?: string;
 	/** The executed tool reported failure; the answer text is its output. */
 	isError?: boolean;
+	/** The answer text was cut to fit the answer bound. */
+	truncated?: boolean;
 }
 
 /** What a request asks of the agent: a prose question or a named tool. */
@@ -54,16 +59,26 @@ interface Remembered {
 }
 
 export class ConsultRequestBroker {
-	private static readonly MAX_HISTORY = 256;
 	private readonly dispatcher: ConsultDriveDispatcher;
 	private readonly deadlineMs: number;
+	/** How many requests one invocation may make before further ones are busy. */
+	private readonly maxRequestsPerInvocation: number;
 	private readonly pending = new Map<string, Pending>();
 	private readonly keys = new Map<string, string>();
 	private readonly history = new Map<string, Remembered>();
+	/** requestId -> invocationId for claims whose response settled early. */
+	private readonly executing = new Map<string, string>();
+	/** invocationId -> requests admitted, pending and settled, until revoked. */
+	private readonly admitted = new Map<string, number>();
 
-	constructor(dispatcher: ConsultDriveDispatcher, deadlineMs: number) {
+	constructor(
+		dispatcher: ConsultDriveDispatcher,
+		deadlineMs: number,
+		maxRequestsPerInvocation: number = 256,
+	) {
 		this.dispatcher = dispatcher;
 		this.deadlineMs = Math.max(100, deadlineMs);
+		this.maxRequestsPerInvocation = Math.max(1, maxRequestsPerInvocation);
 	}
 
 	/**
@@ -98,8 +113,8 @@ export class ConsultRequestBroker {
 		if (this.outstanding(invocationId) > 0) {
 			return Promise.resolve({ status: "busy", answer: "the pi agent is already answering a request" });
 		}
-		if (this.history.size >= ConsultRequestBroker.MAX_HISTORY) {
-			return Promise.resolve({ status: "busy", answer: "the request history is full" });
+		if ((this.admitted.get(invocationId) ?? 0) >= this.maxRequestsPerInvocation) {
+			return Promise.resolve({ status: "busy", answer: "this invocation reached its request limit" });
 		}
 
 		const request: DriveRequest = {
@@ -118,7 +133,7 @@ export class ConsultRequestBroker {
 			this.settle(request.requestId, { status: "deadline_exceeded" });
 		}, this.deadlineMs);
 		timer.unref?.();
-		const pending: Pending = {
+		const entry: Pending = {
 			request,
 			key,
 			payload: settled,
@@ -127,8 +142,9 @@ export class ConsultRequestBroker {
 			timer,
 			claimed: false,
 		};
-		this.pending.set(request.requestId, pending);
+		this.pending.set(request.requestId, entry);
 		this.keys.set(key, request.requestId);
+		this.admitted.set(invocationId, (this.admitted.get(invocationId) ?? 0) + 1);
 		this.dispatcher.dispatch(request, settled);
 		return promise;
 	}
@@ -141,10 +157,10 @@ export class ConsultRequestBroker {
 	}
 
 	/** Resolve one pending request with the agent's answer. A claimed tool
-	 *  request is answered only by the executor's finish, never here. */
+	 *  request is answered only by the executor that claimed it. */
 	reply(requestId: string, status: DriveStatus, answer?: string): boolean {
-		const pending = this.pending.get(requestId);
-		if (pending?.claimed) return false;
+		const entry = this.pending.get(requestId);
+		if (entry?.claimed) return false;
 		return this.settle(requestId, { status, answer });
 	}
 
@@ -155,33 +171,44 @@ export class ConsultRequestBroker {
 	 * abort-ignoring tool cannot overlap the next request.
 	 */
 	claimTool(requestId: string): ToolClaim | undefined {
-		const pending = this.pending.get(requestId);
-		if (!pending || pending.claimed || pending.payload.kind !== "tool") return undefined;
-		pending.claimed = true;
-		pending.controller = new AbortController();
+		const entry = this.pending.get(requestId);
+		if (!entry || entry.claimed || entry.payload.kind !== "tool") return undefined;
+		entry.claimed = true;
+		entry.controller = new AbortController();
 		return {
-			request: pending.request,
-			payload: pending.payload,
-			signal: pending.controller.signal,
+			request: entry.request,
+			payload: entry.payload,
+			signal: entry.controller.signal,
 		};
 	}
 
-	/** Deliver an executed tool's outcome to the waiting consultant. */
+	/** Deliver an executed tool's outcome, then free its execution slot.
+	 *  Only a claimed tool request may be finished here; a settled response
+	 *  with a late result reports false without disturbing the record. */
 	finishTool(requestId: string, outcome: DriveOutcome): boolean {
-		return this.settle(requestId, outcome);
+		const entry = this.pending.get(requestId);
+		if (!entry || !entry.claimed || entry.payload.kind !== "tool") {
+			// The response settled early (deadline, cancel); the slot still goes,
+			// because this call is the executor reporting its run has ended.
+			this.executing.delete(requestId);
+			return false;
+		}
+		const delivered = this.settle(requestId, outcome);
+		this.executing.delete(requestId);
+		return delivered;
 	}
 
 	/** Give up a claim without answering; the request stays pending. */
 	releaseTool(requestId: string): void {
-		const pending = this.pending.get(requestId);
-		if (!pending) return;
-		pending.claimed = false;
-		pending.controller = undefined;
+		const entry = this.pending.get(requestId);
+		if (!entry) return;
+		entry.claimed = false;
+		entry.controller = undefined;
 	}
 
 	/** Every request still waiting for the agent. */
 	list(): DriveRequest[] {
-		return [...this.pending.values()].map((pending) => pending.request);
+		return [...this.pending.values()].map((entry) => entry.request);
 	}
 
 	/** Whether a pending request asks for a named tool run. */
@@ -189,13 +216,33 @@ export class ConsultRequestBroker {
 		return this.pending.get(requestId)?.payload.kind === "tool";
 	}
 
-	/** How many requests this invocation has outstanding. */
+	/** How many requests this invocation has outstanding: waiting for the
+	 *  agent, or claimed and still executing. */
 	outstanding(invocationId: string): number {
 		let count = 0;
-		for (const pending of this.pending.values()) {
-			if (pending.request.invocationId === invocationId) count += 1;
+		for (const entry of this.pending.values()) {
+			if (entry.request.invocationId === invocationId) count += 1;
+		}
+		for (const owner of this.executing.values()) {
+			if (owner === invocationId) count += 1;
 		}
 		return count;
+	}
+
+	/** Drop one invocation: its capability is gone, so its replay records,
+	 *  counters, and any still-pending requests go with it. Pending requests
+	 *  settle first, because settling records their history; the retirement
+	 *  then removes every trace of the invocation. */
+	forget(invocationId: string): void {
+		for (const entry of [...this.pending.values()]) {
+			if (entry.request.invocationId === invocationId) {
+				this.settle(entry.request.requestId, { status: "unavailable", answer: "the invocation ended" });
+			}
+		}
+		for (const key of [...this.history.keys()]) {
+			if (key.startsWith(`${invocationId}\u0000`)) this.history.delete(key);
+		}
+		this.admitted.delete(invocationId);
 	}
 
 	/** Resolve every outstanding request, when the host is ending. */
@@ -203,27 +250,26 @@ export class ConsultRequestBroker {
 		for (const requestId of [...this.pending.keys()]) {
 			this.settle(requestId, { status: "unavailable", answer: "the pi host stopped" });
 		}
+		this.executing.clear();
 	}
 
 	private settle(requestId: string, outcome: DriveOutcome): boolean {
-		const pending = this.pending.get(requestId);
-		if (!pending) return false;
-		clearTimeout(pending.timer);
+		const entry = this.pending.get(requestId);
+		if (!entry) return false;
+		clearTimeout(entry.timer);
 		this.pending.delete(requestId);
-		this.keys.delete(pending.key);
-		pending.controller?.abort();
-		this.remember(pending.key, { payload: pending.payload, outcome });
-		pending.resolve(outcome);
+		this.keys.delete(entry.key);
+		entry.controller?.abort();
+		// A claimed execution outlives its response; the slot is freed by
+		// finishTool once the tool run itself settles.
+		if (entry.claimed && entry.payload.kind === "tool") this.executing.set(requestId, entry.request.invocationId);
+		this.remember(entry.key, { payload: entry.payload, outcome });
+		entry.resolve(outcome);
 		return true;
 	}
 
 	private remember(key: string, record: Remembered): void {
 		this.history.set(key, record);
-		while (this.history.size > ConsultRequestBroker.MAX_HISTORY) {
-			const oldest = this.history.keys().next();
-			if (oldest.done) break;
-			this.history.delete(oldest.value);
-		}
 	}
 
 	/** Whether two payloads name the same request; kind and content both count. */
