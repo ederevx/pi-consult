@@ -98,7 +98,13 @@ export class NativeFallbackService {
 		return {
 			consultant: "fallback",
 			fallback: native.metadata(outcome, fallbackFor, selected),
-			status: outcome.status === "aborted" ? "aborted" : outcome.status === "ok" ? "ok" : "error",
+			status: outcome.status === "ok"
+				? "ok"
+				: outcome.status === "aborted"
+					? "aborted"
+					: outcome.status === "timeout"
+						? "timeout"
+						: "error",
 			answer: outcome.answer,
 			partial: outcome.status !== "ok",
 			durationMs: outcome.durationMs,

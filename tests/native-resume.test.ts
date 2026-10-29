@@ -3,7 +3,7 @@ import { FallbackModels } from "../src/fallback-models.ts";
 import { FailureClassifier } from "../src/failure-classifier.ts";
 import { NativeConsultant, type NativeStream } from "../src/native-consultant.ts";
 import { NativeFallbackService } from "../src/native-fallback.ts";
-import { assertEq, scratchDir, test } from "./harness.ts";
+import { assert, assertEq, scratchDir, test } from "./harness.ts";
 import { join } from "node:path";
 import { readFileSync } from "node:fs";
 
@@ -143,4 +143,103 @@ test("native fallback: force does not bypass the enablement or the model", async
 		undefined,
 		"an unresolvable saved model refuses the resume",
 	);
+});
+
+test("record store: malformed fallback transcripts never resume", async () => {
+	const { ConsultRecordStore } = await import("../src/consult-record-store.ts");
+	const { ArtifactStore } = await import("../src/artifact-store.ts");
+	const artifacts = new ArtifactStore(join(scratchDir(), `mal-${Date.now()}`));
+	const store = new ConsultRecordStore(artifacts);
+	const paths = await artifacts.prepare("s", "c-afa111222333");
+	const cases: Array<[string, unknown]> = [
+		["malformed-role", [{ role: "bogus" }]],
+		["missing-content", [{ role: "assistant" }]],
+		["malformed-tool-result", [{ role: "toolResult", toolCallId: 1 }]],
+		["nonarray", { role: "user", content: [] }],
+	];
+	for (const [name, payload] of cases) {
+		const file = join(paths.dir, `${name}.json`);
+		await artifacts.write(file, JSON.stringify(payload));
+		assertEq(await store.conversation(file), undefined, `${name} never resumes`);
+	}
+	assertEq(await store.conversation(join(paths.dir, "absent.json")), undefined,
+		"a missing transcript never resumes");
+	await artifacts.write(join(paths.dir, "good.json"), JSON.stringify([
+		{ role: "user", content: [{ type: "text", text: "hi" }] },
+		{ role: "toolResult", toolCallId: "c1", toolName: "drive_pi", content: [], isError: false },
+	]));
+	assert((await store.conversation(join(paths.dir, "good.json"))) !== undefined,
+		"a well-formed transcript resumes");
+});
+
+test("native consultant: a deadline expiry reports timeout, a cancellation aborted", async () => {
+	const { NativeConsultant } = await import("../src/native-consultant.ts");
+	const { ArtifactStore } = await import("../src/artifact-store.ts");
+	const artifacts = new ArtifactStore(join(scratchDir(), `tmo-${Date.now()}`));
+	const paths = await artifacts.prepare("s", "c-aga111222333");
+	// A stream that never resolves: only the bound can end the loop.
+	const hanging = { streamSimple: () => ({ result: () => new Promise(() => undefined) }) };
+	const consultant = new NativeConsultant({
+		registry: hanging as never,
+		broker: { submit: async () => ({ status: "answered", answer: "x" }) } as never,
+		artifacts,
+		systemPrompt: () => "p",
+	});
+	const timed = await consultant.consult(
+		{ provider: "one", id: "fast", name: "Fast" },
+		"c-aga111222333",
+		"b",
+		paths,
+		new AbortController().signal,
+		{ timeoutMs: 50, maxRounds: 2, bridge: false },
+	);
+	assertEq(timed.status, "timeout", "a deadline expiry alone is a timeout");
+	const controller = new AbortController();
+	const cancelled = consultant.consult(
+		{ provider: "one", id: "fast", name: "Fast" },
+		"c-aga111222333",
+		"b",
+		paths,
+		controller.signal,
+		{ timeoutMs: 5000, maxRounds: 2, bridge: false },
+	);
+	controller.abort();
+	assertEq((await cancelled).status, "aborted", "the caller's cancellation is aborted");
+});
+
+test("native consultant: a failed run reports no responder it never had", async () => {
+	const { NativeConsultant } = await import("../src/native-consultant.ts");
+	const { ArtifactStore } = await import("../src/artifact-store.ts");
+	const artifacts = new ArtifactStore(join(scratchDir(), "res-${Date.now()}"));
+	const paths = await artifacts.prepare("s", "c-aha111222333");
+	const failing = {
+		streamSimple: () => ({
+			result: async () => ({
+				role: "assistant",
+				content: [{ type: "text", text: "partial" }],
+				usage: undefined,
+				stopReason: "error",
+				errorMessage: "quota exhausted",
+				provider: "one",
+				model: "fast",
+			}),
+		}),
+	};
+	const consultant = new NativeConsultant({
+		registry: failing as never,
+		broker: { submit: async () => ({ status: "answered", answer: "x" }) } as never,
+		artifacts,
+		systemPrompt: () => "p",
+	});
+	const outcome = await consultant.consult(
+		{ provider: "one", id: "fast", name: "Fast" },
+		"c-aha111222333",
+		"b",
+		paths,
+		new AbortController().signal,
+		{ timeoutMs: 5000, maxRounds: 2, bridge: false },
+	);
+	assertEq(outcome.status, "error");
+	assertEq(outcome.error, "quota exhausted");
+	assertEq(outcome.servedBy.join(","), "one/fast", "the identities that answered are disclosed");
 });
