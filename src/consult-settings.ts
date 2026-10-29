@@ -148,12 +148,24 @@ export class ConsultSettings {
 	}
 
 	/**
-	 * Open pi's settings dock; when no TUI can host it, list the settings
-	 * instead, so the command always answers.
+	 * Open pi's settings dock; when no TUI can host it, or presentation fails,
+	 * answer with the listing so the command always does something. A failure
+	 * says why: a silent fallback reads as the command doing nothing.
 	 */
 	private async present(ctx: ExtensionCommandContext): Promise<void> {
 		const presented = await new ConsultSettingsPresenter(this).present(ctx);
-		if (!presented) this.notify(ctx, this.listing());
+		if (presented.shown) return;
+		if ("failure" in presented) {
+			this.notify(
+				ctx,
+				`pi-consult: settings presentation failed: ${presented.failure}\n` +
+					`${this.listing()}\n` +
+					"change them with /consult-settings <key>=<value>.",
+				"error",
+			);
+			return;
+		}
+		this.notify(ctx, this.listing());
 	}
 
 	/** A stored value as the surface displays and seeds it. */

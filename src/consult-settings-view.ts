@@ -23,6 +23,9 @@ import {
 /** Reports an accepted in-place value change for one row. */
 export type SettingsChange = (id: string, value: string) => void;
 
+/** Reports a row failure, so one bad row does not end the dock. */
+export type SettingsFailure = (message: string) => void;
+
 /** The subset of pi's Theme the view styles with. */
 export interface ViewTheme {
 	fg(color: "accent" | "muted" | "dim" | "border", text: string): string;
@@ -33,6 +36,7 @@ export class ConsultSettingsView extends Container implements Focusable {
 	private static readonly MAX_VISIBLE = 10;
 
 	private readonly list: SettingsList;
+	private readonly onFailure: SettingsFailure;
 	private focusedFlag = false;
 	/** The submenu currently open, so focus can follow the input. */
 	private active: Component | undefined;
@@ -42,8 +46,10 @@ export class ConsultSettingsView extends Container implements Focusable {
 		theme: ViewTheme,
 		onChange: SettingsChange,
 		onCancel: () => void,
+		onFailure: SettingsFailure = () => undefined,
 	) {
 		super();
+		this.onFailure = onFailure;
 		// SettingsList mutates the items it is given, so it owns its own copies.
 		const owned = items.map((item) => this.adopt(item));
 		this.list = new SettingsList(
@@ -71,7 +77,11 @@ export class ConsultSettingsView extends Container implements Focusable {
 
 	/** Forward focus input to the list; the Container base has none. */
 	handleInput(data: string): void {
-		this.list.handleInput(data);
+		try {
+			this.list.handleInput(data);
+		} catch (failure) {
+			this.onFailure(failure instanceof Error ? failure.message : String(failure));
+		}
 	}
 
 	/** Replace the displayed values with the latest committed ones. */

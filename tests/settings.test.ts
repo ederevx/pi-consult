@@ -6,7 +6,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { ConsultConfig } from "../src/consult-config.ts";
 import { ConsultSettings } from "../src/consult-settings.ts";
 import { ConsultSettingsStore } from "../src/consult-settings-store.ts";
-import { assertEq, assertIncludes, scratchDir, test } from "./harness.ts";
+import { assert, assertEq, assertIncludes, scratchDir, test } from "./harness.ts";
 
 /** A unique scratch directory for a settings-document test. */
 function scratch(name: string): string {
@@ -203,4 +203,55 @@ test("settings: warns when a retired pi-consult.json exists and the namespace do
 	const clean = scratch("settings-warn-clean");
 	const quiet = new ConsultSettings(new ConsultSettingsStore(join(clean, "settings.json")));
 	assertEq(sessionStart(quiet).length, 0, "no notice without a legacy source");
+});
+
+/** Run the registered command handler and capture what it reports. */
+async function runCommand(
+	store: ConsultSettings,
+	ctx: Record<string, unknown>,
+): Promise<Array<{ text: string; level: string }>> {
+	const notifications: Array<{ text: string; level: string }> = [];
+	let handler: ((args: string, ctx: unknown) => Promise<void>) | undefined;
+	const pi = {
+		on: () => undefined,
+		registerCommand: (name: string, options: { handler: typeof handler }) => {
+			if (name === "consult-settings") handler = options.handler;
+		},
+	} as unknown as ExtensionAPI;
+	store.register(pi);
+	assert(handler !== undefined, "consult-settings is registered");
+	await handler("", {
+		...ctx,
+		ui: {
+			...(ctx.ui as Record<string, unknown> | undefined),
+			notify: (text: string, level: string) => notifications.push({ text, level }),
+		},
+	});
+	return notifications;
+}
+
+test("settings: a dock that cannot open says why and still lists every setting", async () => {
+	const { store } = make("settings-dock-failure");
+	const notifications = await runCommand(store, {
+		hasUI: true,
+		mode: "tui",
+		ui: {
+			custom: () => {
+				throw new Error("no dock here");
+			},
+		},
+	});
+	assertEq(notifications.length, 1, "one answer, not a silent no-op");
+	assertEq(notifications[0].level, "error");
+	assertIncludes(notifications[0].text, "no dock here");
+	assertIncludes(notifications[0].text, "enabled = on", "the listing still answers");
+});
+
+test("settings: without a TUI the command lists the settings", async () => {
+	const { store } = make("settings-dock-headless");
+	const notifications = await runCommand(store, { hasUI: false });
+	assertEq(notifications.length, 1);
+	assertEq(notifications[0].level, "info");
+	assertIncludes(notifications[0].text, "enabled = on");
+	assertEq(notifications[0].text.includes("presentation failed"), false, "no failure wording");
 });
