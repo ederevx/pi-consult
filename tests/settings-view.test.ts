@@ -51,7 +51,7 @@ interface Mounted {
 	view: ConsultSettingsView;
 	notifications: Array<{ message: string; kind?: string }>;
 	/** Resolves when the dock's outer completion callback runs. */
-	outcome: Promise<boolean>;
+	outcome: Promise<unknown>;
 	completed(): boolean;
 }
 
@@ -161,7 +161,7 @@ test("settings dock: a flag cycles in place and writes once", async () => {
 	assertEq(stored(file).piConsult.enabled, true, "the second cycle writes back");
 	assertEq(mounted.completed(), false, "the dock stays open");
 	mounted.view.handleInput("\u001b");
-	assertEq(await mounted.outcome, true, "Escape completes the dock");
+	assertEq(JSON.stringify(await mounted.outcome), JSON.stringify({ shown: true }), "Escape completes the dock");
 	assertEq(mounted.completed(), true);
 });
 
@@ -283,22 +283,138 @@ test("settings dock: the view pushes focus into the editor it opens", () => {
 test("settings dock: no TUI means the caller lists the settings instead", async () => {
 	const { settings } = make("dock-fallback");
 	const presenter = (): ConsultSettingsPresenter => new ConsultSettingsPresenter(settings);
-	assertEq(await presenter().present({ hasUI: false, mode: "tui", ui: {} } as never), false, "no UI");
-	assertEq(await presenter().present({ hasUI: true, mode: "print", ui: {} } as never), false, "print mode");
-	assertEq(await presenter().present({ hasUI: true, mode: "tui", ui: {} } as never), false, "no custom");
+	const absent = { shown: false };
 	assertEq(
-		await presenter().present({
-			hasUI: true,
-			mode: "tui",
-			ui: {
-				custom: (): never => {
-					throw new Error("no dock here");
+		JSON.stringify(await presenter().present({ hasUI: false, mode: "tui", ui: {} } as never)),
+		JSON.stringify(absent),
+		"no UI",
+	);
+	assertEq(
+		JSON.stringify(await presenter().present({ hasUI: true, mode: "print", ui: {} } as never)),
+		JSON.stringify(absent),
+		"print mode",
+	);
+	assertEq(
+		JSON.stringify(await presenter().present({ hasUI: true, mode: "tui", ui: {} } as never)),
+		JSON.stringify(absent),
+		"no custom",
+	);
+	assertEq(
+		JSON.stringify(await presenter().present({ hasUI: true, mode: "tui" } as never)),
+		JSON.stringify(absent),
+		"no ui at all",
+	);
+	assertNotIncludes("", "unused", "the assertion helpers stay wired");
+});
+
+test("settings dock: a failed presentation reports why instead of a silent fallback", async () => {
+	const { settings } = make("dock-mount-failure");
+	const presented = await new ConsultSettingsPresenter(settings).present({
+		hasUI: true,
+		mode: "tui",
+		ui: {
+			custom: (): never => {
+				throw new Error("no dock here");
+			},
+		},
+	} as never);
+	assertEq(presented.shown, false);
+	assertIncludes(
+		"failure" in presented ? presented.failure : "",
+		"no dock here",
+		"the presentation failure is carried out, not swallowed",
+	);
+});
+
+test("settings dock: a row that cannot run is reported and the dock survives", () => {
+	const reported: string[] = [];
+	const view = new ConsultSettingsView(
+		[
+			{
+				id: "broken",
+				label: "Broken",
+				currentValue: "1",
+				submenu: (): never => {
+					throw new Error("theme not initialized");
 				},
 			},
-		} as never),
-		false,
-		"a throwing mount falls back",
+		],
+		plainTheme,
+		() => undefined,
+		() => undefined,
+		(message) => reported.push(message),
 	);
-	assertEq(await presenter().present({ hasUI: true, mode: "tui" } as never), false, "no ui at all");
-	assertNotIncludes("", "unused", "the assertion helpers stay wired");
+	view.handleInput(" ");
+	assertEq(reported.length, 1, "the failure is reported once");
+	assertIncludes(reported[0], "theme not initialized");
+	view.handleInput(" ");
+	assertEq(reported.length, 2, "the dock keeps taking input afterwards");
+});
+
+test("settings dock: the presenter reports a catalog failure instead of notifying", async () => {
+	const { settings } = make("dock-row-failure");
+	const presenter = new ConsultSettingsPresenter(settings);
+	// The catalog is the presenter's own owner; a failure there is a
+	// presentation failure the command must answer for.
+	presenter.items = (): never => {
+		throw new Error("catalog unavailable");
+	};
+	const notifications: Array<{ message: string; kind?: string }> = [];
+	const presented = await presenter.present({
+		hasUI: true,
+		mode: "tui",
+		ui: {
+			custom: (
+				factory: (t: unknown, th: unknown, k: unknown, done: () => void) => ConsultSettingsView,
+			): Promise<unknown> =>
+				new Promise((resolve) => {
+					factory(undefined, plainTheme, undefined, () => resolve(undefined));
+				}),
+			notify: (message: string, kind?: string): void => {
+				notifications.push({ message, kind });
+			},
+		},
+	} as never);
+	assertEq(presented.shown, false, "a catalog failure is a presentation failure");
+	assertIncludes("failure" in presented ? presented.failure : "", "catalog unavailable");
+	assertEq(notifications.length, 0, "the presenter itself does not notify a presentation failure");
+});
+
+test("settings dock: a row failure reaches the presenter's own notify", async () => {
+	const { settings } = make("dock-row-notify");
+	const presenter = new ConsultSettingsPresenter(settings);
+	const broken = [
+		{
+			id: "broken",
+			label: "Broken",
+			currentValue: "1",
+			submenu: (): never => {
+				throw new Error("theme not initialized");
+			},
+		},
+	];
+	presenter.items = () => broken as never;
+	const notifications: Array<{ message: string; kind?: string }> = [];
+	let view: ConsultSettingsView | undefined;
+	const presented = presenter.present({
+		hasUI: true,
+		mode: "tui",
+		ui: {
+			custom: (
+				factory: (t: unknown, th: unknown, k: unknown, done: () => void) => ConsultSettingsView,
+			): Promise<unknown> =>
+				new Promise((resolve) => {
+					view = factory(undefined, plainTheme, undefined, () => resolve(undefined));
+				}),
+			notify: (message: string, kind?: string): void => {
+				notifications.push({ message, kind });
+			},
+		},
+	} as never);
+	view?.handleInput(" ");
+	assertEq(notifications.length, 1, "production wiring reports the row failure");
+	assertEq(notifications[0].kind, "error");
+	assertIncludes(notifications[0].message, "theme not initialized");
+	view?.handleInput("\u001b");
+	assertEq(JSON.stringify(await presented), JSON.stringify({ shown: true }), "the dock still closes");
 });
