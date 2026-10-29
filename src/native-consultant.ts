@@ -122,20 +122,29 @@ export class NativeConsultant {
 		try {
 			for (let round = 0; round < config.maxRounds; round += 1) {
 				if (deadline.aborted) throw new Error("aborted");
-				// The bound races the stream itself: a registry that ignores
-				// the signal still cannot outlive its deadline.
-				const answer = await Promise.race([
-					this.registry
-						.streamSimple(model, {
-							systemPrompt: this.systemPrompt(),
-							messages,
-							tools,
-						}, { signal: deadline })
-						.result(),
-					new Promise<never>((_, reject) => {
-						deadline.addEventListener("abort", () => reject(new Error("aborted by the caller")), { once: true });
-					}),
-				]);
+				// The deadline bounds the wait; it cannot stop a provider that
+				// ignores cancellation, but the loop never outlives its bound.
+				const onDeadline = (): void => rejectDeadline(new Error("aborted by the caller"));
+				let rejectDeadline!: (error: Error) => void;
+				const expired_ = new Promise<never>((_, reject) => {
+					rejectDeadline = reject;
+					deadline.addEventListener("abort", onDeadline, { once: true });
+				});
+				if (deadline.aborted) onDeadline();
+				try {
+					var answer = await Promise.race([
+						this.registry
+							.streamSimple(model, {
+								systemPrompt: this.systemPrompt(),
+								messages,
+								tools,
+							}, { signal: deadline })
+							.result(),
+						expired_,
+					]);
+				} finally {
+					deadline.removeEventListener("abort", onDeadline);
+				}
 				const identity = `${answer.provider}/${answer.model}`;
 				if (!serving.has(identity)) {
 					serving.set(identity, { provider: answer.provider, model: answer.model });
@@ -283,18 +292,20 @@ export class NativeConsultant {
 			clientRequestId,
 			payload,
 		);
-		const abort = new Promise<never>((_, reject) => {
-			signal.addEventListener("abort", () => reject(new Error("aborted by the caller")), { once: true });
+		let rejectAbort!: (error: Error) => void;
+		const onCancelled = (): void => rejectAbort(new Error("aborted by the caller"));
+		const cancelled = new Promise<never>((_, reject) => {
+			rejectAbort = reject;
+			signal.addEventListener("abort", onCancelled, { once: true });
 		});
-		const stop = (): void => signal.removeEventListener("abort", () => undefined);
 		let outcome;
 		try {
-			outcome = await Promise.race([waiter, abort]);
+			outcome = await Promise.race([waiter, cancelled]);
 		} catch (failure) {
 			this.broker.cancel(invocationId, clientRequestId);
 			throw failure;
 		} finally {
-			stop();
+			signal.removeEventListener("abort", onCancelled);
 		}
 		const text = outcome.answer ?? `[${outcome.status}]`;
 		return result(text, outcome.status !== "answered" || outcome.isError === true);
