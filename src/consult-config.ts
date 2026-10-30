@@ -13,7 +13,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { ConsultSettingsStore } from "./consult-settings-store.ts";
-import type { ConsultantName } from "./contracts.ts";
+import type { ConsultantName, ReasoningLevel } from "./contracts.ts";
 
 /** How isolated a consultant CLI run is from the user's own agent setup. */
 export type Isolation = "clean" | "inherit";
@@ -55,6 +55,8 @@ export interface FallbackSettings {
 	model?: string;
 	/** The native conversation's tool-round bound. */
 	maxRounds: number;
+	/** The reasoning effort the fallback stream runs at; absent follows pi-ai's default. */
+	reasoning?: ReasoningLevel;
 }
 
 /** Whether, and how long, a consultant may block on the pi agent. */
@@ -160,6 +162,7 @@ export class ConsultConfig {
 				fallback.maxRounds,
 				ConsultConfig.DEFAULT_FALLBACK_MAX_ROUNDS,
 			),
+			reasoning: ConsultConfig.reasoning(fallback.reasoning),
 		};
 
 		this.claude = ConsultConfig.consultantSettings(
@@ -225,6 +228,16 @@ export class ConsultConfig {
 
 	private static effort(value: unknown): Effort | undefined {
 		if (value === "low" || value === "medium" || value === "high" || value === "xhigh") {
+			return value;
+		}
+		return undefined;
+	}
+
+	private static reasoning(value: unknown): ReasoningLevel | undefined {
+		if (
+			value === "minimal" || value === "low" || value === "medium"
+			|| value === "high" || value === "xhigh" || value === "max"
+		) {
 			return value;
 		}
 		return undefined;
