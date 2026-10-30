@@ -13,6 +13,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { ConsultSettingsStore } from "./consult-settings-store.ts";
+import { REASONING_LEVELS } from "./contracts.ts";
 import type { ConsultantName, ReasoningLevel } from "./contracts.ts";
 
 /** How isolated a consultant CLI run is from the user's own agent setup. */
@@ -234,13 +235,10 @@ export class ConsultConfig {
 	}
 
 	private static reasoning(value: unknown): ReasoningLevel | undefined {
-		if (
-			value === "minimal" || value === "low" || value === "medium"
-			|| value === "high" || value === "xhigh" || value === "max"
-		) {
-			return value;
-		}
-		return undefined;
+		if (typeof value !== "string") return undefined;
+		return (REASONING_LEVELS as readonly string[]).includes(value)
+			? (value as ReasoningLevel)
+			: undefined;
 	}
 
 	private static record(value: unknown): Record<string, unknown> {

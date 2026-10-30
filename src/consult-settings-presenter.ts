@@ -85,11 +85,11 @@ export class ConsultSettingsPresenter {
 				currentValue,
 			};
 			// A cycling row is a flag or a fixed enum; a model row picks from
-			// the live catalogue; a model-driven enum cycles the model's own
-			// levels with the unset state first; everything else is edited as
+			// the live catalogue; a model-driven enum picks the resolved model's
+			// own levels, read when the row opens; everything else is edited as
 			// text.
 			if (spec.valuesFromModel) {
-				item.values = ["default", ...(this.owner.modelLevels?.() ?? [])];
+				item.submenu = (_current, done) => this.levelPicker(spec, done);
 			} else if (spec.values) item.values = [...spec.values];
 			else if (spec.kind === "model") item.submenu = (current, done) => this.picker(spec, current, done);
 			else item.submenu = (current, done) => this.editor(spec, current, done);
@@ -198,12 +198,30 @@ export class ConsultSettingsPresenter {
 				() => done(),
 			);
 		}
+		return this.chooser(spec, options, values, done);
+	}
+
+	/** The live level picker for the model-driven row: the resolved model's
+	 *  own levels, read when the row opens, so a model changed in this session
+	 *  is honoured; the unset state leads, as the cycle row had it. */
+	private levelPicker(spec: SettingSpec, done: SubmenuDone): Component {
+		const levels = this.owner.modelLevels?.() ?? [];
+		return this.chooser(spec, ["Model default", ...levels], ["default", ...levels], done);
+	}
+
+	/** One selector over parallel labels and stored values: apply once, then
+	 *  close; a rejection keeps the selector open and reports. */
+	private chooser(
+		spec: SettingSpec,
+		options: string[],
+		values: string[],
+		done: SubmenuDone,
+	): Component {
 		return new ExtensionSelectorComponent(
 			spec.label,
 			options,
 			(option) => {
-				const value = values[options.indexOf(option)] ?? "";
-				const error = this.apply(spec.key, value);
+				const error = this.apply(spec.key, values[options.indexOf(option)] ?? "");
 				if (error !== undefined) {
 					this.notify(`${spec.label}: ${error}`, "error");
 					return;

@@ -97,7 +97,7 @@ test("settings dock: every setting becomes a row, plus restore", () => {
 		resolve: () => ({
 			value: "one/fast",
 			label: "Fast (one/fast)",
-			model: { provider: "one", id: "fast", name: "Fast", thinkingLevelMap: { low: "low", high: "high" } },
+			model: { provider: "one", id: "fast", name: "Fast", reasoning: true, thinkingLevelMap: { low: "low", high: "high" } },
 		}),
 		unset: () => undefined,
 	});
@@ -113,11 +113,11 @@ test("settings dock: every setting becomes a row, plus restore", () => {
 		"clean,inherit",
 		"an enum cycles its fixed values",
 	);
-	assertEq(
-		items.find((item) => item.id === "fallback.reasoning")?.values?.join(","),
-		"default,minimal,low,medium,high,xhigh,max",
-		"a model-driven enum cycles the model's levels with default first",
-	);
+	const reasoningRow = items.find((item) => item.id === "fallback.reasoning");
+	assertEq(reasoningRow?.values, undefined,
+		"the model-driven row no longer freezes a level list");
+	assertEq(typeof reasoningRow?.submenu, "function",
+		"the model-driven row opens a live picker");
 	assertEq(
 		typeof items.find((item) => item.id === "maxConcurrent")?.submenu,
 		"function",
@@ -128,6 +128,56 @@ test("settings dock: every setting becomes a row, plus restore", () => {
 	assertEq(last.label, "Restore defaults");
 	assertEq(typeof last.submenu, "function");
 	assertEq(last.values, undefined);
+});
+
+test("settings dock: the reasoning row offers the model chosen in this session", () => {
+	const dir = join(scratchDir(), `dock-live-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+	mkdirSync(dir, { recursive: true });
+	const file = join(dir, "settings.json");
+	const store = new ConsultSettingsStore(file);
+	const fast = {
+		provider: "one",
+		id: "fast",
+		name: "Fast",
+		reasoning: true,
+		thinkingLevelMap: { low: "low" },
+	};
+	const deep = {
+		provider: "one",
+		id: "deep",
+		name: "Deep",
+		reasoning: true,
+		thinkingLevelMap: {
+			minimal: null as string | null,
+			low: null as string | null,
+			medium: null as string | null,
+			high: null as string | null,
+			xhigh: null as string | null,
+			max: "max",
+		},
+	};
+	const settings = new ConsultSettings(store, {
+		choices: () => [
+			{ value: "one/fast", label: "Fast (one/fast)" },
+			{ value: "one/deep", label: "Deep (one/deep)" },
+		],
+		defaultChoice: () => ({ value: "one/fast", label: "Fast (one/fast)" }),
+		resolve: (configured?: string) => ({
+			value: configured || "one/fast",
+			label: configured || "one/fast",
+			model: configured === "one/deep" ? deep : fast,
+		}),
+		unset: () => store.unset(["fallback", "model"]),
+	});
+	const presenter = new ConsultSettingsPresenter(settings);
+	const mounted = mount(presenter);
+	assertEq(presenter.apply("fallback.model", "one/deep"), undefined, "the session's model changes");
+	mounted.view.selectItem("fallback.reasoning");
+	mounted.view.handleInput(" ");
+	mounted.view.handleInput("j");
+	mounted.view.handleInput("\n");
+	assertEq(stored(file).piConsult.fallback.reasoning, "max",
+		"the row offers the level only the newly chosen model declares");
 });
 
 test("settings dock: every row is addressable and the pane stays bounded", () => {
