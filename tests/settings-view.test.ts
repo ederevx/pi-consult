@@ -89,7 +89,18 @@ function mount(presenter: ConsultSettingsPresenter): Mounted {
 }
 
 test("settings dock: every setting becomes a row, plus restore", () => {
-	const { settings } = make("dock-rows");
+	const dir = join(scratchDir(), `dock-rows-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+	mkdirSync(dir, { recursive: true });
+	const settings = new ConsultSettings(new ConsultSettingsStore(join(dir, "settings.json")), {
+		choices: () => [],
+		defaultChoice: () => undefined,
+		resolve: () => ({
+			value: "one/fast",
+			label: "Fast (one/fast)",
+			model: { provider: "one", id: "fast", name: "Fast", thinkingLevelMap: { low: "low", high: "high" } },
+		}),
+		unset: () => undefined,
+	});
 	const items = new ConsultSettingsPresenter(settings).items();
 	assertEq(items.length, 25, "24 settings plus the restore action");
 	assertEq(items[0].id, "enabled");
@@ -101,6 +112,11 @@ test("settings dock: every setting becomes a row, plus restore", () => {
 		items.find((item) => item.id === "claude.isolation")?.values?.join(","),
 		"clean,inherit",
 		"an enum cycles its fixed values",
+	);
+	assertEq(
+		items.find((item) => item.id === "fallback.reasoning")?.values?.join(","),
+		"default,minimal,low,medium,high,xhigh,max",
+		"a model-driven enum cycles the model's levels with default first",
 	);
 	assertEq(
 		typeof items.find((item) => item.id === "maxConcurrent")?.submenu,
