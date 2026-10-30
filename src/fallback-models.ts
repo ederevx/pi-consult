@@ -10,6 +10,7 @@
  * model id or provider name is hardcoded here.
  */
 
+import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import type { ThinkingLevelMap } from "@earendil-works/pi-ai";
 import type { ReasoningLevel } from "./contracts.ts";
 import { REASONING_LEVELS } from "./contracts.ts";
@@ -28,6 +29,9 @@ export interface CatalogueModel {
 	provider: string;
 	id: string;
 	name: string;
+	/** Whether the model accepts a reasoning effort at all; pi-ai offers no
+	 *  level without it (pi-ai model schema). */
+	reasoning?: boolean;
 	/** Maps pi thinking levels to provider-specific values; missing keys use
 	 *  the provider default, null marks a level unsupported (pi-ai model schema). */
 	thinkingLevelMap?: ThinkingLevelMap;
@@ -108,15 +112,17 @@ export class FallbackModels {
 	}
 
 	/**
-	 * The reasoning levels the model accepts, read from its thinking map: a
-	 * present non-null key is supported, a missing key uses the provider
-	 * default, and a null key is unsupported. A model with no map offers
-	 * every level pi-ai knows.
+	 * The reasoning levels the model accepts, from pi-ai's own policy: a model
+	 * without reasoning accepts none, a null map entry is unsupported, and
+	 * `xhigh`/`max` count only where the map names them. pi-ai's list also
+	 * carries `off`, which is not one of pi-consult's levels (its stream option
+	 * is pi-ai's `ThinkingLevel`), so the result is narrowed to
+	 * `REASONING_LEVELS` in pi-ai's order.
 	 */
 	static levels(model: CatalogueModel): readonly ReasoningLevel[] {
-		const map = model.thinkingLevelMap;
-		if (!map) return REASONING_LEVELS;
-		const supported = REASONING_LEVELS.filter((level) => map[level] !== null);
-		return supported.length > 0 ? supported : REASONING_LEVELS;
+		// pi-ai's helper reads only `reasoning` and `thinkingLevelMap`; this
+		// owner carries exactly those two, not a whole registry Model.
+		const supported = getSupportedThinkingLevels(model as never);
+		return REASONING_LEVELS.filter((level) => supported.includes(level));
 	}
 }
