@@ -80,8 +80,9 @@ export class AnswerFormatter {
 		const responder = fallback.provider && fallback.model
 			? `${fallback.provider}/${fallback.model}`
 			: "actual responder unavailable";
+		const reasoning = fallback.reasoning ? ` at ${fallback.reasoning} reasoning` : "";
 		return (
-			`Native fallback ${served} this consultation: ${responder}${routed}; ` +
+			`Native fallback ${served} this consultation: ${responder}${routed}${reasoning}; ` +
 			`cost ${amount}; replaced ${fallback.fallbackFor.join(", ")}.`
 		);
 	}

@@ -133,6 +133,70 @@ test("consult settings: a model row without the live catalogue refuses everythin
 	);
 });
 
+test("fallback models: levels come from the model's thinking map", () => {
+	const full = { provider: "one", id: "fast", name: "Fast" };
+	assertEq(
+		FallbackModels.levels(full).join(","),
+		"minimal,low,medium,high,xhigh,max",
+		"a model without a map offers every level",
+	);
+	const mapped = {
+		provider: "one",
+		id: "deep",
+		name: "Deep",
+		thinkingLevelMap: { low: "low", high: "high", xhigh: null as string | null },
+	};
+	assertEq(
+		FallbackModels.levels(mapped).join(","),
+		"minimal,low,medium,high,max",
+		"a null key is unsupported; missing keys use the provider default",
+	);
+	assertEq(FallbackModels.levels(mapped).includes("xhigh"), false, "the nulled level is dropped");
+});
+
+test("fallback config: the reasoning level parses or drops", () => {
+	const set = ConsultConfig.from({ fallback: { reasoning: "high" } }, "/x");
+	assertEq(set.fallback.reasoning, "high");
+	const junk = ConsultConfig.from({ fallback: { reasoning: "extreme" } }, "/x");
+	assertEq(junk.fallback.reasoning, undefined, "an unknown level is dropped, not guessed");
+	const bare = ConsultConfig.from({}, "/x");
+	assertEq(bare.fallback.reasoning, undefined, "unset follows the model's default");
+});
+
+test("consult settings: the reasoning row offers the model's levels", async () => {
+	const file = join(scratchDir(), `lvl-${Math.random().toString(16).slice(2)}.json`);
+	writeFileSync(file, JSON.stringify({ piConsult: { fallback: { model: "one/deep" } } }));
+	const store = new ConsultSettingsStore(file);
+	const settings = new (await import("../src/consult-settings.ts")).ConsultSettings(store, {
+		choices: () => [],
+		defaultChoice: () => undefined,
+		resolve: (configured?: string) =>
+			configured === "one/deep"
+				? {
+						value: "one/deep",
+						label: "Deep (one/deep)",
+						model: { provider: "one", id: "deep", name: "Deep", thinkingLevelMap: { low: "low", high: null as string | null } },
+					}
+				: undefined,
+		unset: () => undefined,
+	});
+	assertEq(settings.apply("fallback.reasoning", "low"), undefined, "a supported level is stored");
+	assertEq(
+		((store.namespace().fallback ?? {}) as { reasoning?: string }).reasoning,
+		"low",
+	);
+	assert(
+		String(settings.apply("fallback.reasoning", "high")).includes("expected one of"),
+		"an unsupported level is refused with the model's list",
+	);
+	assertEq(settings.apply("fallback.reasoning", "default"), undefined, "the unset row clears");
+	assertEq(
+		((store.namespace().fallback ?? {}) as { reasoning?: string }).reasoning,
+		undefined,
+		"the default row removes the override",
+	);
+});
+
 test("fallback models: a bound context without a defaults field resolves nothing", () => {
 	// The command context carries registry and scope but never a defaults
 	// field; the shared binder adds one before any resolution happens, and

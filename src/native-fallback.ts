@@ -10,7 +10,7 @@
 
 import type { ConsultRequest, ConsultantResult, FallbackMetadata, RunParticipant } from "./contracts.ts";
 import type { ConsultPaths } from "./artifact-store.ts";
-import type { FallbackModels } from "./fallback-models.ts";
+import { FallbackModels } from "./fallback-models.ts";
 import type { FallbackSettings } from "./consult-config.ts";
 import type { FailureClassifier } from "./failure-classifier.ts";
 import type { NativeConsultant } from "./native-consultant.ts";
@@ -61,13 +61,17 @@ export class NativeFallbackService {
 	async takeover(context: FallbackContext & NativeStart): Promise<ConsultantResult | undefined> {
 		const settings = this.deps.settings();
 		if (!settings.enabled) return undefined;
+		// Fallback fires only when every requested consultant ran to an eligible
+		// failure: never while one has not produced a terminal result, never
+		// when one succeeded. Disabled consultants never become targets, so the
+		// requested set is the enabled set.
+		const exhausted = context.results.length > 0 && context.results.every(
+			(result) => NativeFallbackService.eligible(result, this.deps.classifier));
 		const fallbackFor = context.kind === "resume"
 			? context.metadata.fallbackFor
-			: context.results.some((result) => result.status === "ok")
+			: !exhausted
 				? []
-				: context.results
-						.filter((result) => NativeFallbackService.eligible(result, this.deps.classifier))
-						.map((result) => result.consultant as Exclude<RunParticipant, "fallback">);
+				: context.results.map((result) => result.consultant as Exclude<RunParticipant, "fallback">);
 		if (fallbackFor.length === 0) return undefined;
 		const models = this.deps.models();
 		const native = this.deps.native(context.environment);
@@ -81,6 +85,21 @@ export class NativeFallbackService {
 			provider: choice.value.slice(0, choice.value.indexOf("/")),
 			id: choice.value.slice(choice.value.indexOf("/") + 1),
 		};
+		// The reasoning level is read live from settings, unlike the pinned
+		// resume model: a continuation takes the level configured now. A level
+		// the resolved model does not support is dropped with a warning, never
+		// guessed down to another level.
+		const warnings: string[] = [];
+		const reasoning = settings.reasoning
+			&& FallbackModels.levels(choice.model).includes(settings.reasoning)
+			? settings.reasoning
+			: undefined;
+		if (settings.reasoning && !reasoning) {
+			warnings.push(
+				`configured reasoning level '${settings.reasoning}' is not supported by ` +
+					`${choice.value}; using the model default`,
+			);
+		}
 
 		const outcome = await native.consult(
 			choice.model,
@@ -91,6 +110,7 @@ export class NativeFallbackService {
 			{
 				timeoutMs: context.timeoutMs,
 				maxRounds: settings.maxRounds,
+				reasoning,
 				bridge: this.deps.bridge(),
 			},
 			context.kind === "resume" ? (context.messages as never) : undefined,
@@ -115,7 +135,7 @@ export class NativeFallbackService {
 				costUsd: outcome.usage?.costUsd,
 			},
 			error: outcome.error,
-			warnings: [],
+			warnings,
 		};
 	}
 

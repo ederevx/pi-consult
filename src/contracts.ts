@@ -13,6 +13,13 @@ export type ConsultTarget = ConsultantName | "both";
 /** Who can serve one run: a consultant CLI, or the native fallback. */
 export type RunParticipant = ConsultantName | "fallback";
 
+/** Reasoning effort a pi model's stream may run at (pi-ai ThinkingLevel). */
+export type ReasoningLevel = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+
+/** Every reasoning level, in pi-ai's own order. */
+export const REASONING_LEVELS: readonly ReasoningLevel[] =
+	["minimal", "low", "medium", "high", "xhigh", "max"];
+
 /** Provenance of a native fallback run: what it replaced and who served it. */
 export interface FallbackMetadata {
 	/** The consultant CLIs whose eligible failures triggered the takeover. */
@@ -27,6 +34,8 @@ export interface FallbackMetadata {
 	servedBy?: string[];
 	/** The persisted private transcript a continuation resumes. */
 	conversationPath?: string;
+	/** The reasoning level the conversation actually ran at, when one was reported. */
+	reasoning?: ReasoningLevel;
 }
 
 /** The custom-message type a delivered background result uses. */

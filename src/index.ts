@@ -102,6 +102,8 @@ export class ConsultExtension {
 			// The unset row names pi's own default, never the stored override.
 			defaultChoice: () =>
 				commandContext ? fallbackModels.resolve(bindEnvironment(commandContext)) : undefined,
+			resolve: (configured) =>
+				commandContext ? fallbackModels.resolve(bindEnvironment(commandContext), configured) : undefined,
 			unset: () => store.unset(["fallback", "model"]),
 		}).register(pi);
 		if (!config.enabled) return;

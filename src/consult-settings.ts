@@ -17,8 +17,10 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 
 import { ConsultConfig } from "./consult-config.ts";
+import { FallbackModels } from "./fallback-models.ts";
 import { ConsultSettingsPresenter } from "./consult-settings-presenter.ts";
 import { ConsultSettingsStore } from "./consult-settings-store.ts";
+import { REASONING_LEVELS } from "./contracts.ts";
 
 /** One configurable setting. */
 export interface SettingSpec {
@@ -29,6 +31,9 @@ export interface SettingSpec {
 	path: readonly string[];
 	kind: "boolean" | "enum" | "number" | "json" | "string" | "model";
 	values?: readonly string[];
+	/** Enum values come from the resolved fallback model at render/apply time,
+	 *  never from this static list. */
+	valuesFromModel?: boolean;
 	description: string;
 }
 
@@ -39,6 +44,11 @@ export interface ModelChoices {
 	choices(): { value: string; label: string }[];
 	/** The model an unset selection resolves to, when one does. */
 	defaultChoice(): { value: string; label: string } | undefined;
+	/** Resolve a configured selection (or the pi default when unset) against
+	 *  the live catalogue. */
+	resolve(configured?: string):
+		| { value: string; label: string; model: import("./fallback-models.ts").CatalogueModel }
+		| undefined;
 	/** Remove the stored model override; returns an error, or undefined. */
 	unset(): string | undefined;
 }
@@ -66,6 +76,7 @@ export class ConsultSettings {
 		{ key: "drive.tools.allow", label: "Bridge tools", path: ["drive", "tools", "allow"], kind: "json", description: "Tool names a consultant may ask pi to run (JSON array; pi still decides every run)" },
 		{ key: "fallback.enabled", label: "Native fallback", path: ["fallback", "enabled"], kind: "boolean", values: ["off", "on"], description: "Let an available pi model serve a consultation whose consultant failed" },
 		{ key: "fallback.model", label: "Fallback model", path: ["fallback", "model"], kind: "model", description: "The pi model that serves a failed consultation; unset follows pi's default" },
+		{ key: "fallback.reasoning", label: "Fallback reasoning", path: ["fallback", "reasoning"], kind: "enum", values: [], valuesFromModel: true, description: "Reasoning effort for the fallback model; offered levels come from the model, unset follows its default" },
 		{ key: "fallback.maxRounds", label: "Fallback round bound", path: ["fallback", "maxRounds"], kind: "number", description: "Tool rounds one fallback conversation may take before it stops" },
 		{ key: "drive.maxRequestsPerInvocation", label: "Bridge request limit", path: ["drive", "maxRequestsPerInvocation"], kind: "number", description: "Bridge requests one invocation may make before further ones are busy" },
 	];
@@ -116,6 +127,10 @@ export class ConsultSettings {
 		// An empty model row removes the override, so the live default serves.
 		if (spec.kind === "model" && value === "") {
 			return this.models ? this.models.unset() : this.store.unset(spec.path);
+		}
+		// The enum's leading "default" row is the unset state, not a stored value.
+		if (spec.kind === "enum" && value === "default") {
+			return this.store.unset(spec.path);
 		}
 		const parsed = this.parse(spec, value);
 		if (parsed.error !== undefined) return parsed.error;
@@ -239,6 +254,15 @@ export class ConsultSettings {
 		return this.models?.defaultChoice();
 	}
 
+	/** The reasoning levels the configured fallback model offers, for the
+	 *  model-driven enum row; the full pi-ai set when no model resolves. */
+	modelLevels(): readonly string[] | undefined {
+		if (!this.models) return undefined;
+		const configured = ConsultConfig.load(this.store).fallback.model;
+		const resolved = this.models.resolve(configured || undefined);
+		return resolved ? FallbackModels.levels(resolved.model) : [...REASONING_LEVELS];
+	}
+
 	private parse(spec: SettingSpec, value: string): { value?: unknown; error?: string } {
 		if (spec.kind === "model") {
 			const available = this.modelChoices();
@@ -254,9 +278,10 @@ export class ConsultSettings {
 			return { error: `expected on or off, got ${value}` };
 		}
 		if (spec.kind === "enum") {
-			return spec.values?.includes(value)
+			const allowed = spec.valuesFromModel ? this.modelLevels() : spec.values;
+			return allowed?.includes(value)
 				? { value }
-				: { error: `expected one of ${(spec.values ?? []).join(", ")}` };
+				: { error: `expected one of ${(allowed ?? []).join(", ")}` };
 		}
 		if (spec.kind === "number") {
 			const number = Number(value);

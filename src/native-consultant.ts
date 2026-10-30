@@ -15,7 +15,8 @@ import { randomUUID } from "node:crypto";
 
 import type { AssistantMessage, Message, Tool } from "@earendil-works/pi-ai";
 import type { ArtifactStore, ConsultPaths } from "./artifact-store.ts";
-import type { FallbackMetadata, RunParticipant } from "./contracts.ts";
+import type { FallbackMetadata, ReasoningLevel, RunParticipant } from "./contracts.ts";
+import { REASONING_LEVELS } from "./contracts.ts";
 import type { ConsultRequestBroker } from "./consult-request-broker.ts";
 
 /** The registry seam the conversation streams through. */
@@ -23,7 +24,7 @@ export interface NativeStream {
 	streamSimple(
 		model: object,
 		context: { systemPrompt?: string; messages: Message[]; tools?: Tool[] },
-		options?: { signal?: AbortSignal },
+		options?: { signal?: AbortSignal; reasoning?: ReasoningLevel },
 	): { result(): Promise<AssistantMessage> };
 }
 
@@ -35,6 +36,8 @@ export interface NativeConfig {
 	maxRounds: number;
 	/** Whether the bridge tools are offered at all. */
 	bridge: boolean;
+	/** The reasoning effort the stream runs at; absent follows pi-ai's default. */
+	reasoning?: ReasoningLevel;
 }
 
 /** What one native conversation produced. */
@@ -47,6 +50,8 @@ export interface NativeOutcome {
 	conversationPath?: string;
 	provider: string;
 	model: string;
+	/** The reasoning level the conversation actually ran at, when one was reported. */
+	reasoning?: ReasoningLevel;
 	/** Every identity that answered, in first-seen order. */
 	servedBy: string[];
 }
@@ -112,6 +117,7 @@ export class NativeConsultant {
 		const sawUsage = { any: false };
 		const serving = new Map<string, { provider: string; model: string }>();
 		let final: { provider: string; model: string } | undefined;
+		let servedReasoning: ReasoningLevel | undefined;
 		// The whole loop is bounded by the request timeout composed with the
 		// invocation signal; whichever fires first ends the conversation.
 		const timeout = AbortSignal.timeout(config.timeoutMs);
@@ -138,7 +144,9 @@ export class NativeConsultant {
 								systemPrompt: this.systemPrompt(),
 								messages,
 								tools,
-							}, { signal: deadline })
+							}, config.reasoning
+								? { signal: deadline, reasoning: config.reasoning }
+								: { signal: deadline })
 							.result(),
 						expired_,
 					]);
@@ -150,6 +158,16 @@ export class NativeConsultant {
 					serving.set(identity, { provider: answer.provider, model: answer.model });
 				}
 				final = { provider: answer.provider, model: answer.model };
+				// The provider's own report of the level it ran at, when it gives
+				// one; validated against the known set, never trusted blind.
+				const reported = (answer as { thinkingLevel?: unknown; providerThinkingLevel?: unknown })
+					.thinkingLevel ?? (answer as { providerThinkingLevel?: unknown }).providerThinkingLevel;
+				if (
+					typeof reported === "string"
+					&& (REASONING_LEVELS as readonly string[]).includes(reported)
+				) {
+					servedReasoning = reported as ReasoningLevel;
+				}
 				this.accumulate(usage, sawUsage, answer.usage);
 				const calls = answer.content.filter(
 					(part): part is ModelToolCall => part.type === "toolCall",
@@ -178,6 +196,7 @@ export class NativeConsultant {
 						startedAt,
 						serving,
 						final,
+						reasoning: servedReasoning,
 						messages,
 						paths,
 					});
@@ -208,6 +227,7 @@ export class NativeConsultant {
 			startedAt,
 			serving,
 			final,
+			reasoning: servedReasoning,
 			messages,
 			paths,
 		});
@@ -334,6 +354,7 @@ export class NativeConsultant {
 		startedAt: number;
 		serving: Map<string, { provider: string; model: string }>;
 		final?: { provider: string; model: string };
+		reasoning?: ReasoningLevel;
 		messages: Message[];
 		paths: ConsultPaths;
 	}): Promise<NativeOutcome> {
@@ -366,6 +387,7 @@ export class NativeConsultant {
 			conversationPath,
 			provider: served?.provider ?? "",
 			model: served?.model ?? "",
+			reasoning: state.reasoning,
 			servedBy: [...state.serving.values()].map((one) => `${one.provider}/${one.model}`),
 		};
 	}
@@ -384,6 +406,7 @@ export class NativeConsultant {
 			model: outcome.model,
 			servedBy: outcome.servedBy,
 			conversationPath: outcome.conversationPath,
+			reasoning: outcome.reasoning,
 		};
 	}
 
