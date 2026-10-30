@@ -10,6 +10,10 @@
  * model id or provider name is hardcoded here.
  */
 
+import type { ThinkingLevelMap } from "@earendil-works/pi-ai";
+import type { ReasoningLevel } from "./contracts.ts";
+import { REASONING_LEVELS } from "./contracts.ts";
+
 /** A bound fallback environment: registry, copied scope, defaults. */
 export interface BoundEnvironment {
 	modelRegistry: { getAvailable(): CatalogueModel[] } | undefined;
@@ -24,6 +28,9 @@ export interface CatalogueModel {
 	provider: string;
 	id: string;
 	name: string;
+	/** Maps pi thinking levels to provider-specific values; missing keys use
+	 *  the provider default, null marks a level unsupported (pi-ai model schema). */
+	thinkingLevelMap?: ThinkingLevelMap;
 }
 
 /** One selectable model, identified exactly as it is transmitted. */
@@ -58,7 +65,7 @@ export class FallbackModels {
 			.map((model) => ({
 				value: FallbackModels.identifier(model),
 				label: `${model.name} (${FallbackModels.identifier(model)})`,
-				model,
+				model: model as CatalogueModel,
 			}));
 	}
 
@@ -98,5 +105,18 @@ export class FallbackModels {
 	/** The exact identifier a model is stored and matched by. */
 	private static identifier(model: CatalogueModel): string {
 		return `${model.provider}/${model.id}`;
+	}
+
+	/**
+	 * The reasoning levels the model accepts, read from its thinking map: a
+	 * present non-null key is supported, a missing key uses the provider
+	 * default, and a null key is unsupported. A model with no map offers
+	 * every level pi-ai knows.
+	 */
+	static levels(model: CatalogueModel): readonly ReasoningLevel[] {
+		const map = model.thinkingLevelMap;
+		if (!map) return REASONING_LEVELS;
+		const supported = REASONING_LEVELS.filter((level) => map[level] !== null);
+		return supported.length > 0 ? supported : REASONING_LEVELS;
 	}
 }
