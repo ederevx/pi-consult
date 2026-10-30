@@ -79,6 +79,8 @@ export class ProcessRunner {
 			let aborted = false;
 			let settled = false;
 			let killTimer: NodeJS.Timeout | undefined;
+			let closed = false;
+			let escalated = false;
 
 			const emitLine = (line: string): void => {
 				if (line.length === 0) return;
@@ -138,13 +140,15 @@ export class ProcessRunner {
 					}
 					// A descendant holding the pipes can hold `close`
 					// open past the kill: the streams close now and the
-					// outcome settles once. Ownership stays until the
-					// real `close`; a surviving descendant must remain
+					// outcome settles once. Ownership holds until the
+					// real `close` too, so a surviving descendant stays
 					// reachable for killAll.
+					escalated = true;
 					clearTimeout(timer);
 					child.stdout?.destroy();
 					child.stderr?.destroy();
 					child.stdin?.destroy();
+					if (closed) this.children.delete(child);
 					finish(child, child.exitCode ?? null,
 						child.signalCode ?? null);
 				}, KILL_GRACE_MS);
@@ -219,10 +223,13 @@ export class ProcessRunner {
 				spawnError = error.message;
 			});
 			child.on("close", (code: number | null, signal: NodeJS.Signals | null) => {
-				// The armed escalation stays: an early leader exit
-				// must not spare a SIGTERM-resistant descendant.
+				// The armed escalation stays: a leader's exit does not
+				// establish that its descendants have stopped. Ownership
+				// holds until the group is stopped or the escalation
+				// fires, so killAll stays able to reach it.
+				closed = true;
 				clearTimeout(timer);
-				this.children.delete(child);
+				if (!killTimer || escalated) this.children.delete(child);
 				if (settled) return;
 				if (stderrOverflow) stderrChunks.push("\n[stderr truncated]\n");
 				finish(child, code, signal);
