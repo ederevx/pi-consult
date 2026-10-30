@@ -137,6 +137,14 @@ export class ProcessRunner {
 							// already gone
 						}
 					}
+					// A descendant holding the pipes can hold `close`
+					// open past the kill: the streams close now and the
+					// outcome settles once; the late `close` only drops
+					// ownership.
+					child.stdout?.destroy();
+					child.stderr?.destroy();
+					child.stdin?.destroy();
+					finish(child, child.exitCode ?? null, null);
 				}, KILL_GRACE_MS);
 				killTimer.unref?.();
 			};
@@ -210,6 +218,9 @@ export class ProcessRunner {
 			});
 			child.on("close", (code: number | null, signal: NodeJS.Signals | null) => {
 				clearTimeout(timer);
+				clearTimeout(killTimer);
+				this.children.delete(child);
+				if (settled) return;
 				if (stderrOverflow) stderrChunks.push("\n[stderr truncated]\n");
 				finish(child, code, signal);
 			});
