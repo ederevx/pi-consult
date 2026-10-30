@@ -32,6 +32,9 @@ export interface SettingsOwner {
 	/** The model choices a "model" row offers, and its resolved default. */
 	modelChoices?(): { value: string; label: string }[];
 	modelDefault?(): { value: string; label: string } | undefined;
+	/** The reasoning levels the resolved fallback model offers, for the
+	 *  model-driven enum row. */
+	modelLevels?(): readonly string[] | undefined;
 }
 
 /** The slice of pi's command context the dock needs. */
@@ -82,8 +85,12 @@ export class ConsultSettingsPresenter {
 				currentValue,
 			};
 			// A cycling row is a flag or a fixed enum; a model row picks from
-			// the live catalogue; everything else is edited as text.
-			if (spec.values) item.values = [...spec.values];
+			// the live catalogue; a model-driven enum cycles the model's own
+			// levels with the unset state first; everything else is edited as
+			// text.
+			if (spec.valuesFromModel) {
+				item.values = ["default", ...(this.owner.modelLevels?.() ?? [])];
+			} else if (spec.values) item.values = [...spec.values];
 			else if (spec.kind === "model") item.submenu = (current, done) => this.picker(spec, current, done);
 			else item.submenu = (current, done) => this.editor(spec, current, done);
 			return item;
