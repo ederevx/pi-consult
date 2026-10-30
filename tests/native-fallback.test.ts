@@ -200,6 +200,99 @@ test("native fallback service: takeover follows the decision table", async () =>
 	);
 });
 
+test("native fallback service: reasoning forwards only when the model supports it", async () => {
+	const artifacts = new ArtifactStore(join(scratchDir(), `rsn-${Date.now()}`));
+	const models = new FallbackModels();
+	const context = {
+		modelRegistry: {
+			getAvailable: () => [{
+				provider: "one",
+				id: "fast",
+				name: "Fast",
+				thinkingLevelMap: { low: "low", max: null as string | null },
+			}],
+		},
+		scopedModels: [],
+		defaults: { defaultProvider: "one", defaultModel: "fast" },
+	};
+	const make = (reasoning?: string) =>
+		new NativeFallbackService({
+			settings: () => ({ enabled: true, maxRounds: 16, reasoning: reasoning as never }),
+			models: () => models,
+			context: () => context,
+			native: () => native(new ScriptedStream([assistant([textPart("served")])]), artifacts),
+			classifier: new FailureClassifier(),
+			bridge: () => true,
+		});
+	const paths = await artifacts.prepare("s", "c-eee111222333");
+	const base = {
+		consultId: "c-eee111222333",
+		brief: "b",
+		paths,
+		requests: [],
+		signal: new AbortController().signal,
+		environment: context,
+		timeoutMs: 5000,
+	};
+	const served = await make("low").takeover({ ...base, kind: "takeover", results: [failure("claude", "auth", "invalid api key")] });
+	assertEq(served?.status, "ok", "a supported level serves");
+
+	const dropped = await make("max").takeover({ ...base, kind: "takeover", results: [failure("claude", "auth", "invalid api key")] });
+	assertEq(dropped?.status, "ok", "an unsupported level still serves");
+	assert(
+		(dropped?.warnings ?? []).join(" ").includes("max"),
+		"the dropped level is warned about",
+	);
+});
+
+test("native fallback service: fallback fires only when every consultant exhausted", async () => {
+	const artifacts = new ArtifactStore(join(scratchDir(), `exh-${Date.now()}`));
+	const models = new FallbackModels();
+	const context = {
+		modelRegistry: { getAvailable: () => [{ provider: "one", id: "fast", name: "Fast" }] },
+		scopedModels: [],
+		defaults: { defaultProvider: "one", defaultModel: "fast" },
+	};
+	const service = new NativeFallbackService({
+		settings: () => ({ enabled: true, maxRounds: 16 }),
+		models: () => models,
+		context: () => context,
+		native: () => native(new ScriptedStream([assistant([textPart("served")])]), artifacts),
+		classifier: new FailureClassifier(),
+		bridge: () => true,
+	});
+	const paths = await artifacts.prepare("s", "c-fff111222333");
+	const base = {
+		consultId: "c-fff111222333",
+		brief: "b",
+		paths,
+		requests: [],
+		signal: new AbortController().signal,
+		environment: context,
+		timeoutMs: 5000,
+	};
+	assertEq(
+		await service.takeover({
+			...base,
+			kind: "takeover",
+			results: [failure("claude", "timeout", "slow"), failure("codex", "auth", "invalid api key")],
+		}),
+		undefined,
+		"a non-exhausted consultant blocks the takeover",
+	);
+	const served = await service.takeover({
+		...base,
+		kind: "takeover",
+		results: [failure("claude", "auth", "invalid api key"), failure("codex", "error", "rate limit exceeded")],
+	});
+	assertEq(served?.status, "ok", "every consultant exhausted with an eligible failure");
+	assertEq(
+		served?.fallback?.fallbackFor.join(","),
+		"claude,codex",
+		"both exhausted consultants are recorded",
+	);
+});
+
 test("native fallback service: both-target skips when either CLI succeeds", async () => {
 	const artifacts = new ArtifactStore(join(scratchDir(), `svc2-${Date.now()}`));
 	const models = new FallbackModels();

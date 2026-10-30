@@ -263,12 +263,19 @@ brief, and both directions are bounded in size.
 When `fallback.enabled` is on (the default) and every requested consultant
 CLI of a consultation fails on availability, credentials, quota, throttling,
 or a provider error — never a timeout or an abort — one private conversation
-with the selected pi model serves it instead. The fallback model is chosen in
+with the selected pi model serves it instead — and only after every requested
+consultant ran to such a failure: one success, timeout, abort, or
+non-eligible error blocks the takeover. The fallback model is chosen in
 `/consult-settings` from only the models the session can actually use
-(`fallback.model`; unset follows pi's own default), the conversation's only
+(`fallback.model`; unset follows pi's own default). Its reasoning effort is
+`fallback.reasoning`: the row offers only the levels the selected model's
+thinking map supports, unset follows the model's default, and a level the
+resolved model does not support is dropped with a warning, never guessed down.
+The conversation's only
 tools are the bridge pair, its transcript is persisted for `continue` to
 resume, and every answer opens with a disclosure naming the serving model,
-its cost, and the consultants it replaced. One decision per invocation; a
+the reasoning level it ran at when one was reported, its cost, and the
+consultants it replaced. One decision per invocation; a
 native failure never cascades further.
 
 ### Consultant-requested tool usage
