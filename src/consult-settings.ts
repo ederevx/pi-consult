@@ -31,8 +31,8 @@ export interface SettingSpec {
 	path: readonly string[];
 	kind: "boolean" | "enum" | "number" | "json" | "string" | "model";
 	values?: readonly string[];
-	/** Enum values come from the resolved fallback model at render/apply time,
-	 *  never from this static list. */
+	/** Enum values come from the resolved fallback model, read when a value is
+	 *  applied or the row opens, never from this static list. */
 	valuesFromModel?: boolean;
 	description: string;
 }
@@ -76,7 +76,7 @@ export class ConsultSettings {
 		{ key: "drive.tools.allow", label: "Bridge tools", path: ["drive", "tools", "allow"], kind: "json", description: "Tool names a consultant may ask pi to run (JSON array; pi still decides every run)" },
 		{ key: "fallback.enabled", label: "Native fallback", path: ["fallback", "enabled"], kind: "boolean", values: ["off", "on"], description: "Let an available pi model serve a consultation whose consultant failed" },
 		{ key: "fallback.model", label: "Fallback model", path: ["fallback", "model"], kind: "model", description: "The pi model that serves a failed consultation; unset follows pi's default" },
-		{ key: "fallback.reasoning", label: "Fallback reasoning", path: ["fallback", "reasoning"], kind: "enum", values: [], valuesFromModel: true, description: "Reasoning effort for the fallback model; offered levels come from the model, unset follows its default" },
+		{ key: "fallback.reasoning", label: "Fallback reasoning", path: ["fallback", "reasoning"], kind: "enum", valuesFromModel: true, description: "Reasoning effort for the fallback model; offered levels come from the model, unset follows its default" },
 		{ key: "fallback.maxRounds", label: "Fallback round bound", path: ["fallback", "maxRounds"], kind: "number", description: "Tool rounds one fallback conversation may take before it stops" },
 		{ key: "drive.maxRequestsPerInvocation", label: "Bridge request limit", path: ["drive", "maxRequestsPerInvocation"], kind: "number", description: "Bridge requests one invocation may make before further ones are busy" },
 	];
@@ -255,7 +255,8 @@ export class ConsultSettings {
 	}
 
 	/** The reasoning levels the configured fallback model offers, for the
-	 *  model-driven enum row; the full pi-ai set when no model resolves. */
+	 *  model-driven enum row; the full ThinkingLevel set (`off` excluded) when
+	 *  no model resolves. */
 	modelLevels(): readonly string[] | undefined {
 		if (!this.models) return undefined;
 		const configured = ConsultConfig.load(this.store).fallback.model;
@@ -279,6 +280,9 @@ export class ConsultSettings {
 		}
 		if (spec.kind === "enum") {
 			const allowed = spec.valuesFromModel ? this.modelLevels() : spec.values;
+			if (spec.valuesFromModel && !allowed?.length) {
+				return { error: "the fallback model offers no reasoning levels" };
+			}
 			return allowed?.includes(value)
 				? { value }
 				: { error: `expected one of ${(allowed ?? []).join(", ")}` };

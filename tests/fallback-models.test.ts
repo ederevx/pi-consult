@@ -133,25 +133,66 @@ test("consult settings: a model row without the live catalogue refuses everythin
 	);
 });
 
-test("fallback models: levels come from the model's thinking map", () => {
-	const full = { provider: "one", id: "fast", name: "Fast" };
+test("fallback models: levels come from pi-ai's support rules", () => {
+	const full = { provider: "one", id: "fast", name: "Fast", reasoning: true };
 	assertEq(
 		FallbackModels.levels(full).join(","),
-		"minimal,low,medium,high,xhigh,max",
-		"a model without a map offers every level",
+		"minimal,low,medium,high",
+		"a reasoning model without a map offers the levels pi-ai supports without an xhigh/max mapping",
+	);
+	assertEq(
+		FallbackModels.levels({ ...full, reasoning: false }).length,
+		0,
+		"a model without reasoning accepts no level",
+	);
+	assertEq(
+		FallbackModels.levels({ provider: "one", id: "plain", name: "Plain" }).length,
+		0,
+		"an omitted reasoning flag means none, never the full set",
+	);
+	assertEq(
+		FallbackModels.levels({
+			provider: "one",
+			id: "silent",
+			name: "Silent",
+			reasoning: false,
+			thinkingLevelMap: { low: "low" },
+		}).length,
+		0,
+		"pi-ai never consults the map without reasoning",
+	);
+	const live = {
+		provider: "openrouter",
+		id: "deepseek/deepseek-v4.1-flash",
+		name: "DeepSeek: DeepSeek V4.1 Flash",
+		reasoning: true,
+		thinkingLevelMap: {
+			off: "none",
+			minimal: null as string | null,
+			low: "low",
+			medium: null as string | null,
+			high: "high",
+			xhigh: null as string | null,
+			max: "max",
+		},
+	};
+	assertEq(
+		FallbackModels.levels(live).join(","),
+		"low,high,max",
+		"the live catalogue's mapped model keeps exactly its declared levels",
 	);
 	const mapped = {
 		provider: "one",
 		id: "deep",
 		name: "Deep",
-		thinkingLevelMap: { low: "low", high: "high", xhigh: null as string | null },
+		reasoning: true,
+		thinkingLevelMap: { low: "low", high: null as string | null },
 	};
 	assertEq(
 		FallbackModels.levels(mapped).join(","),
-		"minimal,low,medium,high,max",
-		"a null key is unsupported; missing keys use the provider default",
+		"minimal,low,medium",
+		"a null key is unsupported and an unnamed xhigh/max is never offered",
 	);
-	assertEq(FallbackModels.levels(mapped).includes("xhigh"), false, "the nulled level is dropped");
 });
 
 test("fallback config: the reasoning level parses or drops", () => {
@@ -159,6 +200,8 @@ test("fallback config: the reasoning level parses or drops", () => {
 	assertEq(set.fallback.reasoning, "high");
 	const junk = ConsultConfig.from({ fallback: { reasoning: "extreme" } }, "/x");
 	assertEq(junk.fallback.reasoning, undefined, "an unknown level is dropped, not guessed");
+	const off = ConsultConfig.from({ fallback: { reasoning: "off" } }, "/x");
+	assertEq(off.fallback.reasoning, undefined, "off is not a configurable level");
 	const bare = ConsultConfig.from({}, "/x");
 	assertEq(bare.fallback.reasoning, undefined, "unset follows the model's default");
 });
@@ -175,11 +218,13 @@ test("consult settings: the reasoning row offers the model's levels", async () =
 				? {
 						value: "one/deep",
 						label: "Deep (one/deep)",
-						model: { provider: "one", id: "deep", name: "Deep", thinkingLevelMap: { low: "low", high: null as string | null } },
+						model: { provider: "one", id: "deep", name: "Deep", reasoning: true, thinkingLevelMap: { low: "low", high: null as string | null } },
 					}
 				: undefined,
 		unset: () => undefined,
 	});
+	assertEq(settings.modelLevels()?.join(","), "minimal,low,medium",
+		"the row offers the model's supported levels, in pi-ai's order");
 	assertEq(settings.apply("fallback.reasoning", "low"), undefined, "a supported level is stored");
 	assertEq(
 		((store.namespace().fallback ?? {}) as { reasoning?: string }).reasoning,
@@ -195,6 +240,25 @@ test("consult settings: the reasoning row offers the model's levels", async () =
 		undefined,
 		"the default row removes the override",
 	);
+});
+
+test("consult settings: a model without reasoning offers no level", async () => {
+	const file = join(scratchDir(), `norsn-${Math.random().toString(16).slice(2)}.json`);
+	writeFileSync(file, JSON.stringify({ piConsult: { fallback: { model: "one/deep" } } }));
+	const store = new ConsultSettingsStore(file);
+	const settings = new (await import("../src/consult-settings.ts")).ConsultSettings(store, {
+		choices: () => [],
+		defaultChoice: () => undefined,
+		resolve: () => ({
+			value: "one/deep",
+			label: "Deep (one/deep)",
+			model: { provider: "one", id: "deep", name: "Deep" },
+		}),
+		unset: () => undefined,
+	});
+	assertEq(settings.modelLevels()?.length, 0, "the row offers nothing to choose");
+	const refused = String(settings.apply("fallback.reasoning", "low"));
+	assert(refused.includes("no reasoning"), "the refusal names the cause instead of an empty list");
 });
 
 test("fallback models: a bound context without a defaults field resolves nothing", () => {

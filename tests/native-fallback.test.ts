@@ -11,14 +11,19 @@ import { readFileSync } from "node:fs";
 
 /** A scripted registry: each round's assistant message in order. */
 class ScriptedStream {
-	readonly calls: Array<{ messages: unknown[]; tools: string[] }> = [];
+	readonly calls: Array<{ messages: unknown[]; tools: string[]; reasoning?: string }> = [];
 	constructor(private readonly rounds: object[]) {}
 
 	streamSimple(
 		_model: object,
 		context: { messages: unknown[]; tools?: Array<{ name: string }> },
+		options?: { reasoning?: string },
 	): { result: () => Promise<object> } {
-		this.calls.push({ messages: [...context.messages], tools: (context.tools ?? []).map((tool) => tool.name) });
+		this.calls.push({
+			messages: [...context.messages],
+			tools: (context.tools ?? []).map((tool) => tool.name),
+			reasoning: options?.reasoning,
+		});
 		const round = this.rounds.shift();
 		return { result: async () => round as object };
 	}
@@ -209,18 +214,24 @@ test("native fallback service: reasoning forwards only when the model supports i
 				provider: "one",
 				id: "fast",
 				name: "Fast",
+				reasoning: true,
 				thinkingLevelMap: { low: "low", max: null as string | null },
 			}],
 		},
 		scopedModels: [],
 		defaults: { defaultProvider: "one", defaultModel: "fast" },
 	};
+	const streams: ScriptedStream[] = [];
 	const make = (reasoning?: string) =>
 		new NativeFallbackService({
 			settings: () => ({ enabled: true, maxRounds: 16, reasoning: reasoning as never }),
 			models: () => models,
 			context: () => context,
-			native: () => native(new ScriptedStream([assistant([textPart("served")])]), artifacts),
+			native: () => {
+				const stream = new ScriptedStream([assistant([textPart("served")])]);
+				streams.push(stream);
+				return native(stream, artifacts);
+			},
 			classifier: new FailureClassifier(),
 			bridge: () => true,
 		});
@@ -236,9 +247,11 @@ test("native fallback service: reasoning forwards only when the model supports i
 	};
 	const served = await make("low").takeover({ ...base, kind: "takeover", results: [failure("claude", "auth", "invalid api key")] });
 	assertEq(served?.status, "ok", "a supported level serves");
+	assertEq(streams[0].calls[0].reasoning, "low", "the supported level reaches streamSimple");
 
 	const dropped = await make("max").takeover({ ...base, kind: "takeover", results: [failure("claude", "auth", "invalid api key")] });
 	assertEq(dropped?.status, "ok", "an unsupported level still serves");
+	assertEq(streams[1].calls[0].reasoning, undefined, "an unsupported level is never forwarded");
 	assert(
 		(dropped?.warnings ?? []).join(" ").includes("max"),
 		"the dropped level is warned about",
