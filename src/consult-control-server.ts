@@ -1,14 +1,15 @@
 /**
  * pi-consult — the local bridge control server.
  *
- * Owns the one authenticated local endpoint the consultant bridge processes
- * connect to: it mints a per-invocation capability token, admits a connection
- * only on a matching hello, and turns each admitted frame into a broker call.
- * Transport only — it decides nothing about a request's meaning.
+ * Owns the authenticated local endpoint the consultant bridge processes
+ * connect to — one per listening lifetime, so concurrent pi processes never
+ * share a path. It mints a per-invocation capability token, admits a
+ * connection only on a matching hello, and turns each admitted frame into a
+ * broker call. Transport only — it decides nothing about a request's meaning.
  */
 
 import { randomBytes } from "node:crypto";
-import { chmod, mkdir, rm } from "node:fs/promises";
+import { chmod, mkdir } from "node:fs/promises";
 import { createServer, type Server, type Socket } from "node:net";
 import { join } from "node:path";
 
@@ -22,12 +23,21 @@ export interface ControlServerDeps {
 	broker?: ConsultRequestBroker;
 	/** The artifact root; the socket lives in its private `run/` directory. */
 	root: string;
+	/** Bytes of randomness in the socket name; defaults to
+	 *  DEFAULT_ENDPOINT_BYTES. A longer name buys nothing and spends the
+	 *  socket-pathname budget, whose limit differs per platform. */
+	endpointBytes?: number;
 }
 
+/** Randomness in the socket name when the caller names none: eight bytes make
+ *  two live servers colliding impossible in practice, while the name stays
+ *  short for platforms whose socket-pathname limit is tight. */
+const DEFAULT_ENDPOINT_BYTES = 8;
+
 export class ConsultControlServer {
-	private static readonly SOCKET_NAME = "bridge.sock";
 	/** What this server serves; an older bridge reads none of it. */
 	private static readonly CAPABILITIES = ["use_tool"];
+	private readonly endpointBytes: number;
 	private readonly root: string;
 	private readonly tokens = new Map<string, string>();
 	private readonly sockets = new Set<Socket>();
@@ -35,12 +45,18 @@ export class ConsultControlServer {
 	private readonly admitted = new Map<Socket, string>();
 	private server: Server | undefined;
 	private endpoint = "";
+	private starting: Promise<string> | undefined;
 
 	private brokerInstance?: ConsultRequestBroker;
 
 	constructor(deps: ControlServerDeps) {
 		this.brokerInstance = deps.broker;
 		this.root = deps.root;
+		const endpointBytes = deps.endpointBytes ?? DEFAULT_ENDPOINT_BYTES;
+		if (!Number.isInteger(endpointBytes) || endpointBytes < 1) {
+			throw new Error(`endpointBytes must be a positive integer, got ${endpointBytes}`);
+		}
+		this.endpointBytes = endpointBytes;
 	}
 
 	/** Attach the broker once it exists. */
@@ -57,10 +73,23 @@ export class ConsultControlServer {
 	/** Start listening on first use and return the endpoint. */
 	async listen(): Promise<string> {
 		if (this.server) return this.endpoint;
+		if (this.starting) return this.starting;
+		this.starting = this.start();
+		try {
+			return await this.starting;
+		} finally {
+			this.starting = undefined;
+		}
+	}
+
+	/** Bind the endpoint this listening lifetime owns. */
+	private async start(): Promise<string> {
 		const dir = join(this.root, "run");
 		await mkdir(dir, { recursive: true, mode: 0o700 });
-		const endpoint = join(dir, ConsultControlServer.SOCKET_NAME);
-		await rm(endpoint, { force: true });
+		const endpoint = join(
+			dir,
+			`bridge-${randomBytes(this.endpointBytes).toString("hex")}.sock`,
+		);
 		const server = createServer((socket) => this.attach(socket));
 		await new Promise<void>((resolve, reject) => {
 			server.once("error", reject);
@@ -98,8 +127,9 @@ export class ConsultControlServer {
 		this.broker.forget(invocationId);
 	}
 
-	/** Stop listening, drop capabilities, and unlink the endpoint. */
+	/** Stop listening and drop capabilities. */
 	async close(): Promise<void> {
+		await this.starting?.catch(() => undefined);
 		this.broker.cancelAll();
 		for (const socket of [...this.sockets]) socket.destroy();
 		this.sockets.clear();
@@ -107,10 +137,10 @@ export class ConsultControlServer {
 		this.tokens.clear();
 		const server = this.server;
 		this.server = undefined;
+		this.endpoint = "";
 		if (server) {
 			await new Promise<void>((resolve) => server.close(() => resolve()));
 		}
-		if (this.endpoint) await rm(this.endpoint, { force: true }).catch(() => undefined);
 	}
 
 	private attach(socket: Socket): void {
