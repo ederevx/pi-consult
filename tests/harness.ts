@@ -138,7 +138,29 @@ export function customEntry(id: string, customType: string, data?: unknown): Bra
 }
 
 /** A minimal stand-in for pi's ExtensionAPI. */
+/** The synchronous in-process event bus a real session provides. */
+class FakeEventBus {
+	private readonly channels = new Map<string, Array<(data: unknown) => void>>();
+
+	emit(channel: string, data: unknown): void {
+		for (const handler of [...(this.channels.get(channel) ?? [])]) handler(data);
+	}
+
+	on(channel: string, handler: (data: unknown) => void): () => void {
+		const list = this.channels.get(channel) ?? [];
+		list.push(handler);
+		this.channels.set(channel, list);
+		return () => {
+			const current = this.channels.get(channel) ?? [];
+			const index = current.indexOf(handler);
+			if (index >= 0) current.splice(index, 1);
+		};
+	}
+}
+
 export class FakePi {
+	/** The session bus: `pi.events`, where capabilities are asked and served. */
+	readonly events = new FakeEventBus();
 	readonly tools = new Map<string, Record<string, unknown>>();
 	readonly handlers = new Map<string, Array<(...args: unknown[]) => unknown>>();
 	readonly commands = new Map<string, Record<string, unknown>>();
