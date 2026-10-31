@@ -153,9 +153,16 @@ export class ConsultToolCompletion {
 		}
 		let resolved: AgentToolCallOutcome;
 		try {
+			// A withdrawn run starts nothing new: the caller is no longer
+			// waiting for an answer, so the resolver is not invoked at all.
+			if (options.signal.aborted) throw new Error("aborted before resolution started");
 			const params: ResolveParams = { version: mark.version, payload: mark.payload };
 			resolved = await options.ctx.executeTool(name, params, { signal: options.signal });
 		} catch (error) {
+			// Withdrawal is not a failure outcome: it travels as a rejection so
+			// the executor settles the request as cancelled, and no error text
+			// is delivered after the caller stopped waiting.
+			if (options.signal.aborted) throw error;
 			return this.failure(
 				options.originalTool,
 				`resolving through ${name} failed unexpectedly: ${(error as Error)?.message ?? error}`,
