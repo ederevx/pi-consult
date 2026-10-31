@@ -102,9 +102,12 @@ export class ConsultToolCompletion {
 		const binding = bindings?.find((candidate) => candidate.tool === options.originalTool);
 
 		if (!mark) {
-			// A producer that advertises this tool must mark every result;
-			// without the mark the acknowledgment is indistinguishable from a
-			// finished result, so refuse to forward it.
+			// A producer that advertises this tool marks every result it ran, so
+			// without the mark a success is indistinguishable from an
+			// acknowledgment and is refused. An error carries its own reason —
+			// a call blocked before execution never reached the producer at all
+			// — and is more useful to the consultant than a protocol failure.
+			if (initial.isError) return initial;
 			return binding
 				? this.failure(options.originalTool, "its result carried no completion mark")
 				: initial;
