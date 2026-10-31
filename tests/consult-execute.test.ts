@@ -69,26 +69,37 @@ test("tool policy: allows only listed tools and never the control surface", () =
 
 test("tool output: screens, truncates, and reports omissions", () => {
 	const output = new ConsultToolOutput(new SecretScreen(), 200);
-	const clean = output.bound({ content: [{ type: "text", text: "a".repeat(300) }] }, "r1");
+	const clean = output.bound(
+		{ result: { content: [{ type: "text", text: "a".repeat(300) }] }, isError: false },
+		"r1",
+	);
 	assertEq(clean.status, "answered");
 	assertEq(clean.isError, false);
 	assertEq(clean.truncated, true, "long text is reported truncated");
 	assert(Buffer.byteLength(clean.answer ?? "", "utf8") <= 200, "the answer stays inside the byte bound");
 	assertIncludes(clean.answer ?? "", "[truncated]", "the cut is visible");
 
-	const secret = output.bound({ content: [{ type: "text", text: "AKIAIOSFODNN7EXAMPLE" }] }, "r2");
+	const secret = output.bound(
+		{ result: { content: [{ type: "text", text: "AKIAIOSFODNN7EXAMPLE" }] }, isError: false },
+		"r2",
+	);
 	assertEq(secret.isError, true, "screened output is refused");
 	assertIncludes(secret.answer ?? "", "aws-access-key", "the rule names, never the value");
 
 	const omitted = output.bound(
-		{ content: [{ type: "text", text: "fine" }, { type: "image", data: "x" }] },
+		{
+			result: {
+				content: [{ type: "text", text: "fine" }, { type: "image", data: "x" }],
+			},
+			isError: false,
+		},
 		"r3",
 	);
 	assertEq(omitted.truncated, undefined, "a short answer is not marked truncated");
 	assertIncludes(omitted.answer ?? "", "1 non-text content block", "the omission is reported");
 
 	const tiny = new ConsultToolOutput(new SecretScreen(), 5).bound(
-		{ content: [{ type: "text", text: "abcdefghij" }] },
+		{ result: { content: [{ type: "text", text: "abcdefghij" }] }, isError: false },
 		"r4",
 	);
 	assert(Buffer.byteLength(tiny.answer ?? "", "utf8") <= 5, "a budget below the suffix emits no oversized suffix");
@@ -96,10 +107,16 @@ test("tool output: screens, truncates, and reports omissions", () => {
 
 test("tool output: a multibyte cut never splits a character", () => {
 	const output = new ConsultToolOutput(new SecretScreen(), 22);
-	const outcome = output.bound({ content: [{ type: "text", text: "é".repeat(20) }] }, "r5");
+	const outcome = output.bound(
+		{ result: { content: [{ type: "text", text: "é".repeat(20) }] }, isError: false },
+		"r5",
+	);
 	assertEq(outcome.status, "answered");
 	assert(Buffer.byteLength(outcome.answer ?? "", "utf8") <= 22, "the cut stays inside the byte budget");
-	const emoji = output.bound({ content: [{ type: "text", text: "😀".repeat(20) }] }, "r6");
+	const emoji = output.bound(
+		{ result: { content: [{ type: "text", text: "😀".repeat(20) }] }, isError: false },
+		"r6",
+	);
 	assertEq(emoji.answer, "😀\n…[truncated]", "the emoji cut keeps whole code points and the suffix");
 });
 
@@ -327,7 +344,10 @@ test("broker: a settled response frees the slot only when the execution ends", a
 test("tool output: escape-heavy text fits the encoded frame", () => {
 	const output = new ConsultToolOutput(new SecretScreen(), BridgeProtocol.MAX_ANSWER_BYTES);
 	const escapeHeavy = '"\\\\t" '.repeat(6000);
-	const outcome = output.bound({ content: [{ type: "text", text: escapeHeavy }] }, "r7");
+	const outcome = output.bound(
+		{ result: { content: [{ type: "text", text: escapeHeavy }] }, isError: false },
+		"r7",
+	);
 	assertEq(outcome.status, "answered");
 	const frame = BridgeProtocol.encode({
 		type: "answer",
@@ -348,7 +368,7 @@ test("tool output: the transmitted frame, metadata included, fits the bound", ()
 	// answer near the byte bound can still overflow the frame once encoded.
 	const text = "\u0001".repeat(10800) + "a".repeat(537);
 	const outcome = output.bound(
-		{ content: [{ type: "text", text }], isError: false },
+		{ result: { content: [{ type: "text", text }] }, isError: false },
 		clientRequestId,
 	);
 	const frame = BridgeProtocol.encode({
@@ -409,6 +429,92 @@ test("mcp server: an invalid tool name errors immediately without a frame", asyn
 	assertEq(sent, 0, "no frame reached the handler");
 	void server;
 	void made;
+});
+
+test("executor: the nested tool's text reaches the consultant", async () => {
+	const { broker, dispatcher } = makeBroker();
+	const executor = new ConsultExecuteTool(
+		broker,
+		new ConsultToolPolicy({ allow: ["bash"] }),
+		new ConsultToolOutput(new SecretScreen()),
+	);
+	const waiting = broker.submit("c-y:claude", "c-y", "claude", "r1", {
+		kind: "tool",
+		name: "bash",
+		arguments: { command: "printf hello" },
+	});
+	await Promise.resolve();
+	const pi = {
+		tools: [{ name: "bash" }],
+		executeTool: async () => ({
+			toolCall: { name: "bash", arguments: { command: "printf hello" } },
+			result: { content: [{ type: "text", text: "hello from bash" }] },
+			isError: false,
+		}),
+	} as never;
+	const receipt = await executor.execute(
+		{ requestId: dispatcher.posted[0].requestId },
+		undefined,
+		pi,
+	);
+	assertIncludes(receipt.content[0].text ?? "", "piped back", "the run is reported delivered");
+	const delivered = await waiting;
+	assertEq(delivered.status, "answered");
+	assertIncludes(delivered.answer ?? "", "hello from bash", "the tool's own text crosses the bridge");
+	assertEq(delivered.isError, false);
+
+	const failing = broker.submit("c-y:claude", "c-y", "claude", "r2", {
+		kind: "tool",
+		name: "bash",
+		arguments: { command: "false" },
+	});
+	await Promise.resolve();
+	const failed = {
+		tools: [{ name: "bash" }],
+		executeTool: async () => ({
+			toolCall: { name: "bash", arguments: { command: "false" } },
+			result: { content: [{ type: "text", text: "command failed" }] },
+			isError: true,
+		}),
+	} as never;
+	await executor.execute({ requestId: dispatcher.posted[1].requestId }, undefined, failed);
+	const failure = await failing;
+	assertIncludes(failure.answer ?? "", "command failed", "a failing run still carries its text");
+	assertEq(failure.isError, true, "the call's post-hook error state crosses too");
+
+	// pi lets a hook change the call's isError without touching the inner
+	// result's, so only the outer value may decide what the consultant is told.
+	const flaggedWaiting = broker.submit("c-y:claude", "c-y", "claude", "r3", {
+		kind: "tool",
+		name: "bash",
+		arguments: { command: "true" },
+	});
+	await Promise.resolve();
+	const outerFlagged = {
+		tools: [{ name: "bash" }],
+		executeTool: async () => ({
+			result: { content: [{ type: "text", text: "fine" }], isError: false },
+			isError: true,
+		}),
+	} as never;
+	await executor.execute({ requestId: dispatcher.posted[2].requestId }, undefined, outerFlagged);
+	assertEq((await flaggedWaiting).isError, true, "a hook-flagged call is an error even when its result is not");
+
+	const quietWaiting = broker.submit("c-y:claude", "c-y", "claude", "r4", {
+		kind: "tool",
+		name: "bash",
+		arguments: { command: "true" },
+	});
+	await Promise.resolve();
+	const outerQuiet = {
+		tools: [{ name: "bash" }],
+		executeTool: async () => ({
+			result: { content: [{ type: "text", text: "fine" }], isError: true },
+			isError: false,
+		}),
+	} as never;
+	await executor.execute({ requestId: dispatcher.posted[3].requestId }, undefined, outerQuiet);
+	assertEq((await quietWaiting).isError, false, "a hook-cleared call is not an error even when its result was");
 });
 
 test("executor: an infrastructure failure reports isError and the delivery result", async () => {
