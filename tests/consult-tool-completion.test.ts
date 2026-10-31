@@ -143,6 +143,19 @@ test("completion: an unresolvable advertised tool is refused, not forwarded", as
 	assertIncludes(text(outcome as Scripted), "no completion mark");
 });
 
+test("completion: an unmarked error result is forwarded as the tool's own answer", async () => {
+	const pi = new FakePi();
+	new Provider(pi, { tool: "bash", versions: [1], resolver: { name: "tool_completion" } }).start();
+	const refused: Scripted = {
+		result: { content: [{ type: "text", text: "Call pre_daemon first: blocked by a hook" }] },
+		isError: true,
+	};
+	const outcome = await resolve(completion(pi.events), refused, new ToolSurface({ bash: refused }));
+	assertEq(outcome.isError, true);
+	assertIncludes(text(outcome as Scripted), "Call pre_daemon first",
+		"a call the producer never ran keeps its own reason");
+});
+
 test("completion: a denied, unknown, or wrong-version resolver is named in the failure", async () => {
 	const pi = new FakePi();
 	new Provider(pi, { tool: "bash", versions: [1], resolver: { name: "write" } }).start();
