@@ -41,7 +41,16 @@ export class ConsultToolPolicy {
 
 	/** Whether pi may be asked to run this tool for a consultant. */
 	allows(name: string): boolean {
-		if (!name || ConsultToolPolicy.NEVER.has(name)) return false;
+		if (this.forbids(name)) return false;
 		return this.allow.has(name);
+	}
+
+	/** Whether this tool may never run for a consultant, allow list or not.
+	 *  A continuation route is checked against this alone: it is the
+	 *  completion of a tool the allow list already admitted, not a new
+	 *  request, so it must be a registered non-mutating route rather than
+	 *  something the operator had to enumerate. */
+	forbids(name: string): boolean {
+		return !name || ConsultToolPolicy.NEVER.has(name);
 	}
 }

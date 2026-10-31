@@ -59,6 +59,7 @@ import "./consult-foreground.test.ts";
 import "./availability.test.ts";
 import "./mcp-bridge.test.ts";
 import "./consult-execute.test.ts";
+import "./consult-tool-completion.test.ts";
 import "./supervisor-settlement.test.ts";
 import "./bridge-e2e.test.ts";
 
