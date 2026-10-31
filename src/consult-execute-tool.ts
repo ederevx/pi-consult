@@ -103,7 +103,9 @@ export class ConsultExecuteTool {
 		} catch {
 			const answer = this.output.bound(
 				{
-					content: [{ type: "text", text: "the tool run failed unexpectedly" }],
+					result: {
+						content: [{ type: "text", text: "the tool run failed unexpectedly" }],
+					},
 					isError: true,
 				},
 				claim.request.clientRequestId,
