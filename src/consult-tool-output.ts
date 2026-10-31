@@ -13,10 +13,13 @@ import { BridgeProtocol } from "./bridge-protocol.ts";
 import type { DriveOutcome } from "./consult-request-broker.ts";
 import type { SecretScreen } from "./secret-screen.ts";
 
-/** One pi tool outcome's shape, as `ctx.executeTool` returns it. */
+/** One pi tool call's outcome, as `ctx.executeTool` returns it: the tool
+ *  result one level down, and the call's own post-hook error state. */
 export interface ToolOutcome {
-	content?: ReadonlyArray<{ type?: string; text?: string }>;
-	isError?: boolean;
+	result: {
+		content: ReadonlyArray<{ type?: string; text?: string }>;
+	};
+	isError: boolean;
 }
 
 export class ConsultToolOutput {
@@ -35,7 +38,7 @@ export class ConsultToolOutput {
 	/** Screen and bound one executed tool's outcome; the result is what the
 	 *  consultant may receive, whatever the tool produced. */
 	bound(outcome: ToolOutcome, clientRequestId: string): DriveOutcome {
-		const parts = outcome.content ?? [];
+		const parts = outcome.result.content;
 		let text = "";
 		let omitted = 0;
 		for (const part of parts) {
