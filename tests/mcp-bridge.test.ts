@@ -359,6 +359,33 @@ test("mcp server: a cancel notification reaches the handler and suppresses the r
 	assertEq(JSON.parse(sink.lines[0]).id, 8);
 });
 
+test("mcp server: a non-answered status still carries its answer", async () => {
+	const handler = new RecordingHandler();
+	handler.outcome = { status: "declined", answer: "not part of this task" };
+	const { source, sink } = startServer(handler);
+
+	source.write(rpc(1, "tools/call", { name: "drive_pi", arguments: { prompt: "do it" } }));
+	await within(sink.waitFor(1), 2_000, "decline reply");
+	const reply = JSON.parse(sink.lines[0]);
+	assertEq(reply.result.isError, true);
+	assertEq(reply.result.content[0].text, "not part of this task", "the reason reaches the consultant");
+
+	handler.outcome = { status: "deadline_exceeded" };
+	source.write(rpc(2, "tools/call", { name: "drive_pi", arguments: { prompt: "again" } }));
+	await within(sink.waitFor(2), 2_000, "status reply");
+	assertEq(
+		JSON.parse(sink.lines[1]).result.content[0].text,
+		"[deadline_exceeded]",
+		"a status without an answer keeps its marker",
+	);
+	handler.outcome = { status: "unavailable", answer: "codex is not installed" };
+	source.write(rpc(3, "tools/call", { name: "drive_pi", arguments: { prompt: "and" } }));
+	await within(sink.waitFor(3), 2_000, "unavailable reply");
+	const unavailable = JSON.parse(sink.lines[2]).result;
+	assertEq(unavailable.isError, true);
+	assertEq(unavailable.content[0].text, "codex is not installed", "a reason survives any status");
+});
+
 test("mcp server: an oversized prompt is a tool error and the server survives", async () => {
 	const handler = new RecordingHandler();
 	const { source, sink } = startServer(handler);

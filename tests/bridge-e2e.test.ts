@@ -170,7 +170,8 @@ test("bridge e2e: the real bridge pipes a requested tool run back to the consult
 			{
 				tools: [{ name: "bash" }],
 				executeTool: async () => ({
-					content: [{ type: "text", text: "2868f84 Release v0.4.51" }],
+					result: { content: [{ type: "text", text: "2868f84 Release v0.4.51" }] },
+					isError: false,
 				}),
 			} as never,
 		);

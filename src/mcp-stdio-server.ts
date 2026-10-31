@@ -364,9 +364,11 @@ export class McpStdioServer {
 			!/\s/.test(value);
 	}
 
-	/** Map a drive outcome to MCP content: the answer, or a short status line. */
+	/** Map a drive outcome to MCP content: the answer, or a short status line.
+	 *  A non-answered status still carries its answer when there is one — a
+	 *  decline reason or an expiry note is the only thing the consultant has. */
 	private driveResult(outcome: DriveOutcome): object {
-		const text = outcome.status === "answered" ? outcome.answer ?? "" : `[${outcome.status}]`;
+		const text = outcome.answer ?? (outcome.status === "answered" ? "" : `[${outcome.status}]`);
 		const isError = outcome.status !== "answered" || outcome.isError === true;
 		const result = this.toolResult(text, isError);
 		if (outcome.truncated === true) (result as { truncated?: boolean }).truncated = true;
