@@ -2,11 +2,13 @@ import { BridgeProtocol } from "../src/bridge-protocol.ts";
 import { ConsultExecuteTool } from "../src/consult-execute-tool.ts";
 import type { DriveOutcome as BrokerDriveOutcome } from "../src/consult-request-broker.ts";
 import { ConsultRequestBroker } from "../src/consult-request-broker.ts";
+import { ConsultToolCompletion } from "../src/consult-tool-completion.ts";
 import { ConsultToolOutput } from "../src/consult-tool-output.ts";
 import { ConsultToolPolicy } from "../src/consult-tool-policy.ts";
 import { McpStdioServer } from "../src/mcp-stdio-server.ts";
 import { SecretScreen } from "../src/secret-screen.ts";
 import { assert, assertEq, assertIncludes, test } from "./harness.ts";
+import { FakePi } from "./harness.ts";
 import type { DriveOutcome as McpDriveOutcome } from "../src/mcp-stdio-server.ts";
 import type { RequestPayload } from "../src/consult-request-broker.ts";
 
@@ -433,10 +435,12 @@ test("mcp server: an invalid tool name errors immediately without a frame", asyn
 
 test("executor: the nested tool's text reaches the consultant", async () => {
 	const { broker, dispatcher } = makeBroker();
+	const policy = new ConsultToolPolicy({ allow: ["bash"] });
 	const executor = new ConsultExecuteTool(
 		broker,
-		new ConsultToolPolicy({ allow: ["bash"] }),
+		policy,
 		new ConsultToolOutput(new SecretScreen()),
+		new ConsultToolCompletion(undefined, policy),
 	);
 	const waiting = broker.submit("c-y:claude", "c-y", "claude", "r1", {
 		kind: "tool",
@@ -519,10 +523,12 @@ test("executor: the nested tool's text reaches the consultant", async () => {
 
 test("executor: an infrastructure failure reports isError and the delivery result", async () => {
 	const { broker, dispatcher } = makeBroker(5000);
+	const policy = new ConsultToolPolicy({ allow: ["bash"] });
 	const executor = new ConsultExecuteTool(
 		broker,
-		new ConsultToolPolicy({ allow: ["bash"] }),
+		policy,
 		new ConsultToolOutput(new SecretScreen()),
+		new ConsultToolCompletion(undefined, policy),
 	);
 	const failing = {
 		tools: [{ name: "bash" }],
@@ -559,10 +565,12 @@ test("executor: an infrastructure failure reports isError and the delivery resul
 	// A claimed run whose response expires mid-execution, then fails: the
 	// consultant keeps its deadline answer and the receipt reports no delivery.
 	const { broker: slowBroker, dispatcher: slowDispatcher } = makeBroker(50);
+	const slowPolicy = new ConsultToolPolicy({ allow: ["bash"] });
 	const slowExecutor = new ConsultExecuteTool(
 		slowBroker,
-		new ConsultToolPolicy({ allow: ["bash"] }),
+		slowPolicy,
 		new ConsultToolOutput(new SecretScreen()),
+		new ConsultToolCompletion(undefined, slowPolicy),
 	);
 	const slowResult = slowBroker.submit("c-x:claude", "c-x", "claude", "r1", {
 		kind: "tool",
@@ -586,4 +594,98 @@ test("executor: an infrastructure failure reports isError and the delivery resul
 	rejectRun?.(new Error("late boom"));
 	const expired = await executing;
 	assertIncludes(expired.content[0].text ?? "", "nothing was delivered", "the expired run reports it");
+});
+
+/** A provider that advertises `bash` resolved by `tool_completion`, so an
+ *  executor test can exercise the whole deferred path. */
+function serveCompletion(pi: FakePi, resolver = "tool_completion"): void {
+	pi.events.on("pi-rpc/tool-completion", (data) => {
+		const message = data as { id?: string; method?: string };
+		if (typeof message.id !== "string") return;
+		const reply = message.method === "rpc.hello"
+			? { service: "tool-completion", version: 1, methods: ["rpc.hello", "completion.describe"] }
+			: { bindings: [{ tool: "bash", versions: [1], resolver: { name: resolver } }] };
+		pi.events.emit("pi-rpc/tool-completion/reply", { jsonrpc: "2.0", id: message.id, result: reply });
+	});
+}
+
+/** The claim a deferred bash call returns, marked pending. */
+const claim = {
+	result: {
+		content: [{ type: "text", text: "[pi-daemon] ticket t-1 taken by the daemon" }],
+		details: { toolCompletion: { version: 1, state: "pending", service: "tool-completion", payload: { ticket: "t-1" } } },
+	},
+	isError: false,
+};
+
+test("executor: a resolved completion is bounded before it crosses the bridge", async () => {
+	const { broker, dispatcher } = makeBroker();
+	const pi = new FakePi();
+	serveCompletion(pi);
+	const policy = new ConsultToolPolicy({ allow: ["bash"] });
+	const executor = new ConsultExecuteTool(
+		broker,
+		policy,
+		new ConsultToolOutput(new SecretScreen(), 120),
+		new ConsultToolCompletion(pi.events, policy),
+	);
+	const waiting = broker.submit("c-z:claude", "c-z", "claude", "r1", {
+		kind: "tool",
+		name: "bash",
+		arguments: { command: "seq 1 5000" },
+	});
+	await Promise.resolve();
+	const piTools = {
+		tools: [{ name: "bash" }, { name: "tool_completion" }],
+		executeTool: async (name: string) => name === "bash"
+			? claim
+			: { result: { content: [{ type: "text", text: "x".repeat(5000) }] }, isError: false },
+	} as never;
+	await executor.execute({ requestId: dispatcher.posted[0].requestId }, undefined, piTools);
+	const delivered = await waiting;
+	assertEq(delivered.status, "answered");
+	assertIncludes(delivered.answer ?? "", "truncated", "the resolved output is cut, not forwarded whole");
+	assert(!(delivered.answer ?? "").includes("[pi-daemon] ticket"), "the claim never reaches the consultant");
+});
+
+test("executor: a run aborted mid-resolution settles as cancelled", async () => {
+	const { broker, dispatcher } = makeBroker(5000);
+	const pi = new FakePi();
+	serveCompletion(pi);
+	const policy = new ConsultToolPolicy({ allow: ["bash"] });
+	const executor = new ConsultExecuteTool(
+		broker,
+		policy,
+		new ConsultToolOutput(new SecretScreen()),
+		new ConsultToolCompletion(pi.events, policy),
+	);
+	const waiting = broker.submit("c-w:claude", "c-w", "claude", "r1", {
+		kind: "tool",
+		name: "bash",
+		arguments: { command: "sleep 30" },
+	});
+	await Promise.resolve();
+	const controller = new AbortController();
+	let started = (): void => undefined;
+	const inResolution = new Promise<void>((resolve) => {
+		started = resolve;
+	});
+	const piTools = {
+		tools: [{ name: "bash" }, { name: "tool_completion" }],
+		executeTool: (name: string, _params: unknown, options?: { signal?: AbortSignal }) => name === "bash"
+			? Promise.resolve(claim)
+			: new Promise((_resolve, reject) => {
+				started();
+				options?.signal?.addEventListener("abort", () => reject(new Error("aborted")));
+			}),
+	} as never;
+	const executing = executor.execute(
+		{ requestId: dispatcher.posted[0].requestId },
+		controller.signal,
+		piTools,
+	);
+	await inResolution;
+	controller.abort();
+	await executing;
+	assertEq((await waiting).status, "cancelled", "the consultant learns the run was withdrawn");
 });
