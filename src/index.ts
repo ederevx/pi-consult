@@ -33,6 +33,7 @@ import { ConsultSettingsStore } from "./consult-settings-store.ts";
 import { ConsultSupervisor } from "./consult-supervisor.ts";
 import { ConsultTerminateTool } from "./consult-terminate-tool.ts";
 import { ConsultTool } from "./consult-tool.ts";
+import { ConsultToolCompletion } from "./consult-tool-completion.ts";
 import { ConsultToolOutput } from "./consult-tool-output.ts";
 import { FallbackModels, type BoundEnvironment } from "./fallback-models.ts";
 import { NativeFallbackService } from "./native-fallback.ts";
@@ -163,10 +164,12 @@ export class ConsultExtension {
 		}).register(pi);
 		new ConsultTerminateTool(supervisor, effort).register(pi);
 		new ConsultReplyTool(broker, new SecretScreen()).register(pi);
+		const toolPolicy = new ConsultToolPolicy(config.drive.tools);
 		new ConsultExecuteTool(
 			broker,
-			new ConsultToolPolicy(config.drive.tools),
+			toolPolicy,
 			new ConsultToolOutput(new SecretScreen()),
+			new ConsultToolCompletion(pi.events, toolPolicy),
 		).register(pi);
 		new ImplementationGate(ledger, toolClassifier, contract).register(pi);
 		new AgentAvailability(failureClassifier, () => index.latest()?.consultId ?? null).register(pi);
