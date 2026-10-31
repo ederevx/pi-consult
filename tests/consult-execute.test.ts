@@ -2,6 +2,7 @@ import { BridgeProtocol } from "../src/bridge-protocol.ts";
 import { ConsultExecuteTool } from "../src/consult-execute-tool.ts";
 import type { DriveOutcome as BrokerDriveOutcome } from "../src/consult-request-broker.ts";
 import { ConsultRequestBroker } from "../src/consult-request-broker.ts";
+import { ConsultToolCompletion } from "../src/consult-tool-completion.ts";
 import { ConsultToolOutput } from "../src/consult-tool-output.ts";
 import { ConsultToolPolicy } from "../src/consult-tool-policy.ts";
 import { McpStdioServer } from "../src/mcp-stdio-server.ts";
@@ -433,10 +434,12 @@ test("mcp server: an invalid tool name errors immediately without a frame", asyn
 
 test("executor: the nested tool's text reaches the consultant", async () => {
 	const { broker, dispatcher } = makeBroker();
+	const policy = new ConsultToolPolicy({ allow: ["bash"] });
 	const executor = new ConsultExecuteTool(
 		broker,
-		new ConsultToolPolicy({ allow: ["bash"] }),
+		policy,
 		new ConsultToolOutput(new SecretScreen()),
+		new ConsultToolCompletion(undefined, policy),
 	);
 	const waiting = broker.submit("c-y:claude", "c-y", "claude", "r1", {
 		kind: "tool",
@@ -519,10 +522,12 @@ test("executor: the nested tool's text reaches the consultant", async () => {
 
 test("executor: an infrastructure failure reports isError and the delivery result", async () => {
 	const { broker, dispatcher } = makeBroker(5000);
+	const policy = new ConsultToolPolicy({ allow: ["bash"] });
 	const executor = new ConsultExecuteTool(
 		broker,
-		new ConsultToolPolicy({ allow: ["bash"] }),
+		policy,
 		new ConsultToolOutput(new SecretScreen()),
+		new ConsultToolCompletion(undefined, policy),
 	);
 	const failing = {
 		tools: [{ name: "bash" }],
@@ -559,10 +564,12 @@ test("executor: an infrastructure failure reports isError and the delivery resul
 	// A claimed run whose response expires mid-execution, then fails: the
 	// consultant keeps its deadline answer and the receipt reports no delivery.
 	const { broker: slowBroker, dispatcher: slowDispatcher } = makeBroker(50);
+	const slowPolicy = new ConsultToolPolicy({ allow: ["bash"] });
 	const slowExecutor = new ConsultExecuteTool(
 		slowBroker,
-		new ConsultToolPolicy({ allow: ["bash"] }),
+		slowPolicy,
 		new ConsultToolOutput(new SecretScreen()),
+		new ConsultToolCompletion(undefined, slowPolicy),
 	);
 	const slowResult = slowBroker.submit("c-x:claude", "c-x", "claude", "r1", {
 		kind: "tool",

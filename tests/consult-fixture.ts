@@ -17,6 +17,7 @@ import { ConsultConfig } from "../src/consult-config.ts";
 import { ConsultControlServer } from "../src/consult-control-server.ts";
 import { ConsultDelivery } from "../src/consult-delivery.ts";
 import { ConsultExecuteTool } from "../src/consult-execute-tool.ts";
+import { ConsultToolCompletion } from "../src/consult-tool-completion.ts";
 import { ConsultToolOutput } from "../src/consult-tool-output.ts";
 import { ConsultToolPolicy } from "../src/consult-tool-policy.ts";
 import { ConsultDriveDispatcher } from "../src/consult-drive-dispatcher.ts";
@@ -202,6 +203,7 @@ export function buildConsultFixture(
 			broker,
 			new ConsultToolPolicy(config.drive.tools),
 			new ConsultToolOutput(screen),
+			new ConsultToolCompletion(pi.events, new ConsultToolPolicy(config.drive.tools)),
 		),
 	};
 }
