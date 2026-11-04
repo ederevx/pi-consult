@@ -60,6 +60,8 @@ export interface InvocationSpec {
 	environment: object;
 	/** The request timeout that bounds a native fallback loop. */
 	timeoutMs: number;
+	/** Serve this invocation in the background: the caller does not wait. */
+	background?: boolean;
 	/** Serves the native fallback after the primary fan-out, when it applies.
 	 *  A continuation starts it directly, with no CLI attempts first. */
 	fallback?: (context: {
@@ -95,12 +97,14 @@ export class ConsultInvocation {
 	private results: readonly ConsultantResult[] | undefined;
 
 	state: InvocationState = "queued";
-	attachment: AttachmentState = "foreground";
+	attachment: AttachmentState;
 	detachedBy?: DetachReason;
 
 	constructor(spec: InvocationSpec, runner: ConsultRunner) {
 		this.spec = spec;
 		this.runner = runner;
+		this.attachment = spec.background ? "detached" : "foreground";
+		if (spec.background) this.detachedBy = "background";
 		this.consultId = spec.consultId;
 		this.sessionId = spec.sessionId;
 		this.cwd = spec.cwd;

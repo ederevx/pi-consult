@@ -51,6 +51,17 @@ function context(): FakeContext {
 	return new FakeContext([], "sess-drive", scratchDir(), false);
 }
 
+test("drive bridge: the CLI's tool timeout outlives the broker deadline", async () => {
+	const fixture = buildConsultFixture(configFile(fakeClaude(), fakeCodex()));
+	const paths = await fixture.artifacts.prepare("sess-bridge-timeout", "c-timeout1");
+	const bridge = await fixture.bridge.open("c-timeout1", "codex", paths);
+	assert(bridge !== undefined, "the bridge is prepared");
+	assert(bridge.toolTimeoutSec * 1000 > fixture.config.drive.deadlineMs,
+		"the CLI waits past the broker deadline");
+	assert(bridge.toolTimeoutSec * 1000 <= fixture.config.drive.deadlineMs + 120_000,
+		"the margin stays a bounded grace period");
+});
+
 test("drive bridge: a consultant request reaches pi and is answered", async () => {
 	const fixture = buildConsultFixture(configFile(fakeClaude(), fakeCodex()));
 	const endpoint = await fixture.control.listen();

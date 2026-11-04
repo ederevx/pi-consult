@@ -66,6 +66,10 @@ export class ConsultDelivery {
 	private deliver(invocation: ConsultInvocation, receipt: ConsultReceipt): void {
 		this.announced.add(invocation.consultId);
 		const terminated = invocation.state === "terminated";
+		const background = invocation.detachedBy === "background";
+		// A turn starts to execute the answer unless the consult ended or the
+		// user escaped the wait: then the result is only recorded.
+		const resumes = !terminated && invocation.detachedBy !== "escape";
 		this.pi.sendMessage(
 			{
 				customType: RESULT_MESSAGE,
@@ -74,12 +78,14 @@ export class ConsultDelivery {
 				details: receipt.details,
 			},
 			{
-				deliverAs: "followUp",
-				triggerTurn: !terminated && invocation.detachedBy !== "escape",
+				deliverAs: background ? "steer" : "followUp",
+				triggerTurn: resumes,
 			},
 		);
 		if (!terminated) {
-			this.effort?.settle(invocation.consultId, receipt.details, receipt.answers);
+			this.effort?.settle(invocation.consultId, receipt.details, receipt.answers, resumes);
+		} else {
+			this.effort?.settle(invocation.consultId, undefined, undefined, false);
 		}
 	}
 

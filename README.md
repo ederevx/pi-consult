@@ -111,6 +111,10 @@ surfaced as a warning.
 - **`consult_reply`** - answers a consultant's bridge request by `requestId`,
   so the blocked consultant can continue; screened for secrets like a brief.
 
+Continuations of one provider session are serialized: a Codex `exec resume`
+waits for the earlier run of the same thread instead of failing on Codex's
+active-writer lock. Different threads still run concurrently.
+
 ### The closing consultation
 
 The catalogue instructs the agent, and the tool's prompt guidelines repeat it:
@@ -164,14 +168,21 @@ The catalogue instructs the agent, and the tool's prompt guidelines repeat it:
 
 ### pi's thinking level
 
-From the first consult of a task, pi-consult holds pi's thinking level at
-`low` (`medium` where the model has no `low`); on a model with nothing below
-`high` it warns and reports the hold unsupported. During a hold any raise,
-including the automatic one a model switch makes, is lowered again; only
-`/consult-effort release` ends a hold early (`/consult-effort` alone shows its
-state). The hold ends, and pi's previous level returns, when one of these
-markers qualifies. Completion markers must be the final non-blank line;
-fallback and user-request markers must appear on their own plain lines.
+From the first consultant answer that gives pi a plan without an approved
+verdict, pi-consult captures pi's thinking level and lowers it to `low`
+(`medium` where the model has no `low`) for the rest of that agent run while
+pi executes the plan. Asking is not executing: engaging a consult, waiting for
+one, or starting another while the first is running never lowers the level.
+When the agent run settles or is aborted, when the answer is approved, or when
+it fails or is terminated, the captured level returns at once and only a new
+unapproved answer can capture and lower it again. On a model with nothing
+below `high` it warns and reports the hold unsupported. While executing under
+the plan any raise, including the automatic one a model switch makes, is
+lowered again; only `/consult-effort release` ends a cycle early
+(`/consult-effort` alone shows its state). The cycle ends, and pi's previous
+level returns, when one of these markers qualifies. Completion markers must be
+the final non-blank line; fallback and user-request markers must appear on
+their own plain lines.
 
 - `Consultation cycle: complete - <consult id> verified.` - the cited
   consult's answer ends with a passing convention audit line and the approved
@@ -186,7 +197,7 @@ fallback and user-request markers must appear on their own plain lines.
   records agree: every enabled consultant has expired and nothing is owed;
 - `Audit by pi at the user's request - <request>.`
 
-A completion marker that does not qualify keeps the hold, and pi-consult
+A completion marker that does not qualify keeps the cycle open, and pi-consult
 tells the agent once per distinct reason what still closes the cycle: the
 result to wait for, the consult to continue for its verdict, or the fresh
 audit to spawn. The one exception: when every consultant the cited consult
@@ -224,9 +235,12 @@ run settles, then the stream closes with any trailing prose. The pending tool
 receipt does not carry the answer; the full result (status, answer, answer
 paths, consult id) is delivered into the starting session as a
 `pi-consult-result` message, which continues the agent after a steer or a
-consultant request and waits for the next prompt after Escape. If pi is in
-another session when it finishes, delivery waits until it returns.
-`consult_terminate` is the only way to end one early.
+consultant request and waits for the next prompt after Escape. A call started
+with `background: true` is delivered as a steer after the current tool batch and
+before the next model call, so it lands while the agent is still working instead
+of waiting for the turn to end. If pi is in another session when it finishes,
+delivery waits until it returns. `consult_terminate` is the only way to end one
+early.
 
 ## The `consult` tool
 
@@ -239,6 +253,7 @@ another session when it finishes, delivery waits until it returns.
 | `continue` | A prior consult id (`c-xxxxxx`) or `"last"` to continue that session |
 | `model` | Model override; only with a single target |
 | `timeout_s` | Per-consultant timeout in seconds |
+| `background` | Return immediately and keep working; the result is steered back after the current tool batch |
 
 Continuing is refused when a selected target has no saved session for that
 consult, instead of silently starting fresh under a `continuedFrom` id; it is

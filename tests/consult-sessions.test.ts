@@ -5,6 +5,7 @@ import { ArtifactStore } from "../src/artifact-store.ts";
 import { ConsultRecordStore } from "../src/consult-record-store.ts";
 import { ConsultIndex } from "../src/consult-index.ts";
 import { ConsultContract } from "../src/consult-contract.ts";
+import { ConsultDelivery } from "../src/consult-delivery.ts";
 import { ConsultSupervisor } from "../src/consult-supervisor.ts";
 import { ReceiptLedger } from "../src/receipt-ledger.ts";
 import type { ConsultDetails, ConsultReceipt } from "../src/contracts.ts";
@@ -107,8 +108,37 @@ test("consult sessions: a steered call detaches, keeps running, and is delivered
 		`continue with: consult {continue:"${result.details.consultId}"`, "the delivery names the continuation");
 });
 
+test("consult sessions: a background call returns at once and steers its result", async () => {
+	const fixture = buildConsultFixture(configFile(fakeClaude(300), fakeCodex()), "sess-background");
+	const started = await fixture.tool.execute(
+		"call-background-1",
+		{ target: "claude", brief: "Work while I do other things.", background: true, contains_no_secrets: true },
+		undefined, undefined, context("sess-background") as never);
+	assertEq(started.details.phase, "running", "returns a pending receipt");
+	assertEq(started.details.detachedBy, "background", "names the background start");
+	assertEq(started.isError, undefined, "a background receipt is not an error");
+	assertIncludes(started.content[0].text, "running in the background");
+	const invocation = fixture.supervisor.get(started.details.consultId);
+	assert(invocation !== undefined && invocation.live, "the invocation keeps running");
+
+	await invocation.done();
+	await delay(30);
+	const last = fixture.pi.messages.at(-1);
+	assert(last, "a result was delivered");
+	const options = last.options as { deliverAs?: string; triggerTurn?: boolean };
+	assertEq(options.deliverAs, "steer", "a background result is steered back");
+	assertEq(options.triggerTurn, true, "a background result resumes the agent");
+	const message = delivered(fixture.pi);
+	assertIncludes(message.content, "FAKE ANSWER", "the delivery carries the answer");
+});
+
 test("consult sessions: Escape detaches instead of aborting", async () => {
-	const fixture = buildConsultFixture(configFile(fakeClaude(600), fakeCodex()), "sess-int");
+	const settleArgs: unknown[][] = [];
+	const effort = {
+		engage: (_ctx: unknown, _id: string) => undefined,
+		settle: (...args: unknown[]) => settleArgs.push(args),
+	};
+	const fixture = buildConsultFixture(configFile(fakeClaude(600), fakeCodex()), "sess-int", effort);
 	const controller = new AbortController();
 	setTimeout(() => controller.abort(), 80);
 	const result = await fixture.tool.execute(
@@ -127,6 +157,36 @@ test("consult sessions: Escape detaches instead of aborting", async () => {
 	assert(last, "an Escape detach is still delivered");
 	assertEq((last.options as { triggerTurn?: boolean }).triggerTurn, false,
 		"an Escape detach waits for the user");
+	assertEq(settleArgs.length, 1, "the delivery settles once");
+	assertEq(settleArgs[0][3], false, "an escaped result is not executed");
+});
+
+test("consult sessions: delivery settles by how the consult ended", () => {
+	const settles: unknown[][] = [];
+	const sent: Array<{ triggerTurn?: boolean }> = [];
+	const delivery = new ConsultDelivery(
+		{ sendMessage: (_message: unknown, options: { triggerTurn?: boolean }) => sent.push(options) } as never,
+		{ get: () => "sess" } as never,
+		{ format: () => "answer" } as never,
+		{ settle: (...args: unknown[]) => settles.push(args) } as never,
+	);
+	const receipt = { details: { runs: [] }, answers: new Map() };
+	const invocation = (consultId: string, detachedBy: string, state: string) =>
+		({ consultId, sessionId: "sess", attachment: "detached", detachedBy, state }) as never;
+
+	delivery.announce(invocation("c-bg", "background", "completed"), receipt as never);
+	delivery.announce(invocation("c-esc", "escape", "completed"), receipt as never);
+	delivery.announce(invocation("c-term", "background", "terminated"), receipt as never);
+
+	assertEq(settles[0][3], true, "a resumed turn executes the answer");
+	assertEq(sent[0].triggerTurn, true);
+	assertEq(settles[1][1], receipt.details, "an escaped result still accounts");
+	assertEq(settles[1][3], false, "no turn starts, so nothing executes");
+	assertEq(sent[1].triggerTurn, false);
+	assertEq(settles[2][1], undefined, "a terminated consult carries no details");
+	assertEq(settles[2][2], undefined, "a terminated consult carries no answers");
+	assertEq(settles[2][3], false);
+	assertEq(sent[2].triggerTurn, false);
 });
 
 test("consult sessions: a steered TUI call keeps writing cards until it settles", async () => {
@@ -437,13 +497,18 @@ test("consult sessions: terminate settles only a successful termination", async 
 	assert(invocation !== undefined && invocation.live, "running before termination");
 	const result = await fixture.terminate.execute({ id: started.details.consultId });
 	assertEq(result.isError, false);
-	assertEq(settleArgs.length, 1, "the successful terminate settles the consult");
-	assertEq(settleArgs[0][0], started.details.consultId);
-	assertEq(settleArgs[0].length, 1, "terminate settles with the handle only");
+	assert(settleArgs.length >= 1, "the successful terminate settles the consult");
+	for (const args of settleArgs) {
+		assertEq(args[0], started.details.consultId);
+		assertEq(args.length, 4, "terminate reports the consult executing nothing");
+		assertEq(args[1], undefined, "terminate passes no details");
+		assertEq(args[2], undefined, "terminate passes no answers");
+		assertEq(args[3], false, "a terminated consult is not executed");
+	}
 
 	const failed = await fixture.terminate.execute({ id: "c-000000000000" });
 	assertEq(failed.isError, true);
-	assertEq(settleArgs.length, 1, "a failed terminate settles nothing");
+	assertEq(settleArgs.length, 2, "a failed terminate settles nothing");
 });
 
 test("consult sessions: continuing a detached consult is refused while live and resumes once settled", async () => {

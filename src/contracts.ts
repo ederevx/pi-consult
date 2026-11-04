@@ -62,8 +62,8 @@ export type InvocationState =
 /** Whether a tool call is still watching the invocation it started. */
 export type AttachmentState = "foreground" | "detached";
 
-/** Why a foreground tool call stopped watching a still-running invocation. */
-export type DetachReason = "escape" | "steer" | "wait_timeout" | "pi_request";
+/** Why a call stopped watching a still-running invocation. */
+export type DetachReason = "escape" | "steer" | "wait_timeout" | "pi_request" | "background";
 
 /** Whether a receipt describes a finished consultation or a live one. */
 export type ConsultPhase = "running" | "complete";
@@ -107,7 +107,7 @@ export interface ConsultDetails {
 	cwd: string;
 	briefPath: string;
 	continuedFrom?: string;
-	/** Set when the foreground caller detached instead of waiting. */
+	/** Set when this call did not wait: an interrupt, or a background start. */
 	detachedBy?: DetachReason;
 	/** The live invocation's state, when the receipt is a running one. */
 	state?: InvocationState;
@@ -139,6 +139,9 @@ export interface BridgeConnection {
 	/** The 0600 capability file naming the endpoint and its token. */
 	descriptorPath: string;
 	invocationId: string;
+	/** How long the CLI's MCP client waits for one bridge call. The broker's
+	 *  own deadline is shorter, so pi's answer always settles the request. */
+	toolTimeoutSec: number;
 	/** The MCP server name both CLIs are configured with. */
 	serverName: string;
 	/** The MCP tool name on that server. */

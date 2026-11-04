@@ -111,7 +111,7 @@ test("audit: an ok consult needs an approved verdict to restore", async () => {
 		verdictAnswers({ claude: "No verdict line at all." }),
 	);
 	await host.run("Consultation cycle: complete - c-000101 verified.");
-	assertEq(host.getThinkingLevel(), "low");
+	assertEq(host.getThinkingLevel(), "high");
 	assertIncludes(notices(ctx), "approved consultant verdict");
 
 	policy.engage(ctx as never, "c-000102");
@@ -136,7 +136,7 @@ test("audit: with both, one changes-needed run blocks the approval", async () =>
 		}),
 	);
 	await host.run("Consultation cycle: complete - c-000103 verified.");
-	assertEq(host.getThinkingLevel(), "low");
+	assertEq(host.getThinkingLevel(), "high");
 	assertIncludes(notices(ctx), "approved consultant verdict");
 });
 
@@ -151,7 +151,7 @@ test("audit: a verdict quoted mid-answer or inside a fence is not approval", asy
 		policy.engage(ctx as never, id);
 		policy.settle(id, consultDetails(id, [consultRun("claude", "ok")]), verdictAnswers({ claude: answer }));
 		await host.run(`Consultation cycle: complete - ${id} verified.`);
-		assertEq(host.getThinkingLevel(), "low", `held for ${JSON.stringify(answer)}`);
+		assertEq(host.getThinkingLevel(), "high", `released for ${JSON.stringify(answer)}`);
 	}
 });
 
@@ -171,7 +171,11 @@ test("audit: auth and unavailable expire a consultant on one run", async () => {
 });
 
 test("audit: one plain error does not expire; two do", async () => {
-	assertEq(await singleRunRestores("error", "boom"), false);
+	const plain = setup(config({ codex: { enabled: false } }));
+	plain.policy.engage(plain.ctx as never, "c-e010");
+	plain.policy.settle("c-e010", consultDetails("c-e010", [consultRun("claude", "error", "boom")], false));
+	assertEq(lastEntry(plain.host).holding, true, "one error keeps the cycle open");
+	assertEq(plain.host.getThinkingLevel(), "high", "normal effort between consults");
 	const state = setup(config({ codex: { enabled: false } }));
 	state.policy.engage(state.ctx as never, "c-e011");
 	state.policy.settle("c-e011", consultDetails("c-e011", [consultRun("claude", "error", "boom")], false));
@@ -182,7 +186,13 @@ test("audit: one plain error does not expire; two do", async () => {
 });
 
 test("audit: an aborted billing run never expires, and a later ok clears", async () => {
-	assertEq(await singleRunRestores("aborted", "billing failure"), false);
+	const aborted = setup(config({ codex: { enabled: false } }));
+	aborted.policy.engage(aborted.ctx as never, "c-e010a");
+	aborted.policy.settle(
+		"c-e010a",
+		consultDetails("c-e010a", [consultRun("claude", "aborted", "billing failure")], false),
+	);
+	assertEq(lastEntry(aborted.host).holding, true, "an abort never closes the cycle");
 
 	const state = setup(config({ codex: { enabled: false } }));
 	state.policy.engage(state.ctx as never, "c-e013");
@@ -194,7 +204,7 @@ test("audit: an aborted billing run never expires, and a later ok clears", async
 		verdictAnswers({ claude: APPROVED_VERDICT }),
 	);
 	await state.host.run("Consultant fallback: no consultant available - but claude worked.");
-	assertEq(state.host.getThinkingLevel(), "low", "a later ok clears the failures");
+	assertEq(state.host.getThinkingLevel(), "high", "a later ok clears the failures");
 });
 
 test("audit: a spawn while codex can still serve warns and never enters the ledger", async () => {
@@ -207,7 +217,7 @@ test("audit: a spawn while codex can still serve warns and never enters the ledg
 	spawnAuditor(state, "tm-serve");
 	assertIncludes(notices(state.ctx), "can still serve");
 	await state.host.run("Consultation cycle: complete - tm-serve independently verified.");
-	assertEq(state.host.getThinkingLevel(), "low");
+	assertEq(state.host.getThinkingLevel(), "high");
 	assertIncludes(notices(state.ctx), "not an independent auditor");
 });
 
@@ -220,7 +230,7 @@ test("audit: the audit spawn raises for the call, ignores the selection, then lo
 	state.host.emit("thinking_level_select", { level: "high" });
 	assertEq(state.host.getThinkingLevel(), "high", "the spawn's own selection is not lowered");
 	state.host.toolExecutionEnd("t1", { result: { details: { id: "tm-1" } } });
-	assertEq(state.host.getThinkingLevel(), "low", "the result lowers again");
+	assertEq(state.host.getThinkingLevel(), "high", "the result leaves normal effort");
 	assert((lastEntry(state.host).owed as string[]).includes("tm-1"));
 	assert((lastEntry(state.host).fresh as string[]).includes("tm-1"));
 });
@@ -229,7 +239,7 @@ test("audit: only a task starting with the header is a spawn", () => {
 	const plain = expiredAudit();
 	plain.host.addTool("team_spawn");
 	plain.host.toolCall("team_spawn", { task: "do the work" }, "t-plain");
-	assertEq(plain.host.getThinkingLevel(), "low", "no header, no raise");
+	assertEq(plain.host.getThinkingLevel(), "high", "no header, no raise");
 	plain.host.toolExecutionEnd("t-plain", { result: { details: { id: "tm-plain" } } });
 	assert(!((lastEntry(plain.host).owed as string[] | undefined) ?? []).includes("tm-plain"));
 
@@ -287,7 +297,7 @@ test("audit: a logged approved verdict restores; other log shapes are ignored", 
 		payload: "Independent audit verdict: approved - not received.",
 	});
 	await state.host.run("Consultation cycle: complete - tm-log independently verified.");
-	assertEq(state.host.getThinkingLevel(), "low");
+	assertEq(state.host.getThinkingLevel(), "high");
 
 	logReport(state, "tm-log", "approved");
 	await state.host.run("Consultation cycle: complete - tm-log independently verified.");
@@ -299,14 +309,14 @@ test("audit: changes needed, an edit, then a fresh audit that approves restores"
 	spawnAuditor(state, "tm-first");
 	logReport(state, "tm-first", "changes needed");
 	await state.host.run("Consultation cycle: complete - tm-first independently verified.");
-	assertEq(state.host.getThinkingLevel(), "low");
+	assertEq(state.host.getThinkingLevel(), "high");
 	assertIncludes(notices(state.ctx), "has not reported an approved independent verdict");
 
 	state.host.toolCall("edit", {});
 	spawnAuditor(state, "tm-second");
 	logReport(state, "tm-second", "approved");
 	await state.host.run("Consultation cycle: complete - tm-first independently verified.");
-	assertEq(state.host.getThinkingLevel(), "low", "the first id stays refused");
+	assertEq(state.host.getThinkingLevel(), "high", "the first id stays refused");
 	await state.host.run("Consultation cycle: complete - tm-second independently verified.");
 	assertEq(state.host.getThinkingLevel(), "high");
 });
@@ -318,7 +328,7 @@ test("audit: an auditor spawned before a later edit is not fresh", async () => {
 	await state.host.run("Working.");
 	state.host.toolCall("edit", {});
 	await state.host.run("Consultation cycle: complete - tm-fresh independently verified.");
-	assertEq(state.host.getThinkingLevel(), "low");
+	assertEq(state.host.getThinkingLevel(), "high");
 	assertIncludes(notices(state.ctx), "before your last edit");
 });
 
@@ -342,7 +352,7 @@ test("audit: the unavailable line warns only while pi-teams is present and nothi
 	present.host.addTool("team_spawn");
 	await present.host.run("Independent audit unavailable - no independent agent.");
 	assertIncludes(notices(present.ctx), "spawn one with team_spawn");
-	assertEq(present.host.getThinkingLevel(), "low", "the claim changes no state");
+	assertEq(present.host.getThinkingLevel(), "high", "the claim changes no state");
 
 	const absent = setup();
 	absent.policy.engage(absent.ctx as never, "c-000107");
@@ -384,11 +394,11 @@ test("audit: the roadblock fallback needs every enabled consultant expired", asy
 	serving.policy.engage(serving.ctx as never, "c-000109");
 	serving.policy.settle("c-000109", consultDetails("c-000109", [consultRun("claude", "unavailable")], false));
 	await serving.host.run("Consultant fallback: no consultant available - roadblock.");
-	assertEq(serving.host.getThinkingLevel(), "low", "codex has not expired");
+	assertEq(serving.host.getThinkingLevel(), "high", "codex has not expired; effort is normal");
 	assertIncludes(notices(serving.ctx), "has not expired in this cycle");
 });
 
-test("audit: a completed spawn registers, then lowers quietly", () => {
+test("audit: a completed spawn registers, then leaves normal effort quietly", () => {
 	const state = expiredAudit();
 	state.host.addTool("team_spawn");
 	const task = "pi-consult independent audit - check.";
@@ -396,7 +406,7 @@ test("audit: a completed spawn registers, then lowers quietly", () => {
 	assertEq(state.host.getThinkingLevel(), "high", "the spawn raises");
 	const before = state.ctx.notifyCalls.length;
 	state.host.toolExecutionEnd("t-quiet", { result: { details: { id: "tm-quiet" } } });
-	assertEq(state.host.getThinkingLevel(), "low", "the end lowers again");
+	assertEq(state.host.getThinkingLevel(), "high", "the end leaves normal effort");
 	assertEq(state.ctx.notifyCalls.length, before, "the end's lowering is quiet");
 	assert((lastEntry(state.host).owed as string[]).includes("tm-quiet"));
 });
@@ -409,7 +419,7 @@ test("audit: a failed or aborted spawn records a failed audit and lowers", () =>
 		state.host.toolCall("team_spawn", { task }, "t-fail");
 		assertEq(state.host.getThinkingLevel(), "high", `${label}: the spawn raises`);
 		state.host.toolExecutionEnd("t-fail", { isError: true });
-		assertEq(state.host.getThinkingLevel(), "low", `${label}: the failed end lowers`);
+		assertEq(state.host.getThinkingLevel(), "high", `${label}: the failed end leaves normal effort`);
 		assertEq(lastEntry(state.host).auditFailed, true, `${label}: the audit is failed`);
 		assertIncludes(notices(state.ctx), "did not complete");
 	}
@@ -425,7 +435,7 @@ test("audit: two parallel spawns lower only when the last one ends", () => {
 	state.host.toolExecutionEnd("t-p1", { result: { details: { id: "tm-p1" } } });
 	assertEq(state.host.getThinkingLevel(), "high", "one spawn is still pending");
 	state.host.toolExecutionEnd("t-p2", { result: { details: { id: "tm-p2" } } });
-	assertEq(state.host.getThinkingLevel(), "low", "the second end lowers");
+	assertEq(state.host.getThinkingLevel(), "high", "the second end leaves normal effort");
 	const owed = lastEntry(state.host).owed as string[];
 	assert(owed.includes("tm-p1") && owed.includes("tm-p2"), "both auditors are owed");
 });
@@ -439,7 +449,7 @@ test("audit: a lost spawn end is rolled back at every run boundary", () => {
 		assertEq(state.host.getThinkingLevel(), "high", `${boundary}: the spawn raises`);
 		if (boundary === "turn_end") state.host.emit("turn_end", { message: assistantMessage("working.") });
 		else state.host.emit(boundary, {});
-		assertEq(state.host.getThinkingLevel(), "low", `${boundary}: the boundary rolls back`);
+		assertEq(state.host.getThinkingLevel(), "high", `${boundary}: the boundary restores normal effort`);
 		assertEq(lastEntry(state.host).auditFailed, true, `${boundary}: the audit is failed`);
 		assertIncludes(notices(state.ctx), "never reported its end");
 	}
@@ -459,7 +469,7 @@ test("audit: a reload mid-spawn drops the pending set and lowers", () => {
 	const policy2 = new AgentEffortPolicy(shared);
 	policy2.register(host2 as never);
 	host2.emit("session_start", {});
-	assertEq(host2.getThinkingLevel(), "low", "load clears the pending spawn and lowers");
+	assertEq(host2.getThinkingLevel(), "high", "load drops the pending spawn and leaves normal effort");
 	assertEq(lastEntry(host2).holding, true);
 });
 
@@ -467,7 +477,7 @@ test("audit: a non-audit spawn and a spawn with the hold off are ignored", () =>
 	const plain = expiredAudit();
 	plain.host.addTool("team_spawn");
 	plain.host.toolCall("team_spawn", { task: "do the work" }, "t-plain");
-	assertEq(plain.host.getThinkingLevel(), "low");
+	assertEq(plain.host.getThinkingLevel(), "high");
 	plain.host.toolExecutionEnd("t-plain", { result: { details: { id: "tm-plain" } } });
 	assert(!(((lastEntry(plain.host).owed as string[] | undefined) ?? []).includes("tm-plain")));
 
@@ -483,8 +493,13 @@ test("audit: a non-audit spawn and a spawn with the hold off are ignored", () =>
 });
 
 test("audit: a local path or permission error never expires a consultant alone", async () => {
-	assertEq(await singleRunRestores("error", "ENOENT: cannot open /work/billing/schema.json"), false);
-	assertEq(await singleRunRestores("error", "EACCES: permission denied, open /work/a.txt"), false);
+	const first = setup(config({ codex: { enabled: false } }));
+	first.policy.engage(first.ctx as never, "c-e019");
+	first.policy.settle(
+		"c-e019",
+		consultDetails("c-e019", [consultRun("claude", "error", "ENOENT: cannot open /work/billing/schema.json")], false),
+	);
+	assertEq(lastEntry(first.host).holding, true, "a local error keeps the cycle open");
 
 	const state = setup(config({ codex: { enabled: false } }));
 	state.policy.engage(state.ctx as never, "c-e020");
@@ -494,7 +509,7 @@ test("audit: a local path or permission error never expires a consultant alone",
 	);
 	assertEq((lastEntry(state.host).failures as Record<string, number>).claude, 1, "one ordinary failure is counted");
 	await state.host.run("Consultant fallback: no consultant available - roadblock.");
-	assertEq(state.host.getThinkingLevel(), "low", "one failure is not expiry");
+	assertEq(state.host.getThinkingLevel(), "high", "one failure is not expiry; effort is normal");
 
 	state.policy.engage(state.ctx as never, "c-e021");
 	state.policy.settle(
@@ -526,7 +541,7 @@ test("audit: a verdict followed by a closing fence is not approved", async () =>
 		verdictAnswers({ claude: `${APPROVED_VERDICT}\n\`\`\`` }),
 	);
 	await state.host.run("Consultation cycle: complete - c-e030 verified.");
-	assertEq(state.host.getThinkingLevel(), "low", "the verdict is no longer the last plain line");
+	assertEq(state.host.getThinkingLevel(), "high", "the verdict is no longer the last plain line");
 	assertIncludes(notices(state.ctx), "approved consultant verdict");
 });
 
@@ -540,7 +555,7 @@ test("audit: an auditor payload ending in a quoted line is a failed audit", asyn
 		payload: `Independent audit verdict: approved - reason.\n> Still unfinished.`,
 	});
 	await state.host.run("Consultation cycle: complete - tm-quote independently verified.");
-	assertEq(state.host.getThinkingLevel(), "low");
+	assertEq(state.host.getThinkingLevel(), "high");
 	assertEq(lastEntry(state.host).auditFailed, true, "the quoted verdict does not count");
 });
 
@@ -549,7 +564,7 @@ test("audit: a refused marker names the owed auditor to wait for", async () => {
 	const state = expiredAudit();
 	spawnAuditor(state, "tm-owed");
 	await state.host.run("Consultation cycle: complete - tm-owed independently verified.");
-	assertEq(state.host.getThinkingLevel(), "low");
+	assertEq(state.host.getThinkingLevel(), "high");
 	const sent = cycleNotes(state.host);
 	assertEq(sent.length, 1);
 	assertEq(sent[0].options?.deliverAs, "followUp");
@@ -562,7 +577,7 @@ test("audit: a changes-needed auditor gets a note for a fresh audit, never a rel
 	spawnAuditor(state, "tm-changes");
 	logReport(state, "tm-changes", "changes needed");
 	await state.host.run("Consultation cycle: complete - tm-changes independently verified.");
-	assertEq(state.host.getThinkingLevel(), "low");
+	assertEq(state.host.getThinkingLevel(), "high");
 	const sent = cycleNotes(state.host);
 	assertEq(sent.length, 1);
 	assertIncludes(sent[0].message.content ?? "", "spawn a fresh independent audit");
@@ -586,7 +601,7 @@ test("audit: an approval without a passing convention audit is not approval", as
 			verdictAnswers({ claude: answer }),
 		);
 		await host.run(`Consultation cycle: complete - ${id} verified.`);
-		assertEq(host.getThinkingLevel(), "low", "the approval does not close the cycle");
+		assertEq(host.getThinkingLevel(), "high", "the approval does not close the cycle");
 		assertIncludes(notices(ctx), "approved consultant verdict after a passing convention audit");
 	}
 });
@@ -617,6 +632,6 @@ test("audit: an independent approval without a convention audit does not verify"
 		payload: "Independent audit verdict: approved - reason.",
 	});
 	await state.host.run("Consultation cycle: complete - tm-bare independently verified.");
-	assertEq(state.host.getThinkingLevel(), "low");
+	assertEq(state.host.getThinkingLevel(), "high");
 	assertIncludes(notices(state.ctx), "approved independent verdict after a passing convention audit");
 });
