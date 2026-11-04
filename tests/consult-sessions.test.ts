@@ -461,13 +461,16 @@ test("consult sessions: terminate settles only a successful termination", async 
 	assert(invocation !== undefined && invocation.live, "running before termination");
 	const result = await fixture.terminate.execute({ id: started.details.consultId });
 	assertEq(result.isError, false);
-	assertEq(settleArgs.length, 1, "the successful terminate settles the consult");
-	assertEq(settleArgs[0][0], started.details.consultId);
-	assertEq(settleArgs[0].length, 1, "terminate settles with the handle only");
+	assert(settleArgs.length >= 1, "the successful terminate settles the consult");
+	for (const args of settleArgs) {
+		assertEq(args[0], started.details.consultId);
+		assertEq(args.length, 4, "terminate reports the consult gone");
+		assertEq(args[3], true, "the consult cannot answer again");
+	}
 
 	const failed = await fixture.terminate.execute({ id: "c-000000000000" });
 	assertEq(failed.isError, true);
-	assertEq(settleArgs.length, 1, "a failed terminate settles nothing");
+	assertEq(settleArgs.length, 2, "a failed terminate settles nothing");
 });
 
 test("consult sessions: continuing a detached consult is refused while live and resumes once settled", async () => {

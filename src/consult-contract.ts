@@ -139,14 +139,17 @@ export class ConsultContract {
 			"  execution: the edits, builds, test runs, and commands that produce",
 			"  evidence. Execution safety stays yours: a consultant's plan never",
 			"  authorizes a destructive or irreversible step the user has not approved.",
-			"- From your first consult of a task until its consultation and execution",
-			"  are complete, pi-consult holds your own thinking effort at low (medium",
-			"  where the model has no low). It never leaves you at high, xhigh, or max",
-			"  while the model offers a lower level; on a model with nothing lower it",
-			"  warns and reports the hold as unsupported. The deep reasoning belongs in",
-			"  the consult: rely on the plan as written, and meet every roadblock with",
+			"- From the first consultant answer that returns a plan, pi-consult holds your own thinking effort",
+			"  at low (medium where the model has no low) while",
+			"  you execute that plan. Starting another consult, and waiting for its",
+			"  answer, returns you to normal. It never leaves you at high, xhigh, or max",
+			"  while working under the plan; on a model with nothing lower it warns and",
+			"  reports the hold as unsupported. The deep reasoning belongs in the",
+			"  consult: rely on the plan as written, and meet every roadblock with",
 			"  another consult, not more thinking of your own. Only the user can end",
-			"  the hold early, with /consult-effort release.",
+			"  the hold early, with /consult-effort release. A consult that is",
+			"  terminated, or gone with nothing left to answer it, restores your level",
+			"  at once.",
 			"- When the consultant's verification answer ends with",
 			"    Consultant verdict: approved - <one-line reason>.",
 			"  it has handed control back to you. If no consult is running or",
@@ -287,7 +290,7 @@ export class ConsultContract {
 				"prefer a single consultant for most tasks and use both only when the " +
 				"task demands two independent perspectives. Returns the answer and a " +
 				"continuation id. Pass background: true to return at once and keep " +
-				"working; its result is steered back at the next tool-call boundary.",
+				"working; its result is steered back after the current tool batch.",
 		);
 		lines.push(
 			"- consult_terminate: end a background consult early; nothing else stops one.",

@@ -168,13 +168,16 @@ The catalogue instructs the agent, and the tool's prompt guidelines repeat it:
 
 ### pi's thinking level
 
-From the first consult of a task, pi-consult holds pi's thinking level at
-`low` (`medium` where the model has no `low`); on a model with nothing below
-`high` it warns and reports the hold unsupported. During a hold any raise,
-including the automatic one a model switch makes, is lowered again; only
-`/consult-effort release` ends a hold early (`/consult-effort` alone shows its
-state). The hold ends, and pi's previous level returns, when one of these
-markers qualifies. Completion markers must be the final non-blank line;
+From the first consultant answer that gives pi a plan, pi-consult holds pi's
+thinking level at `low` (`medium` where the model has no `low`) while pi
+executes that plan. Starting another consult returns the captured level while
+the consult is in flight, and its answer lowers it again. On a model with
+nothing below `high` it warns and reports the hold unsupported. While working
+under the plan any raise, including the automatic one a model switch makes, is
+lowered again; only `/consult-effort release` ends a cycle early
+(`/consult-effort` alone shows its state). A terminated consult, or one gone
+with nothing left to answer it, restores the captured level at once. The cycle
+ends, and pi's previous level returns, when one of these markers qualifies. Completion markers must be the final non-blank line;
 fallback and user-request markers must appear on their own plain lines.
 
 - `Consultation cycle: complete - <consult id> verified.` - the cited
@@ -229,10 +232,11 @@ receipt does not carry the answer; the full result (status, answer, answer
 paths, consult id) is delivered into the starting session as a
 `pi-consult-result` message, which continues the agent after a steer or a
 consultant request and waits for the next prompt after Escape. A call started
-with `background: true` is delivered as a steer at the next tool-call
-boundary, so it lands while the agent is still working instead of waiting for
-the turn to end. If pi is in another session when it finishes, delivery waits
-until it returns. `consult_terminate` is the only way to end one early.
+with `background: true` is delivered as a steer after the current tool batch and
+before the next model call, so it lands while the agent is still working instead
+of waiting for the turn to end. If pi is in another session when it finishes,
+delivery waits until it returns. `consult_terminate` is the only way to end one
+early.
 
 ## The `consult` tool
 
@@ -245,7 +249,7 @@ until it returns. `consult_terminate` is the only way to end one early.
 | `continue` | A prior consult id (`c-xxxxxx`) or `"last"` to continue that session |
 | `model` | Model override; only with a single target |
 | `timeout_s` | Per-consultant timeout in seconds |
-| `background` | Return immediately and keep working; the result is steered back at the next tool-call boundary |
+| `background` | Return immediately and keep working; the result is steered back after the current tool batch |
 
 Continuing is refused when a selected target has no saved session for that
 consult, instead of silently starting fresh under a `continuedFrom` id; it is

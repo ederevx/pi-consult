@@ -1,16 +1,17 @@
 /**
  * pi-consult — pi's own thinking level in consultant mode.
  *
- * Owns one consultation cycle: from a task's first consult, pi runs at low
- * thinking (the consultant owns the plan) until control is handed back — a
- * consult whose answer ends with a passing convention audit and the approved
- * verdict, or, once every enabled consultant has expired, an approved report
- * from a dedicated independent auditor spawned through pi-teams. A fallback
- * the records support, an explicit user audit, or `/consult-effort release`
- * also ends it. Every change is persisted on the session branch. Consultant
- * `effort` settings are not touched. A refused completion line is answered
- * once with what still closes the cycle; it closes unverified only when every
- * consultant the cited consult ran against has expired.
+ * Owns one consultation cycle: from a consultant answer that gives pi a plan,
+ * pi runs at low thinking while it executes that plan, and returns to normal
+ * while a consult is in flight and the moment the consultant is gone. The
+ * cycle closes on a passing convention audit and an approved verdict, or, once
+ * every enabled consultant has expired, on an approved report from a dedicated
+ * independent auditor spawned through pi-teams. A fallback the records support,
+ * an explicit user audit, or `/consult-effort release` also ends it. Every
+ * change is persisted on the session branch. Consultant `effort` settings are
+ * not touched. A refused completion line is answered once with what still
+ * closes the cycle; it closes unverified only when every consultant the cited
+ * consult ran against has expired.
  */
 
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -25,6 +26,7 @@ type Level = ReturnType<ExtensionAPI["getThinkingLevel"]>;
 interface EffortEntry {
 	holding: boolean;
 	previous?: Level;
+	working: boolean;
 	owed: string[];
 	fresh: string[];
 	approved: string[];
@@ -77,6 +79,8 @@ export class AgentEffortPolicy {
 	private pi: ExtensionAPI | undefined;
 	private holding = false;
 	private previous: Level | undefined;
+	/** Executing a consultant's plan: the only state that lowers the level. */
+	private working = false;
 	private owed = new Set<string>();
 	private fresh = new Set<string>();
 	private approved = new Set<string>();
@@ -91,6 +95,7 @@ export class AgentEffortPolicy {
 	private readonly spawns = new Set<string>();
 	private unsupported = false;
 	private lastMessage: unknown;
+	private lastCtx: ExtensionContext | undefined;
 	private outcome = "completed";
 
 	constructor(config: ConsultConfig) {
@@ -129,12 +134,12 @@ export class AgentEffortPolicy {
 			this.settled(ctx);
 		});
 		pi.on("model_select", (_event, ctx: ExtensionContext) => {
-			if (this.holding && this.spawns.size === 0) this.lower(ctx);
+			if (this.holding && this.working && this.spawns.size === 0) this.lower(ctx);
 		});
 		// Source-less: a model switch sets the level before model_select fires,
 		// so no selection is read as a user release; only the command releases.
 		pi.on("thinking_level_select", (event, ctx: ExtensionContext) => {
-			if (this.holding && this.spawns.size === 0 && AgentEffortPolicy.LOWER.has(event.level)) this.lower(ctx);
+			if (this.holding && this.working && this.spawns.size === 0 && AgentEffortPolicy.LOWER.has(event.level)) this.lower(ctx);
 		});
 		pi.registerCommand("consult-effort", {
 			description: "Show pi-consult's thinking-level hold and audit ladder, or end the hold with `release`.",
@@ -145,6 +150,7 @@ export class AgentEffortPolicy {
 	/** A consult was launched: start the cycle, or join the running one. */
 	engage(ctx: ExtensionContext | undefined, consultId: string): void {
 		if (!this.pi || !this.active()) return;
+		if (ctx) this.lastCtx = ctx;
 		if (!this.holding) {
 			this.holding = true;
 			this.previous = this.pi.getThinkingLevel();
@@ -152,20 +158,31 @@ export class AgentEffortPolicy {
 		}
 		this.owed.add(consultId);
 		this.fresh.add(consultId);
+		// Asking is not executing: a consult in flight is not an instruction.
+		if (this.working) {
+			this.working = false;
+			this.raise();
+		}
 		this.persist();
-		this.lower(ctx);
 	}
 
 	/** The model received this consult's final receipt (delivered or returned)
-	 *  or it was terminated. */
-	settle(consultId: string, details?: ConsultDetails, answers?: ReadonlyMap<RunParticipant, string>): void {
+	 *  or it was terminated. `gone` means no consultant can ever answer it. */
+	settle(
+		consultId: string,
+		details?: ConsultDetails,
+		answers?: ReadonlyMap<RunParticipant, string>,
+		gone = false,
+	): void {
 		if (!this.owed.delete(consultId)) return;
+		let usable = false;
 		if (details?.phase === "complete") {
 			this.consulted.set(
 				consultId,
 				details.runs.filter((run) => run.status !== "aborted").map((run) => run.consultant),
 			);
 			const answered = details.runs.filter((run) => run.status === "ok");
+			usable = answered.length > 0;
 			if (
 				details.ok &&
 				answered.length > 0 &&
@@ -178,6 +195,21 @@ export class AgentEffortPolicy {
 			for (const run of details.runs) {
 				if (run.consultant !== "fallback") this.account(run);
 			}
+		}
+		if (gone) {
+			this.working = false;
+			this.raise();
+			if (this.owed.size === 0) {
+				this.restore(undefined, "the consultant is gone");
+				return;
+			}
+		} else if (usable) {
+			// The plan is in hand: the work that follows runs under it.
+			this.working = true;
+			this.lower(undefined);
+		} else {
+			this.working = false;
+			this.raise();
 		}
 		this.persist();
 	}
@@ -201,7 +233,7 @@ export class AgentEffortPolicy {
 	private holdText(): string {
 		if (!this.holding) return "effort hold: off";
 		const level = this.pi?.getThinkingLevel() ?? "unknown";
-		const state = this.unsupported ? "unsupported" : "on";
+		const state = this.unsupported ? "unsupported" : this.working ? "on" : "open";
 		const owed = this.owed.size > 0 ? `, owed: ${[...this.owed].join(", ")}` : "";
 		return `effort hold: ${state} (${level}, restores to ${this.previous ?? "unchanged"}${owed})`;
 	}
@@ -216,15 +248,17 @@ export class AgentEffortPolicy {
 	private restore(ctx: ExtensionContext | undefined, reason: string): void {
 		const pi = this.pi;
 		if (!pi || !this.holding) return;
+		const context = ctx ?? this.lastCtx;
 		const previous = this.previous;
 		this.holding = false;
+		this.working = false;
 		this.previous = undefined;
 		this.unsupported = false;
 		this.spawns.clear();
 		this.resetCycle();
 		this.persist();
 		if (previous && previous !== pi.getThinkingLevel()) pi.setThinkingLevel(previous);
-		this.notify(ctx, `pi-consult: ${reason}; pi's thinking level restored to ${pi.getThinkingLevel()}.`, "info");
+		this.notify(context, `pi-consult: ${reason}; pi's thinking level restored to ${pi.getThinkingLevel()}.`, "info");
 	}
 
 	private resetCycle(): void {
@@ -242,6 +276,7 @@ export class AgentEffortPolicy {
 	private lower(ctx: ExtensionContext | undefined, quiet = false): void {
 		const pi = this.pi;
 		if (!pi) return;
+		const context = ctx ?? this.lastCtx;
 		const current = pi.getThinkingLevel();
 		if (!AgentEffortPolicy.LOWER.has(current)) return;
 		pi.setThinkingLevel("low");
@@ -250,18 +285,27 @@ export class AgentEffortPolicy {
 		const unsupported = AgentEffortPolicy.ABOVE.has(after);
 		if (unsupported && !this.unsupported) {
 			this.notify(
-				ctx,
+				context,
 				`pi-consult: this model offers nothing below ${after}; the consultation hold is unsupported on it and pi stays at ${after}.`,
 				"warning",
 			);
 		} else if (!unsupported && after !== current && !quiet) {
 			this.notify(
-				ctx,
+				context,
 				`pi-consult: consultation hold: pi's thinking set to ${after} (was ${current}) until the cycle completes; /consult-effort release ends it early.`,
 				"info",
 			);
 		}
 		this.unsupported = unsupported;
+	}
+
+	/** Return to the level the cycle captured, without ending the cycle. */
+	private raise(): void {
+		const pi = this.pi;
+		if (!pi || !this.holding || !this.previous) return;
+		if (pi.getThinkingLevel() === this.previous) return;
+		pi.setThinkingLevel(this.previous);
+		this.unsupported = false;
 	}
 
 	private account(run: ConsultRun): void {
@@ -346,7 +390,7 @@ export class AgentEffortPolicy {
 			}
 			this.persist();
 		}
-		if (this.spawns.size === 0 && this.holding) this.lower(ctx, true);
+		if (this.spawns.size === 0 && this.holding && this.working) this.lower(ctx, true);
 	}
 
 	/** Undo a spawn raise whose call never reported its end. */
@@ -356,10 +400,10 @@ export class AgentEffortPolicy {
 		if (!this.holding) return;
 		this.auditFailed = true;
 		this.persist();
-		this.lower(ctx, true);
+		if (this.working) this.lower(ctx, true);
 		this.notify(
 			ctx,
-			"pi-consult: an independent audit spawn never reported its end; pi's thinking is back at low and the audit is recorded as failed.",
+			`pi-consult: an independent audit spawn never reported its end; pi's thinking is back at ${this.working ? "low" : "its normal level"} and the audit is recorded as failed.`,
 			"warning",
 		);
 	}
@@ -386,7 +430,7 @@ export class AgentEffortPolicy {
 		}
 		if (!lines.some((line) => AgentEffortPolicy.FALLBACK.test(line))) return;
 		const refusal = this.fallbackRefusal();
-		if (refusal) this.notify(ctx, `pi-consult: consultant fallback stated, but ${refusal}; holding low.`, "warning");
+		if (refusal) this.notify(ctx, `pi-consult: consultant fallback stated, but ${refusal}; the cycle stays open.`, "warning");
 		else this.restore(ctx, "consultant fallback");
 	}
 
@@ -527,7 +571,7 @@ export class AgentEffortPolicy {
 
 	/** Tell the agent once per distinct refusal what still closes the cycle. */
 	private nudge(ctx: ExtensionContext, refusal: Refusal): void {
-		this.notify(ctx, `pi-consult: cycle marked complete, but ${refusal.reason}; holding low.`, "warning");
+		this.notify(ctx, `pi-consult: cycle marked complete, but ${refusal.reason}; the cycle stays open.`, "warning");
 		const content = `pi-consult: the consultation cycle is still open: ${refusal.reason}. Next: ${refusal.action}.`;
 		if (!this.pi || content === this.nudged) return;
 		// Record first so a throwing API can never send the same note twice.
@@ -542,6 +586,7 @@ export class AgentEffortPolicy {
 	private load(ctx: ExtensionContext, navigated: boolean): void {
 		const pi = this.pi;
 		if (!pi) return;
+		this.lastCtx = ctx;
 		const wasHolding = this.holding;
 		const wasPrevious = this.previous;
 		const data = AgentEffortPolicy.latest(ctx);
@@ -558,11 +603,13 @@ export class AgentEffortPolicy {
 		this.auditFailed = data?.auditFailed === true;
 		this.consulted = new Map(Object.entries(data?.consulted ?? {}));
 		this.nudged = data?.nudged;
+		this.working = this.holding && data?.working === true;
 		this.spawns.clear();
 		this.unsupported = false;
 		this.lastMessage = undefined;
 		if (this.holding) {
-			this.lower(ctx);
+			if (this.working) this.lower(ctx);
+			else this.raise();
 			return;
 		}
 		if (navigated && wasHolding && wasPrevious && wasPrevious !== pi.getThinkingLevel()) {
@@ -587,6 +634,7 @@ export class AgentEffortPolicy {
 		const data: EffortEntry = {
 			holding: this.holding,
 			previous: this.previous,
+			working: this.working,
 			owed: [...this.owed],
 			fresh: [...this.fresh],
 			approved: [...this.approved],
@@ -630,6 +678,7 @@ export class AgentEffortPolicy {
 			return {
 				holding: raw.holding === true,
 				previous: typeof raw.previous === "string" && AgentEffortPolicy.LEVELS.has(raw.previous) ? (raw.previous as Level) : undefined,
+				working: raw.working === true,
 				owed: strings(raw.owed),
 				fresh: strings(raw.fresh),
 				approved: strings(raw.approved),
