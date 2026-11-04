@@ -3,8 +3,11 @@
  *
  * Owns one consultation cycle: from an unapproved consultant answer, pi runs
  * at low thinking for the rest of the run that executes it, and returns to
- * normal when the answer is approved, the consult fails, is terminated, or the
- * run settles. The cycle closes on a passing convention audit and an approved
+ * normal when the answer is approved, the consult is terminated, or the run
+ * settles. The plan that answer left in force is recorded, so a consult that
+ * fails or times out later reinstates the hold for the plan still in progress,
+ * and a result the user stopped with Escape reinstates it at the next run. The
+ * cycle closes on a passing convention audit and an approved
  * verdict, or, once every enabled consultant has expired, on an approved
  * report from a dedicated independent auditor spawned through pi-teams. A
  * fallback the records support, an explicit user audit, or
@@ -27,6 +30,8 @@ type Level = ReturnType<ExtensionAPI["getThinkingLevel"]>;
 interface EffortEntry {
 	holding: boolean;
 	previous?: Level;
+	plan?: string;
+	due: boolean;
 	owed: string[];
 	fresh: string[];
 	approved: string[];
@@ -79,6 +84,8 @@ export class AgentEffortPolicy {
 	private pi: ExtensionAPI | undefined;
 	private holding = false;
 	private previous: Level | undefined;
+	private plan: string | undefined;
+	private due = false;
 	private owed = new Set<string>();
 	private fresh = new Set<string>();
 	private approved = new Set<string>();
@@ -109,6 +116,7 @@ export class AgentEffortPolicy {
 			this.rollback(ctx);
 			this.lastMessage = undefined;
 			this.outcome = "completed";
+			this.resume(ctx);
 		});
 		pi.on("tool_call", (event) =>
 			this.observeCall(
@@ -145,8 +153,9 @@ export class AgentEffortPolicy {
 		});
 	}
 
-	/** A consult was launched: start the cycle, or join the running one. */
-	engage(ctx: ExtensionContext | undefined, consultId: string): void {
+	/** A consult was launched: start the cycle, or join the running one. A call
+	 *  that waits lifts a held level; a background one leaves pi executing. */
+	engage(ctx: ExtensionContext | undefined, consultId: string, waits = true): void {
 		if (!this.pi || !this.active()) return;
 		if (!this.holding) {
 			this.holding = true;
@@ -155,7 +164,9 @@ export class AgentEffortPolicy {
 		if (ctx) this.live = ctx;
 		this.owed.add(consultId);
 		this.fresh.add(consultId);
+		if (waits) this.due = false;
 		this.persist();
+		if (waits) this.release(this.live, true);
 	}
 
 	/** The model received this consult's final receipt (delivered or returned).
@@ -187,9 +198,15 @@ export class AgentEffortPolicy {
 				if (run.consultant !== "fallback") this.account(run);
 			}
 		}
+		if (this.holding && answered.length > 0) {
+			this.plan = this.approved.has(consultId) ? undefined : consultId;
+		}
+		// A terminated consult carries no details and reinstates nothing.
+		const reinstates = this.holding && details !== undefined && this.plan !== undefined;
+		if (details) this.due = reinstates && !executes;
 		this.persist();
 		if (!this.holding) return;
-		if (executes && answered.length > 0 && !this.approved.has(consultId)) this.hold();
+		if (reinstates && executes) this.hold();
 		else this.release(this.live);
 	}
 
@@ -214,8 +231,10 @@ export class AgentEffortPolicy {
 		const level = this.pi?.getThinkingLevel() ?? "unknown";
 		const state = this.unsupported ? "unsupported" : this.previous ? "on" : "open";
 		const owed = this.owed.size > 0 ? `, owed: ${[...this.owed].join(", ")}` : "";
-		if (state === "open") return `effort hold: open (${level}${owed})`;
-		return `effort hold: ${state} (${level}, restores to ${this.previous ?? "unchanged"}${owed})`;
+		const plan = this.plan ? `, plan: ${this.plan}` : "";
+		const due = this.due ? ", due" : "";
+		if (state === "open") return `effort hold: open (${level}${owed}${plan}${due})`;
+		return `effort hold: ${state} (${level}, restores to ${this.previous ?? "unchanged"}${owed}${plan}${due})`;
 	}
 
 	private ladder(): string {
@@ -241,6 +260,8 @@ export class AgentEffortPolicy {
 	}
 
 	private resetCycle(): void {
+		this.plan = undefined;
+		this.due = false;
 		this.fresh.clear();
 		this.approved.clear();
 		this.failures.clear();
@@ -290,7 +311,7 @@ export class AgentEffortPolicy {
 	}
 
 	/** No consultant instructions are in progress: restore without closing. */
-	private release(ctx: ExtensionContext | undefined): void {
+	private release(ctx: ExtensionContext | undefined, quiet = false): void {
 		const pi = this.pi;
 		const previous = this.previous;
 		if (!pi || !previous) return;
@@ -299,7 +320,18 @@ export class AgentEffortPolicy {
 		this.persist();
 		if (previous === pi.getThinkingLevel()) return;
 		pi.setThinkingLevel(previous);
+		if (quiet) return;
 		this.notify(ctx, `pi-consult: no consultant instructions in progress; pi's thinking level restored to ${pi.getThinkingLevel()}.`, "info");
+	}
+
+	/** The next run starts to execute a plan the user stopped with Escape: the
+	 *  hold fires here, before the run's first request reads the level. */
+	private resume(ctx: ExtensionContext): void {
+		if (!this.due) return;
+		this.live = ctx;
+		this.due = false;
+		this.persist();
+		if (this.plan) this.hold();
 	}
 
 	private account(run: ConsultRun): void {
@@ -606,6 +638,8 @@ export class AgentEffortPolicy {
 		this.auditFailed = data?.auditFailed === true;
 		this.consulted = new Map(Object.entries(data?.consulted ?? {}));
 		this.nudged = data?.nudged;
+		this.plan = data?.plan;
+		this.due = data?.due === true;
 		this.spawns.clear();
 		this.unsupported = false;
 		this.lastMessage = undefined;
@@ -636,6 +670,8 @@ export class AgentEffortPolicy {
 		const data: EffortEntry = {
 			holding: this.holding,
 			previous: this.previous,
+			plan: this.plan,
+			due: this.due,
 			owed: [...this.owed],
 			fresh: [...this.fresh],
 			approved: [...this.approved],
@@ -690,6 +726,8 @@ export class AgentEffortPolicy {
 				auditFailed: raw.auditFailed === true,
 				consulted: AgentEffortPolicy.consulted(raw.consulted),
 				nudged: typeof raw.nudged === "string" ? raw.nudged : undefined,
+				plan: typeof raw.plan === "string" ? raw.plan : undefined,
+				due: raw.due === true,
 			};
 		}
 		return undefined;

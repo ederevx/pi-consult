@@ -185,6 +185,68 @@ test("audit: one plain error does not expire; two do", async () => {
 	assertEq(state.host.getThinkingLevel(), "high");
 });
 
+test("audit: a timeout reinstating the hold does not close the cycle or reset failures", () => {
+	const state = setup(config({ codex: { enabled: false } }));
+	state.policy.engage(state.ctx as never, "c-e020");
+	state.policy.settle(
+		"c-e020",
+		consultDetails("c-e020", [consultRun("claude", "ok")]),
+		verdictAnswers({ claude: "The plan." }),
+	);
+	state.policy.engage(state.ctx as never, "c-e021");
+	state.policy.settle("c-e021", consultDetails("c-e021", [consultRun("claude", "timeout")], false));
+	assertEq(lastEntry(state.host).holding, true, "the cycle stays open");
+	assertEq((lastEntry(state.host).failures as Record<string, number>).claude, 1, "the timeout still counts");
+	assertEq(state.host.getThinkingLevel(), "low", "the plan is still in force");
+});
+
+test("audit: two timed-out retries with a plan in force still expire the consultant", async () => {
+	const state = setup(config({ codex: { enabled: false } }));
+	state.policy.engage(state.ctx as never, "c-e030");
+	state.policy.settle(
+		"c-e030",
+		consultDetails("c-e030", [consultRun("claude", "ok")]),
+		verdictAnswers({ claude: "The plan." }),
+	);
+	for (const id of ["c-e031", "c-e032"]) {
+		state.policy.engage(state.ctx as never, id);
+		state.policy.settle(id, consultDetails(id, [consultRun("claude", "timeout")], false));
+	}
+	await state.host.run("Consultant fallback: no consultant available - two timeouts.");
+	assertEq(lastEntry(state.host).holding, false, "the fallback line closes the cycle");
+	assertEq(state.host.getThinkingLevel(), "high");
+});
+
+test("audit: the audit spawn raises to the level captured after a reinstated hold", () => {
+	const state = expiredAudit();
+	state.policy.engage(state.ctx as never, "c-e040");
+	state.policy.settle(
+		"c-e040",
+		consultDetails("c-e040", [consultRun("claude", "ok")]),
+		verdictAnswers({ claude: "The plan." }),
+	);
+	assertEq(state.host.getThinkingLevel(), "low", "the plan lowered the level");
+	state.policy.engage(state.ctx as never, "c-e041");
+	state.policy.settle("c-e041", consultDetails("c-e041", [consultRun("claude", "timeout")], false));
+	assertEq(state.host.getThinkingLevel(), "low", "the timeout reinstated the hold");
+	state.host.addTool("team_spawn");
+	state.host.toolCall("team_spawn", { task: "pi-consult independent audit - check." }, "t1");
+	assertEq(state.host.getThinkingLevel(), "high", "the spawn raises to the captured level");
+	state.host.toolExecutionEnd("t1", { result: { details: { id: "tm-1" } } });
+	assertEq(state.host.getThinkingLevel(), "low", "the plan is still in force after the spawn");
+});
+
+test("audit: a settle with nothing owed releases the level and keeps the ladder", () => {
+	const state = setup(config({ codex: { enabled: false } }));
+	state.policy.engage(state.ctx as never, "c-e050");
+	state.policy.settle("c-e050", consultDetails("c-e050", [consultRun("claude", "error", "boom")], false));
+	state.policy.engage(state.ctx as never, "c-e051");
+	state.policy.settle("c-e051", consultDetails("c-e051", [consultRun("claude", "error", "boom")], false));
+	assertEq(lastEntry(state.host).holding, true, "two failures keep the cycle open");
+	assertEq((lastEntry(state.host).failures as Record<string, number>).claude, 2, "the ladder keeps both");
+	assertEq(state.host.getThinkingLevel(), "high", "holding nothing releases the level");
+});
+
 test("audit: an aborted billing run never expires, and a later ok clears", async () => {
 	const aborted = setup(config({ codex: { enabled: false } }));
 	aborted.policy.engage(aborted.ctx as never, "c-e010a");
