@@ -111,7 +111,7 @@ test("audit: an ok consult needs an approved verdict to restore", async () => {
 		verdictAnswers({ claude: "No verdict line at all." }),
 	);
 	await host.run("Consultation cycle: complete - c-000101 verified.");
-	assertEq(host.getThinkingLevel(), "low");
+	assertEq(host.getThinkingLevel(), "high");
 	assertIncludes(notices(ctx), "approved consultant verdict");
 
 	policy.engage(ctx as never, "c-000102");
@@ -136,7 +136,7 @@ test("audit: with both, one changes-needed run blocks the approval", async () =>
 		}),
 	);
 	await host.run("Consultation cycle: complete - c-000103 verified.");
-	assertEq(host.getThinkingLevel(), "low");
+	assertEq(host.getThinkingLevel(), "high");
 	assertIncludes(notices(ctx), "approved consultant verdict");
 });
 
@@ -151,7 +151,7 @@ test("audit: a verdict quoted mid-answer or inside a fence is not approval", asy
 		policy.engage(ctx as never, id);
 		policy.settle(id, consultDetails(id, [consultRun("claude", "ok")]), verdictAnswers({ claude: answer }));
 		await host.run(`Consultation cycle: complete - ${id} verified.`);
-		assertEq(host.getThinkingLevel(), "low", `held for ${JSON.stringify(answer)}`);
+		assertEq(host.getThinkingLevel(), "high", `released for ${JSON.stringify(answer)}`);
 	}
 });
 
@@ -204,7 +204,7 @@ test("audit: an aborted billing run never expires, and a later ok clears", async
 		verdictAnswers({ claude: APPROVED_VERDICT }),
 	);
 	await state.host.run("Consultant fallback: no consultant available - but claude worked.");
-	assertEq(state.host.getThinkingLevel(), "low", "a later ok clears the failures");
+	assertEq(state.host.getThinkingLevel(), "high", "a later ok clears the failures");
 });
 
 test("audit: a spawn while codex can still serve warns and never enters the ledger", async () => {
@@ -541,7 +541,7 @@ test("audit: a verdict followed by a closing fence is not approved", async () =>
 		verdictAnswers({ claude: `${APPROVED_VERDICT}\n\`\`\`` }),
 	);
 	await state.host.run("Consultation cycle: complete - c-e030 verified.");
-	assertEq(state.host.getThinkingLevel(), "low", "the verdict is no longer the last plain line");
+	assertEq(state.host.getThinkingLevel(), "high", "the verdict is no longer the last plain line");
 	assertIncludes(notices(state.ctx), "approved consultant verdict");
 });
 
@@ -601,7 +601,7 @@ test("audit: an approval without a passing convention audit is not approval", as
 			verdictAnswers({ claude: answer }),
 		);
 		await host.run(`Consultation cycle: complete - ${id} verified.`);
-		assertEq(host.getThinkingLevel(), "low", "the approval does not close the cycle");
+		assertEq(host.getThinkingLevel(), "high", "the approval does not close the cycle");
 		assertIncludes(notices(ctx), "approved consultant verdict after a passing convention audit");
 	}
 });

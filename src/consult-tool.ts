@@ -357,12 +357,11 @@ export class ConsultTool {
 		steps?.finish();
 
 		const receipt: ConsultReceipt = await this.deps.supervisor.receipt(invocation);
-		this.deps.effort?.settle(
-			consultId,
-			receipt.details,
-			receipt.answers,
-			invocation.state === "terminated",
-		);
+		if (invocation.state === "terminated") {
+			this.deps.effort?.settle(consultId, undefined, undefined, false);
+		} else {
+			this.deps.effort?.settle(consultId, receipt.details, receipt.answers);
+		}
 		return {
 			content: [
 				{

@@ -122,6 +122,8 @@ test("codex adapter: the bridge call outlives the drive deadline", () => {
 	});
 	assert(args.includes("mcp_servers.pi_consult.tool_timeout_sec=660"),
 		"codex waits longer than the drive deadline");
+	const timeout = args.indexOf("mcp_servers.pi_consult.tool_timeout_sec=660");
+	assertEq(args[timeout - 1], "-c", "the override is a config flag, not a positional argument");
 });
 
 test("codex adapter: an agent message is prose, not progress", async () => {

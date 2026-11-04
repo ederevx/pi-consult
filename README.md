@@ -168,17 +168,21 @@ The catalogue instructs the agent, and the tool's prompt guidelines repeat it:
 
 ### pi's thinking level
 
-From the first consultant answer that gives pi a plan, pi-consult holds pi's
-thinking level at `low` (`medium` where the model has no `low`) while pi
-executes that plan. Starting another consult returns the captured level while
-the consult is in flight, and its answer lowers it again. On a model with
-nothing below `high` it warns and reports the hold unsupported. While working
-under the plan any raise, including the automatic one a model switch makes, is
+From the first consultant answer that gives pi a plan without an approved
+verdict, pi-consult captures pi's thinking level and lowers it to `low`
+(`medium` where the model has no `low`) for the rest of that agent run while
+pi executes the plan. Asking is not executing: engaging a consult, waiting for
+one, or starting another while the first is running never lowers the level.
+When the agent run settles or is aborted, when the answer is approved, or when
+it fails or is terminated, the captured level returns at once and only a new
+unapproved answer can capture and lower it again. On a model with nothing
+below `high` it warns and reports the hold unsupported. While executing under
+the plan any raise, including the automatic one a model switch makes, is
 lowered again; only `/consult-effort release` ends a cycle early
-(`/consult-effort` alone shows its state). A terminated consult, or one gone
-with nothing left to answer it, restores the captured level at once. The cycle
-ends, and pi's previous level returns, when one of these markers qualifies. Completion markers must be the final non-blank line;
-fallback and user-request markers must appear on their own plain lines.
+(`/consult-effort` alone shows its state). The cycle ends, and pi's previous
+level returns, when one of these markers qualifies. Completion markers must be
+the final non-blank line; fallback and user-request markers must appear on
+their own plain lines.
 
 - `Consultation cycle: complete - <consult id> verified.` - the cited
   consult's answer ends with a passing convention audit line and the approved
@@ -193,7 +197,7 @@ fallback and user-request markers must appear on their own plain lines.
   records agree: every enabled consultant has expired and nothing is owed;
 - `Audit by pi at the user's request - <request>.`
 
-A completion marker that does not qualify keeps the hold, and pi-consult
+A completion marker that does not qualify keeps the cycle open, and pi-consult
 tells the agent once per distinct reason what still closes the cycle: the
 result to wait for, the consult to continue for its verdict, or the fresh
 audit to spawn. The one exception: when every consultant the cited consult
