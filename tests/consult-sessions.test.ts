@@ -107,6 +107,30 @@ test("consult sessions: a steered call detaches, keeps running, and is delivered
 		`continue with: consult {continue:"${result.details.consultId}"`, "the delivery names the continuation");
 });
 
+test("consult sessions: a background call returns at once and steers its result", async () => {
+	const fixture = buildConsultFixture(configFile(fakeClaude(300), fakeCodex()), "sess-background");
+	const started = await fixture.tool.execute(
+		"call-background-1",
+		{ target: "claude", brief: "Work while I do other things.", background: true, contains_no_secrets: true },
+		undefined, undefined, context("sess-background") as never);
+	assertEq(started.details.phase, "running", "returns a pending receipt");
+	assertEq(started.details.detachedBy, "background", "names the background start");
+	assertEq(started.isError, undefined, "a background receipt is not an error");
+	assertIncludes(started.content[0].text, "running in the background");
+	const invocation = fixture.supervisor.get(started.details.consultId);
+	assert(invocation !== undefined && invocation.live, "the invocation keeps running");
+
+	await invocation.done();
+	await delay(30);
+	const last = fixture.pi.messages.at(-1);
+	assert(last, "a result was delivered");
+	const options = last.options as { deliverAs?: string; triggerTurn?: boolean };
+	assertEq(options.deliverAs, "steer", "a background result is steered back");
+	assertEq(options.triggerTurn, true, "a background result resumes the agent");
+	const message = delivered(fixture.pi);
+	assertIncludes(message.content, "FAKE ANSWER", "the delivery carries the answer");
+});
+
 test("consult sessions: Escape detaches instead of aborting", async () => {
 	const fixture = buildConsultFixture(configFile(fakeClaude(600), fakeCodex()), "sess-int");
 	const controller = new AbortController();

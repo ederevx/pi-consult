@@ -55,6 +55,8 @@ export interface ConsultParams {
 	continue?: string;
 	model?: string;
 	timeout_s?: number;
+	/** Start and return without waiting; the result is steered back later. */
+	background?: boolean;
 	contains_no_secrets: true;
 }
 
@@ -147,7 +149,9 @@ export class ConsultTool {
 				"the same consultant session. Escape or a queued message detaches the " +
 				"call instead of cancelling it: the consultation keeps running and its " +
 				"full result is delivered to you as a message when it finishes; do not " +
-				"poll for it. Never include secrets in a brief.",
+				"poll for it. Set background true to return at once and keep working; " +
+				"its result is steered back at the next tool-call boundary. Never " +
+				"include secrets in a brief.",
 			parameters: Type.Object({
 				target: Type.Union(
 					[Type.Literal("claude"), Type.Literal("codex"), Type.Literal("both")],
@@ -182,6 +186,13 @@ export class ConsultTool {
 				),
 				timeout_s: Type.Optional(
 					Type.Integer({ minimum: 30, maximum: 3600, description: "Per-consultant timeout in seconds." }),
+				),
+				background: Type.Optional(
+					Type.Boolean({
+						description:
+							"Start the consult and return immediately so you can keep working; " +
+							"its result arrives as a steered message when it finishes.",
+					}),
 				),
 			}),
 			annotations: { readOnlyHint: true, openWorldHint: true },
@@ -319,6 +330,14 @@ export class ConsultTool {
 			? new ConsultStepCards(consultId, this.stepAppend(sessionId)) : undefined;
 		steps?.start(this.startInfo(params, spec));
 		const unobserve = steps ? invocation.observeSteps(steps) : () => undefined;
+		if (params.background) {
+			this.closeOnSettle(invocation, steps, unobserve);
+			const details = this.deps.supervisor.pending(invocation);
+			return {
+				content: [{ type: "text", text: this.backgroundText(details, invocation.snapshot()) }],
+				details,
+			};
+		}
 		let outcome: ForegroundOutcome | undefined;
 		try {
 			outcome = await this.deps.foreground.wait(
@@ -457,6 +476,7 @@ export class ConsultTool {
 						error: "the native fallback is disabled or its saved model is no longer available",
 						warnings: [],
 					},
+				background: params.background === true,
 			};
 		}
 		for (const name of targets) {
@@ -491,6 +511,7 @@ export class ConsultTool {
 			environment: this.deps.bindEnvironment?.(ctx) ?? { modelRegistry: undefined, scopedModels: [], defaults: {} },
 			timeoutMs: requests[0]?.timeoutMs ?? this.deps.config.claude.timeoutMs,
 			fallback: this.deps.fallback,
+			background: params.background === true,
 		};
 	}
 
@@ -501,6 +522,18 @@ export class ConsultTool {
 				"running in the background.",
 			`Its full result is delivered to this session as a message when it ` +
 				"finishes; continue it after that.",
+		];
+		if (snapshot) lines.push("", ConsultTool.clip(snapshot, 4_000));
+		return lines.join("\n");
+	}
+
+	/** A background call returns at once; its result is steered back later. */
+	private backgroundText(details: ConsultDetails, snapshot: string): string {
+		const lines = [
+			`pi-consult: consult ${details.consultId} is running in the background.`,
+			"Do other work now; its full result is delivered to this session as a " +
+				"steered message when it finishes, at the next tool-call boundary. Do not " +
+				"poll for it, and continue it only after that.",
 		];
 		if (snapshot) lines.push("", ConsultTool.clip(snapshot, 4_000));
 		return lines.join("\n");

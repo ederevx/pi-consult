@@ -286,7 +286,8 @@ export class ConsultContract {
 			"- consult: ask claude, codex, or both; consult as often as useful, but " +
 				"prefer a single consultant for most tasks and use both only when the " +
 				"task demands two independent perspectives. Returns the answer and a " +
-				"continuation id.",
+				"continuation id. Pass background: true to return at once and keep " +
+				"working; its result is steered back at the next tool-call boundary.",
 		);
 		lines.push(
 			"- consult_terminate: end a background consult early; nothing else stops one.",

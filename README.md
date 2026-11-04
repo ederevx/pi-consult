@@ -111,6 +111,10 @@ surfaced as a warning.
 - **`consult_reply`** - answers a consultant's bridge request by `requestId`,
   so the blocked consultant can continue; screened for secrets like a brief.
 
+Continuations of one provider session are serialized: a Codex `exec resume`
+waits for the earlier run of the same thread instead of failing on Codex's
+active-writer lock. Different threads still run concurrently.
+
 ### The closing consultation
 
 The catalogue instructs the agent, and the tool's prompt guidelines repeat it:
@@ -224,9 +228,11 @@ run settles, then the stream closes with any trailing prose. The pending tool
 receipt does not carry the answer; the full result (status, answer, answer
 paths, consult id) is delivered into the starting session as a
 `pi-consult-result` message, which continues the agent after a steer or a
-consultant request and waits for the next prompt after Escape. If pi is in
-another session when it finishes, delivery waits until it returns.
-`consult_terminate` is the only way to end one early.
+consultant request and waits for the next prompt after Escape. A call started
+with `background: true` is delivered as a steer at the next tool-call
+boundary, so it lands while the agent is still working instead of waiting for
+the turn to end. If pi is in another session when it finishes, delivery waits
+until it returns. `consult_terminate` is the only way to end one early.
 
 ## The `consult` tool
 
@@ -239,6 +245,7 @@ another session when it finishes, delivery waits until it returns.
 | `continue` | A prior consult id (`c-xxxxxx`) or `"last"` to continue that session |
 | `model` | Model override; only with a single target |
 | `timeout_s` | Per-consultant timeout in seconds |
+| `background` | Return immediately and keep working; the result is steered back at the next tool-call boundary |
 
 Continuing is refused when a selected target has no saved session for that
 consult, instead of silently starting fresh under a `continuedFrom` id; it is

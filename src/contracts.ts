@@ -62,8 +62,8 @@ export type InvocationState =
 /** Whether a tool call is still watching the invocation it started. */
 export type AttachmentState = "foreground" | "detached";
 
-/** Why a foreground tool call stopped watching a still-running invocation. */
-export type DetachReason = "escape" | "steer" | "wait_timeout" | "pi_request";
+/** Why a call stopped watching a still-running invocation. */
+export type DetachReason = "escape" | "steer" | "wait_timeout" | "pi_request" | "background";
 
 /** Whether a receipt describes a finished consultation or a live one. */
 export type ConsultPhase = "running" | "complete";
@@ -107,7 +107,7 @@ export interface ConsultDetails {
 	cwd: string;
 	briefPath: string;
 	continuedFrom?: string;
-	/** Set when the foreground caller detached instead of waiting. */
+	/** Set when this call did not wait: an interrupt, or a background start. */
 	detachedBy?: DetachReason;
 	/** The live invocation's state, when the receipt is a running one. */
 	state?: InvocationState;

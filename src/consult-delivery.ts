@@ -66,6 +66,7 @@ export class ConsultDelivery {
 	private deliver(invocation: ConsultInvocation, receipt: ConsultReceipt): void {
 		this.announced.add(invocation.consultId);
 		const terminated = invocation.state === "terminated";
+		const background = invocation.detachedBy === "background";
 		this.pi.sendMessage(
 			{
 				customType: RESULT_MESSAGE,
@@ -74,7 +75,7 @@ export class ConsultDelivery {
 				details: receipt.details,
 			},
 			{
-				deliverAs: "followUp",
+				deliverAs: background ? "steer" : "followUp",
 				triggerTurn: !terminated && invocation.detachedBy !== "escape",
 			},
 		);

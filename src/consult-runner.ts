@@ -8,6 +8,7 @@
  */
 
 import type { ConsultantTarget } from "./consult-contract.ts";
+import { ConsultThreadQueue } from "./consult-thread-queue.ts";
 import type {
 	Consultant,
 	ConsultantAvailability,
@@ -26,6 +27,8 @@ export class ConsultRunner {
 	private readonly maxConcurrent: number;
 	private readonly batches = new Set<AbortController>();
 	private readonly waiters: Waiter[] = [];
+	/** One provider session accepts one writer at a time. */
+	private readonly threads = new ConsultThreadQueue();
 	private running = 0;
 
 	constructor(consultants: readonly Consultant[], maxConcurrent: number) {
@@ -107,27 +110,36 @@ export class ConsultRunner {
 		signal: AbortSignal,
 	): Promise<ConsultantResult> {
 		if (signal.aborted) return this.aborted(request);
-		const acquired = await this.acquire(signal);
-		if (!acquired) return this.aborted(request);
+		const thread = request.resumeSessionId
+			? await this.threads.acquire(
+				`${request.consultant}:${request.resumeSessionId}`, signal)
+			: () => undefined;
+		if (!thread) return this.aborted(request);
 		try {
-			if (signal.aborted) return this.aborted(request);
-			const consultant = this.consultants.get(request.consultant);
-			if (!consultant) return this.unavailable(request.consultant);
-			return await consultant.consult(request, signal);
-		} catch (error) {
-			return {
-				consultant: request.consultant,
-				sessionId: request.resumeSessionId,
-				status: "error",
-				answer: "",
-				partial: false,
-				durationMs: 0,
-				exitCode: null,
-				error: error instanceof Error ? error.message : String(error),
-				warnings: [],
-			};
+			const acquired = await this.acquire(signal);
+			if (!acquired) return this.aborted(request);
+			try {
+				if (signal.aborted) return this.aborted(request);
+				const consultant = this.consultants.get(request.consultant);
+				if (!consultant) return this.unavailable(request.consultant);
+				return await consultant.consult(request, signal);
+			} catch (error) {
+				return {
+					consultant: request.consultant,
+					sessionId: request.resumeSessionId,
+					status: "error",
+					answer: "",
+					partial: false,
+					durationMs: 0,
+					exitCode: null,
+					error: error instanceof Error ? error.message : String(error),
+					warnings: [],
+				};
+			} finally {
+				this.release();
+			}
 		} finally {
-			this.release();
+			thread();
 		}
 	}
 
