@@ -99,7 +99,7 @@ function continuation(resumeSessionId = "thread-1"): ConsultRequest {
 		cwd: ".",
 		resumeSessionId,
 		timeoutMs: 1000,
-		lastMessagePath: "/tmp/last.md",
+		lastMessagePath: "/artifacts/last.md",
 	};
 }
 
@@ -147,4 +147,26 @@ test("runner: an aborted continuation stops waiting for its thread", async () =>
 	assertEq(events.join(","), "start:1", "no second run started");
 	held.resolve();
 	await first;
+});
+
+test("runner: a cancelled continuation does not let the next one overtake", async () => {
+	const events: string[] = [];
+	const held = deferred();
+	const runner = new ConsultRunner([heldConsultant(events, held.promise)], 4);
+	const first = runner.run([continuation()]);
+	await tick();
+	const controller = new AbortController();
+	const second = runner.run([continuation()], controller.signal);
+	await tick();
+	controller.abort();
+	await second;
+	const third = runner.run([continuation()]);
+	await tick();
+	const before = events.join(",");
+	held.resolve();
+	const [, last] = await Promise.all([first, third]);
+	assertEq(before, "start:1", "the cancelled wait still holds its thread");
+	assertEq(events.join(","), "start:1,end:1,start:2,end:2",
+		"the next continuation starts only after the holder");
+	assertEq(last[0].status, "ok");
 });

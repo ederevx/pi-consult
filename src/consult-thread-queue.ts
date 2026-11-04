@@ -21,7 +21,9 @@ export class ConsultThreadQueue {
 		this.tails.set(key, tail);
 		if (previous && (await ConsultThreadQueue.cancelled(previous, signal))) {
 			release();
-			this.drop(key, tail);
+			// The key must keep describing the earlier holder: dropping it now
+			// would let the next waiter start beside that still-running run.
+			void tail.then(() => this.drop(key, tail));
 			return undefined;
 		}
 		return () => {
