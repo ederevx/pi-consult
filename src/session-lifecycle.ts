@@ -78,6 +78,19 @@ export class SessionLifecycle {
 				);
 			}
 		});
+		pi.on("agent_before_settle", (event) => {
+			if (event.outcome !== "aborted") return;
+			const session = this.identity.get();
+			for (const invocation of this.supervisor.list()) {
+				if (
+					invocation.sessionId === session &&
+					invocation.detachedBy === "background" &&
+					invocation.live
+				) {
+					invocation.detach("escape");
+				}
+			}
+		});
 		pi.on("session_shutdown", async () => {
 			this.supervisor.cancelAll();
 			this.processes.killAll();

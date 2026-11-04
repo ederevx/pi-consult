@@ -139,6 +139,9 @@ export interface BridgeConnection {
 	/** The 0600 capability file naming the endpoint and its token. */
 	descriptorPath: string;
 	invocationId: string;
+	/** How long the CLI's MCP client waits for one bridge call. The broker's
+	 *  own deadline is shorter, so pi's answer always settles the request. */
+	toolTimeoutSec: number;
 	/** The MCP server name both CLIs are configured with. */
 	serverName: string;
 	/** The MCP tool name on that server. */

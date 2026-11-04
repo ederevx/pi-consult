@@ -99,6 +99,31 @@ test("codex adapter: isolation inherit keeps the user's own configuration", () =
 	assert(!args.includes("--ignore-rules"), "user rules kept");
 });
 
+test("codex adapter: the bridge call outlives the drive deadline", () => {
+	const consultant = new CodexConsultant(
+		{ enabled: true, command: "codex", timeoutMs: 1000, isolation: "inherit" },
+		runner,
+	);
+	const args = consultant.buildArgs({
+		...request(),
+		consultant: "codex",
+		bridge: {
+			command: "node",
+			args: [],
+			descriptorPath: "/d.json",
+			invocationId: "c-1:codex",
+			toolTimeoutSec: 660,
+			serverName: "pi_consult",
+			toolName: "drive_pi",
+			qualifiedToolName: "mcp__pi_consult__drive_pi",
+			useToolName: "use_tool",
+			qualifiedUseToolName: "mcp__pi_consult__use_tool",
+		},
+	});
+	assert(args.includes("mcp_servers.pi_consult.tool_timeout_sec=660"),
+		"codex waits longer than the drive deadline");
+});
+
 test("codex adapter: an agent message is prose, not progress", async () => {
 	const consultant = new CodexConsultant(
 		{ enabled: true, command: fakeCodex(0, true), timeoutMs: 5000, isolation: "clean" },

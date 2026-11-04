@@ -67,7 +67,7 @@ export class ConsultTerminateTool {
 			};
 		}
 		const terminated = await this.supervisor.terminate(handle);
-		if (terminated) this.effort?.settle(handle);
+		if (terminated) this.effort?.settle(handle, undefined, undefined, true);
 		return {
 			content: [
 				{

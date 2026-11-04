@@ -81,6 +81,8 @@ export class ConsultDelivery {
 		);
 		if (!terminated) {
 			this.effort?.settle(invocation.consultId, receipt.details, receipt.answers);
+		} else {
+			this.effort?.settle(invocation.consultId, receipt.details, receipt.answers, true);
 		}
 	}
 

@@ -121,6 +121,8 @@ export class CodexConsultant implements Consultant {
 			`mcp_servers.${bridge.serverName}.command=${JSON.stringify(bridge.command)}`,
 			"-c",
 			`mcp_servers.${bridge.serverName}.args=${JSON.stringify(bridge.args)}`,
+			// Codex defaults to 300 s, which is shorter than the drive deadline.
+			`mcp_servers.${bridge.serverName}.tool_timeout_sec=${bridge.toolTimeoutSec}`,
 			// Codex refuses an MCP call under approval_policy="never" unless the
 			// tool itself is pre-approved.
 			"-c",

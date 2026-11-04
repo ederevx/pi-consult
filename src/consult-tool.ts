@@ -150,7 +150,7 @@ export class ConsultTool {
 				"call instead of cancelling it: the consultation keeps running and its " +
 				"full result is delivered to you as a message when it finishes; do not " +
 				"poll for it. Set background true to return at once and keep working; " +
-				"its result is steered back at the next tool-call boundary. Never " +
+				"its result is steered back after the current tool batch. Never " +
 				"include secrets in a brief.",
 			parameters: Type.Object({
 				target: Type.Union(
@@ -191,7 +191,7 @@ export class ConsultTool {
 					Type.Boolean({
 						description:
 							"Start the consult and return immediately so you can keep working; " +
-							"its result arrives as a steered message when it finishes.",
+							"its result arrives as a steered message after the current tool batch.",
 					}),
 				),
 			}),
@@ -330,22 +330,16 @@ export class ConsultTool {
 			? new ConsultStepCards(consultId, this.stepAppend(sessionId)) : undefined;
 		steps?.start(this.startInfo(params, spec));
 		const unobserve = steps ? invocation.observeSteps(steps) : () => undefined;
-		if (params.background) {
-			this.closeOnSettle(invocation, steps, unobserve);
-			const details = this.deps.supervisor.pending(invocation);
-			return {
-				content: [{ type: "text", text: this.backgroundText(details, invocation.snapshot()) }],
-				details,
-			};
-		}
 		let outcome: ForegroundOutcome | undefined;
 		try {
-			outcome = await this.deps.foreground.wait(
-				invocation,
-				signal ?? ctx.signal,
-				() => ctx.hasPendingMessages(),
-				onUpdate,
-			);
+			outcome = params.background
+				? { status: "detached", reason: "background" }
+				: await this.deps.foreground.wait(
+					invocation,
+					signal ?? ctx.signal,
+					() => ctx.hasPendingMessages(),
+					onUpdate,
+				);
 		} finally {
 			if (outcome?.status === "detached") {
 				this.closeOnSettle(invocation, steps, unobserve);
@@ -363,7 +357,12 @@ export class ConsultTool {
 		steps?.finish();
 
 		const receipt: ConsultReceipt = await this.deps.supervisor.receipt(invocation);
-		this.deps.effort?.settle(consultId, receipt.details, receipt.answers);
+		this.deps.effort?.settle(
+			consultId,
+			receipt.details,
+			receipt.answers,
+			invocation.state === "terminated",
+		);
 		return {
 			content: [
 				{
@@ -516,25 +515,22 @@ export class ConsultTool {
 	}
 
 	private detachedText(details: ConsultDetails, snapshot: string): string {
+		const background = details.detachedBy === "background";
 		const reason = details.detachedBy ?? "interrupt";
-		const lines = [
-			`pi-consult: consult ${details.consultId} was interrupted (${reason}) and keeps ` +
-				"running in the background.",
-			`Its full result is delivered to this session as a message when it ` +
-				"finishes; continue it after that.",
-		];
-		if (snapshot) lines.push("", ConsultTool.clip(snapshot, 4_000));
-		return lines.join("\n");
-	}
-
-	/** A background call returns at once; its result is steered back later. */
-	private backgroundText(details: ConsultDetails, snapshot: string): string {
-		const lines = [
-			`pi-consult: consult ${details.consultId} is running in the background.`,
-			"Do other work now; its full result is delivered to this session as a " +
-				"steered message when it finishes, at the next tool-call boundary. Do not " +
-				"poll for it, and continue it only after that.",
-		];
+		const lines = background
+			? [
+				`pi-consult: consult ${details.consultId} is running in the background.`,
+				"Do other work now; its full result is delivered to this session as a " +
+					"steered message when it finishes, after the current tool batch and " +
+					"before the next model call, or as a new turn if idle. Do not poll for " +
+					"it, and continue it only after that.",
+			]
+			: [
+				`pi-consult: consult ${details.consultId} was interrupted (${reason}) and keeps ` +
+					"running in the background.",
+				`Its full result is delivered to this session as a message when it ` +
+					"finishes; continue it after that.",
+			];
 		if (snapshot) lines.push("", ConsultTool.clip(snapshot, 4_000));
 		return lines.join("\n");
 	}

@@ -18,10 +18,14 @@ import type { BridgeConnection, ConsultantName } from "./contracts.ts";
 /** The subset of settings the bridge channel reads. */
 export interface BridgeSettings {
 	enabled: boolean;
+	deadlineMs: number;
 }
 
 export class BridgeLauncher {
 	private static readonly SERVER_NAME = "pi_consult";
+	/** The CLI's MCP client must outlast the broker deadline so pi's own
+	 *  refusal reaches the consultant before the client gives up. */
+	private static readonly TIMEOUT_MARGIN_MS = 30_000;
 	private static readonly TOOL_NAME = "drive_pi";
 	private static readonly QUALIFIED_TOOL_NAME = "mcp__pi_consult__drive_pi";
 	private static readonly USE_TOOL_NAME = "use_tool";
@@ -59,6 +63,9 @@ export class BridgeLauncher {
 			args: ["--experimental-strip-types", BridgeLauncher.entrypoint(), descriptorPath],
 			descriptorPath,
 			invocationId,
+			toolTimeoutSec: Math.ceil(
+				(this.settings.deadlineMs + BridgeLauncher.TIMEOUT_MARGIN_MS) / 1000,
+			),
 			serverName: BridgeLauncher.SERVER_NAME,
 			toolName: BridgeLauncher.TOOL_NAME,
 			qualifiedToolName: BridgeLauncher.QUALIFIED_TOOL_NAME,

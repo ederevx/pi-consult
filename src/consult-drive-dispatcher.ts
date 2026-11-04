@@ -41,7 +41,8 @@ export class ConsultDriveDispatcher {
 	/** Post one request to the agent and let it decide how to answer. */
 	dispatch(request: DriveRequest, payload: RequestPayload): void {
 		// A foreground call must stop waiting before the agent can take a turn.
-		this.supervisor.get(request.consultId)?.requestAttention();
+		// Any foreground call blocks the agent, not only the one being served.
+		for (const invocation of this.supervisor.list()) invocation.requestAttention();
 		this.pi.sendMessage(
 			{
 				customType: "pi-consult-drive",
