@@ -135,7 +135,7 @@ export class ClaudeStreamParser {
 			if (this.seenToolUses.has(item.id)) continue;
 			this.seenToolUses.add(item.id);
 			const input = (item.input ?? {}) as Record<string, unknown>;
-			const argument = [input.file_path, input.pattern, input.path].find(
+			const argument = [input.file_path, input.pattern, input.path, input.name].find(
 				(value) => typeof value === "string",
 			) as string | undefined;
 			const name = typeof item.name === "string" ? item.name : "tool";

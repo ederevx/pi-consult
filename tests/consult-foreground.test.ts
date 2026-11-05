@@ -6,6 +6,7 @@
  */
 
 import { ConsultForeground, type WatchOutcome } from "../src/consult-foreground.ts";
+import type { DetachReason } from "../src/contracts.ts";
 import { assertEq, test } from "./harness.ts";
 
 /** A controllable stand-in for one live invocation. */
@@ -15,7 +16,7 @@ class FakeInvocation {
 	detached = 0;
 	terminated = 0;
 	private readonly listeners = new Set<(snapshot: string) => void>();
-	private readonly attention = new Set<() => void>();
+	private readonly attention = new Set<(reason: DetachReason) => void>();
 	private readonly settled: Promise<void>;
 	private resolveDone!: () => void;
 
@@ -30,7 +31,7 @@ class FakeInvocation {
 		return () => this.listeners.delete(listener);
 	}
 
-	onAttention(listener: () => void): () => void {
+	onAttention(listener: (reason: DetachReason) => void): () => void {
 		this.attention.add(listener);
 		return () => this.attention.delete(listener);
 	}
@@ -44,8 +45,8 @@ class FakeInvocation {
 		this.resolveDone();
 	}
 
-	requestAttention(): void {
-		for (const listener of [...this.attention]) listener();
+	requestAttention(reason: DetachReason = "pi_request"): void {
+		for (const listener of [...this.attention]) listener(reason);
 	}
 
 	detach(): void {

@@ -122,6 +122,9 @@ export class ConsultRunner {
 				if (signal.aborted) return this.aborted(request);
 				const consultant = this.consultants.get(request.consultant);
 				if (!consultant) return this.unavailable(request.consultant);
+				// The clock starts with the slot, so a queued request is never
+				// counted as silent.
+				request.onActivity?.();
 				return await consultant.consult(request, signal);
 			} catch (error) {
 				return {
@@ -137,6 +140,7 @@ export class ConsultRunner {
 				};
 			} finally {
 				this.release();
+				request.onEnded?.();
 			}
 		} finally {
 			thread();

@@ -289,3 +289,25 @@ test("codex parser: real captured resume stream recalls the session token", () =
 	assertEq(parsed.sawTurnCompleted, true);
 	assert(parsed.threadId !== undefined, "thread id captured");
 });
+
+test("claude parser: a bridged tool use reports the tool it asked for", () => {
+	const events: string[] = [];
+	const parser = new ClaudeStreamParser((line) => events.push(line));
+	parser.push(
+		JSON.stringify({
+			type: "assistant",
+			message: {
+				content: [
+					{
+						type: "tool_use",
+						id: "tool-9",
+						name: "mcp__pi_consult__use_tool",
+						input: { name: "bash", arguments: { command: "ls" } },
+					},
+				],
+			},
+		}),
+	);
+	assertEq(events.length, 1, "the tool use is reported once");
+	assertIncludes(events[0], "bash", "the card names the tool the consultant requested");
+});

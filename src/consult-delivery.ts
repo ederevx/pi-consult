@@ -1,19 +1,21 @@
 /**
- * pi-consult — delivery of a detached consult's full result.
+ * pi-consult — what reaches the session that started a consult.
  *
- * Owns the one result a background consultation gets: a visible session
- * message carrying the receipt and the answer, delivered once into the
- * session that started the consult and only after its run settles. It
- * continues the agent unless the user stopped it or the consult was
- * terminated, and holds a result that finished while pi was elsewhere.
+ * Owns the two things pi hears about a background consultation: the full
+ * result, as a visible message carrying the receipt and the answer, delivered
+ * once into the session that started it and only after its run settles; and
+ * the wake for a consultant that went quiet, which is a notice rather than a
+ * result. It continues the agent unless the user stopped it or the consult
+ * was terminated, and holds a result that finished while pi was elsewhere.
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import type { AgentEffortPolicy } from "./agent-effort-policy.ts";
 import type { AnswerFormatter } from "./answer-formatter.ts";
-import { RESULT_MESSAGE } from "./contracts.ts";
+import { RESULT_MESSAGE, STALL_MESSAGE } from "./contracts.ts";
 import type { ConsultInvocation } from "./consult-invocation.ts";
+import type { ConsultStall } from "./consult-stall-watch.ts";
 import type { ConsultReceipt } from "./contracts.ts";
 import type { SessionIdentity } from "./session-identity.ts";
 
@@ -52,6 +54,27 @@ export class ConsultDelivery {
 			return;
 		}
 		this.deliver(invocation, receipt);
+	}
+
+	/** A consultant went quiet: wake the session that started it, unless the
+	 *  user escaped the wait or the consult already ended. */
+	stalled(invocation: ConsultInvocation, stall: ConsultStall): void {
+		if (this.identity.get() !== invocation.sessionId) return;
+		if (!invocation.live) return;
+		this.pi.sendMessage(
+			{
+				customType: STALL_MESSAGE,
+				content: [
+					`pi-consult: the ${stall.consultant} consultant on consult ${invocation.consultId}`,
+					`has printed nothing for ${Math.round(stall.silentMs / 1000)}s, so it may be`,
+					"wedged. It still ends on its own timeout, or you can stop it with",
+					`consult_terminate { id: "${invocation.consultId}" }.`,
+				].join("\n"),
+				display: true,
+				details: { consultId: invocation.consultId, consultant: stall.consultant },
+			},
+			{ triggerTurn: invocation.detachedBy !== "escape" },
+		);
 	}
 
 	/** pi entered a session: deliver what finished while it was elsewhere. */

@@ -11,6 +11,7 @@ import type { ConsultPaths } from "./artifact-store.ts";
 import type { ConsultantSettings } from "./consult-config.ts";
 import { ConsultProgressFeed } from "./consult-progress.ts";
 import type { ConsultRunner } from "./consult-runner.ts";
+import { ConsultStallWatch, type ConsultStall } from "./consult-stall-watch.ts";
 import type {
 	AttachmentState,
 	BridgeConnection,
@@ -76,6 +77,15 @@ export interface InvocationSpec {
 	} & ({ kind: "takeover" } | { kind: "resume"; metadata: unknown; messages: unknown[] })) => Promise<ConsultantResult | undefined>;
 }
 
+/** What one invocation needs from its owner beyond the run itself. */
+export interface InvocationDeps {
+	/** Whether a consultant request for this invocation is waiting on pi,
+	 *  which pauses the clock of that one run. */
+	waitingOnPi?: (invocationId: string) => boolean;
+	/** A consultant went quiet; the owner decides what the user sees. */
+	onStall?: (invocation: ConsultInvocation, stall: ConsultStall) => void;
+}
+
 export class ConsultInvocation {
 	readonly consultId: string;
 	readonly sessionId: string;
@@ -88,6 +98,8 @@ export class ConsultInvocation {
 
 	private readonly spec: InvocationSpec;
 	private readonly runner: ConsultRunner;
+	private readonly deps: InvocationDeps;
+	private readonly stall: ConsultStallWatch;
 	private readonly controller = new AbortController();
 	private readonly feed: ConsultProgressFeed;
 	private readonly listeners = new Set<(snapshot: string) => void>();
@@ -100,9 +112,10 @@ export class ConsultInvocation {
 	attachment: AttachmentState;
 	detachedBy?: DetachReason;
 
-	constructor(spec: InvocationSpec, runner: ConsultRunner) {
+	constructor(spec: InvocationSpec, runner: ConsultRunner, deps: InvocationDeps = {}) {
 		this.spec = spec;
 		this.runner = runner;
+		this.deps = deps;
 		this.attachment = spec.background ? "detached" : "foreground";
 		if (spec.background) this.detachedBy = "background";
 		this.consultId = spec.consultId;
@@ -113,6 +126,12 @@ export class ConsultInvocation {
 		this.continuedFrom = spec.continuedFrom;
 		this.providerSessions = { ...spec.providerSessions };
 		this.feed = new ConsultProgressFeed(spec.targets, (snapshot) => this.publish(snapshot));
+		this.stall = new ConsultStallWatch(
+			new Map(spec.requests.map((request) => [request.consultant, request.settings.silenceNoticeMs])),
+			// A request pending for this consultant means it waits on pi.
+			(name) => deps.waitingOnPi?.(`${this.consultId}:${name}`) === true,
+			(stall) => this.reportStall(stall),
+		);
 	}
 
 	/** Start the consultant fan-out. Idempotent. */
@@ -161,7 +180,10 @@ export class ConsultInvocation {
 					throw error;
 				},
 			);
-		void this.completion.catch(() => undefined).finally(() => this.feed.closeAndFlush());
+		void this.completion.catch(() => undefined).finally(() => {
+			this.feed.closeAndFlush();
+			this.stall.stop();
+		});
 	}
 
 	/** The invocation's outcome. Never rejects. */
@@ -218,10 +240,11 @@ export class ConsultInvocation {
 	}
 
 	/**
-	 * Watch for a consultant request that the agent must service. A blocking
-	 * foreground caller uses it to step aside so the request can be answered.
+	 * Watch for a consultant request that the agent must service, or for a
+	 * consultant that stopped producing output. A blocking foreground caller
+	 * uses it to step aside.
 	 */
-	onAttention(listener: () => void): () => void {
+	onAttention(listener: (reason: DetachReason) => void): () => void {
 		this.attention.add(listener);
 		return () => {
 			this.attention.delete(listener);
@@ -229,8 +252,24 @@ export class ConsultInvocation {
 	}
 
 	/** Signal that the agent is needed; the foreground caller detaches. */
-	requestAttention(): void {
-		for (const listener of [...this.attention]) listener();
+	requestAttention(reason: DetachReason = "pi_request"): void {
+		for (const listener of [...this.attention]) listener(reason);
+	}
+
+	/** One consultant went quiet: record it on the transcript and the cards,
+	 *  then hand it to the owner, which decides whether pi is woken. */
+	private reportStall(stall: ConsultStall): void {
+		if (!this.live) return;
+		const text = `silent for ${Math.round(stall.silentMs / 1000)}s`;
+		this.feed.event(stall.consultant, `${stall.consultant}: ${text}`);
+		this.publishStep("event", stall.consultant, text);
+		// The owner runs outside this class, and a host that refuses the wake
+		// must not turn one silent consultant into a failed run.
+		try {
+			this.deps.onStall?.(this, stall);
+		} catch {
+			// A wake that cannot be sent is not the run's problem.
+		}
 	}
 
 	/** Deliver one progress snapshot to the current subscribers. */
@@ -280,6 +319,8 @@ export class ConsultInvocation {
 				this.feed.event(request.consultant, summary);
 				this.publishStep("message", request.consultant, text);
 			},
+			onActivity: () => this.stall.activity(request.consultant),
+			onEnded: () => this.stall.ended(request.consultant),
 		}));
 	}
 }

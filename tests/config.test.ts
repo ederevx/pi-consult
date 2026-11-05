@@ -94,3 +94,21 @@ test("config: a retired pi-consult.json never supplies values", () => {
 	assertEq(config.enabled, true, "the retired file is not read");
 	assertEq(config.maxConcurrent, 2, "the retired file supplies nothing");
 });
+
+test("config: the silence notice defaults, overrides, and rejects nonsense", () => {
+	const defaults = loadSettings({ piConsult: {} });
+	assertEq(defaults.claude.silenceNoticeMs, ConsultConfig.DEFAULT_SILENCE_NOTICE_MS, "claude default");
+	assertEq(defaults.codex.silenceNoticeMs, ConsultConfig.DEFAULT_SILENCE_NOTICE_MS, "codex default");
+
+	const overridden = loadSettings({
+		piConsult: { claude: { silenceNoticeMs: 45000 }, codex: { silenceNoticeMs: 90000 } },
+	});
+	assertEq(overridden.claude.silenceNoticeMs, 45000, "claude override");
+	assertEq(overridden.codex.silenceNoticeMs, 90000, "codex override");
+
+	const malformed = loadSettings({
+		piConsult: { claude: { silenceNoticeMs: "soon" }, codex: { silenceNoticeMs: -1 } },
+	});
+	assertEq(malformed.claude.silenceNoticeMs, ConsultConfig.DEFAULT_SILENCE_NOTICE_MS, "a string falls back");
+	assertEq(malformed.codex.silenceNoticeMs, ConsultConfig.DEFAULT_SILENCE_NOTICE_MS, "a negative falls back");
+});

@@ -41,8 +41,8 @@ Missing or malformed values fall back to the defaults.
     "output": { "totalBytes": 24000, "answerBytes": 12000, "maxLines": 800 },
     "gate": { "allow": ["pre_memory", "pre_daemon", "pre_cache", "pre_teams", "transcript_read"], "block": [], "trustReadOnlyHint": false },
     "drive": { "enabled": true, "deadlineMs": 600000 },
-    "claude": { "enabled": true, "command": "claude", "isolation": "clean", "timeoutMs": 1200000 },
-    "codex": { "enabled": true, "command": "codex", "isolation": "clean", "timeoutMs": 1200000 }
+    "claude": { "enabled": true, "command": "claude", "isolation": "clean", "timeoutMs": 1200000, "silenceNoticeMs": 300000 },
+    "codex": { "enabled": true, "command": "codex", "isolation": "clean", "timeoutMs": 1200000, "silenceNoticeMs": 300000 }
   }
 }
 ```
@@ -274,6 +274,21 @@ expires after `drive.deadlineMs` and the consultant is told so; it is never
 cancelled by a timeout. The endpoint is a Unix socket under the artifact
 directory, admitted only by a per-run random token written 0600 next to the
 brief, and both directions are bounded in size.
+
+A turn that ends without claiming or declining a pending request re-raises it
+once when the agent settles, repeating what it asked for and both ways to
+answer it. A run the user aborted with Escape only shows a notice, never a new
+turn.
+
+### A silent consultant
+
+A consultant that prints nothing for `claude.silenceNoticeMs` (or
+`codex.silenceNoticeMs`, 300000 by default) is reported in its progress
+card; at twice that silence, pi is woken with the options to keep waiting or
+`consult_terminate`, unless the wait was already escaped. A run whose request
+is waiting on pi is not counted as silent, and the silence never stops a run:
+the whole-run `timeoutMs` still bounds it. A value at or above `timeoutMs`
+disables the notice.
 
 ### Native fallback
 

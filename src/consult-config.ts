@@ -29,6 +29,9 @@ export interface ConsultantSettings {
 	model?: string;
 	effort?: Effort;
 	timeoutMs: number;
+	/** How long a run may print nothing before it is reported as stalled. At
+	 *  or above `timeoutMs` the notice can never fire. */
+	silenceNoticeMs: number;
 	isolation: Isolation;
 }
 
@@ -83,6 +86,7 @@ export class ConsultConfig {
 	static readonly DEFAULT_ANSWER_BYTES = 12_000;
 	static readonly DEFAULT_MAX_LINES = 800;
 	static readonly DEFAULT_DRIVE_DEADLINE_MS = 600_000;
+	static readonly DEFAULT_SILENCE_NOTICE_MS = 300_000;
 	private static readonly DEFAULT_ARTIFACT_DIR_NAME = "pi-consult";
 	private static readonly DEFAULT_GATE_ALLOW = [
 		"pre_memory",
@@ -223,6 +227,10 @@ export class ConsultConfig {
 			model: model || undefined,
 			effort: effort || undefined,
 			timeoutMs: ConsultConfig.positiveNumber(raw.timeoutMs, ConsultConfig.DEFAULT_TIMEOUT_MS),
+			silenceNoticeMs: ConsultConfig.positiveNumber(
+				raw.silenceNoticeMs,
+				ConsultConfig.DEFAULT_SILENCE_NOTICE_MS,
+			),
 			isolation,
 		};
 	}

@@ -102,7 +102,7 @@ test("settings dock: every setting becomes a row, plus restore", () => {
 		unset: () => undefined,
 	});
 	const items = new ConsultSettingsPresenter(settings).items();
-	assertEq(items.length, 25, "24 settings plus the restore action");
+	assertEq(items.length, 27, "26 settings plus the restore action");
 	assertEq(items[0].id, "enabled");
 	assertEq(items[0].label, "Enabled");
 	assertEq(items[0].currentValue, "on", "the effective default is shown");

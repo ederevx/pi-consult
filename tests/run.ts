@@ -40,6 +40,9 @@ import "./auditor-session.test.ts";
 import "./brief-composer.test.ts";
 import "./consult-sessions.test.ts";
 import "./consult-drive.test.ts";
+import "./consult-request-watch.test.ts";
+import "./consult-stall-watch.test.ts";
+import "./consult-stall-wiring.test.ts";
 import "./pre-consult.test.ts";
 import "./consult-progress.test.ts";
 import "./settings.test.ts";
@@ -64,6 +67,13 @@ import "./consult-tool-completion.test.ts";
 import "./supervisor-settlement.test.ts";
 import "./bridge-e2e.test.ts";
 
+// A test that waits on a deadline rides an unref'd timer, so this ref'd one
+// holds the loop open, and a test that never settles fails instead of hanging.
+const watchdog = setTimeout(() => {
+	console.error("suite: a test never settled");
+	process.exit(1);
+}, 120_000);
 await registry.runAll();
+clearTimeout(watchdog);
 cleanupScratch();
 if (registry.failed > 0) process.exit(1);
