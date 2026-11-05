@@ -23,7 +23,7 @@ export interface ConsultantTarget {
 
 export class ConsultContract {
 	/** Bump when the acknowledgement terms change; old receipts stop counting. */
-	static readonly VERSION = 17;
+	static readonly VERSION = 18;
 
 	/** The acknowledgement text the agent accepts by calling `pre_consult`. */
 	contractText(targets: readonly ConsultantTarget[]): string {
@@ -45,7 +45,11 @@ export class ConsultContract {
 			"  it: the call returns with its consult id and the consultation keeps",
 			"  running in the background. When it finishes, its full result arrives in",
 			"  this session as a pi-consult message carrying the answer and the consult",
-			"  id; do not poll for it, and continue it only after it arrives.",
+			"  id; do not poll for it, and continue it only after it arrives. Once you",
+			"  have no other work left and need the result, call consult_wait once with",
+			"  that id: it collects the answer inside the call and nothing is steered",
+			"  twice. A wait that returns with the consult still running leaves the",
+			"  message above to arrive as it would have.",
 			"  consult_terminate is the only way to end one early.",
 			"- A consultant may ask pi a question through a local bridge; the request",
 			"  arrives as a message naming a requestId and pi answers it with",
@@ -142,7 +146,8 @@ export class ConsultContract {
 			"- From the first consultant answer that returns a plan without an approved",
 			"  verdict, pi-consult holds your own thinking effort at low (medium where",
 			"  the model has no low) while you execute that plan. Waiting on a consult",
-			"  lifts the hold; a background consult leaves it in place. When the",
+			"  lifts the hold; a background consult leaves it in place, and so does a",
+			"  consult_wait, which executes nothing while it blocks. When the",
 			"  consult finishes, however the wait ended, the hold returns if that plan",
 			"  is still in force: a failed or timed-out consult leaves it in force, and",
 			"  a result you stopped with Escape takes effect at the next run. An",
@@ -294,6 +299,11 @@ export class ConsultContract {
 				"task demands two independent perspectives. Returns the answer and a " +
 				"continuation id. Pass background: true to return at once and keep " +
 				"working; its result is steered back after the current tool batch.",
+		);
+		lines.push(
+			"- consult_wait: block on a consult that is still running and collect its " +
+				"result in the same turn; it returns the answer when the consult finishes, " +
+				"or reports it still running when timeout_s expires.",
 		);
 		lines.push(
 			"- consult_terminate: end a background consult early; nothing else stops one.",

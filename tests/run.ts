@@ -39,6 +39,7 @@ import "./agent-effort-audit.test.ts";
 import "./auditor-session.test.ts";
 import "./brief-composer.test.ts";
 import "./consult-sessions.test.ts";
+import "./consult-wait.test.ts";
 import "./consult-drive.test.ts";
 import "./consult-request-watch.test.ts";
 import "./consult-stall-watch.test.ts";

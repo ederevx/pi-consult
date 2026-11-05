@@ -530,7 +530,8 @@ export class AgentEffortPolicy {
 		return {
 			kind: "owed",
 			reason,
-			action: "wait for its delivered result, then close the cycle against the consult that approves",
+			action: "wait for its delivered result or collect it with consult_wait, " +
+				"then close the cycle against the consult that approves",
 		};
 	}
 

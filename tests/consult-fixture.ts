@@ -31,6 +31,7 @@ import { ConsultSettingsStore } from "../src/consult-settings-store.ts";
 import { ConsultSupervisor } from "../src/consult-supervisor.ts";
 import { ConsultTerminateTool } from "../src/consult-terminate-tool.ts";
 import { ConsultTool } from "../src/consult-tool.ts";
+import { ConsultWaitTool } from "../src/consult-wait-tool.ts";
 import { ConsultContract } from "../src/consult-contract.ts";
 import { ClaudeConsultant } from "../src/consultants/claude-consultant.ts";
 import { CodexConsultant } from "../src/consultants/codex-consultant.ts";
@@ -135,7 +136,9 @@ export interface ConsultFixture {
 	tool: ConsultTool;
 	identity: SessionIdentity;
 	delivery: ConsultDelivery;
+	foreground: ConsultForeground;
 	terminate: ConsultTerminateTool;
+	wait: ConsultWaitTool;
 	reply: ConsultReplyTool;
 	execute: ConsultExecuteTool;
 }
@@ -172,6 +175,7 @@ export function buildConsultFixture(
 	);
 	const control = new ConsultControlServer({ broker, root: config.artifactDir });
 	const screen = new SecretScreen();
+	const foreground = new ConsultForeground();
 	return {
 		config,
 		pi,
@@ -185,6 +189,7 @@ export function buildConsultFixture(
 		control,
 		identity,
 		delivery,
+		foreground,
 		bridge: new BridgeLauncher(control, artifacts, config.drive),
 		tool: new ConsultTool({
 			config,
@@ -197,11 +202,21 @@ export function buildConsultFixture(
 			composer: new BriefComposer(),
 			formatter,
 			supervisor,
-			foreground: new ConsultForeground(),
+			foreground,
 			bridge: new BridgeLauncher(control, artifacts, config.drive),
 			effort: effort as never,
 		}),
 		terminate: new ConsultTerminateTool(supervisor, effort as never),
+		wait: new ConsultWaitTool({
+			config,
+			ledger,
+			records,
+			supervisor,
+			foreground,
+			delivery,
+			identity,
+			effort: effort as never,
+		}),
 		reply: new ConsultReplyTool(broker, screen),
 		execute: new ConsultExecuteTool(
 			broker,

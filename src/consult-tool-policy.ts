@@ -22,6 +22,7 @@ export class ConsultToolPolicy {
 		"consult_execute",
 		"consult_reply",
 		"consult_terminate",
+		"consult_wait",
 		"pre_teams",
 		"team_spawn",
 		"team_attach",

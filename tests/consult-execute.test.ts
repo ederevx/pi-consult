@@ -58,6 +58,11 @@ test("tool policy: allows only listed tools and never the control surface", () =
 		"no allow entry exempts the control tools",
 	);
 	assertEq(
+		new ConsultToolPolicy({ allow: ["consult_wait"] }).allows("consult_wait"),
+		false,
+		"a consultant cannot wait on a consult",
+	);
+	assertEq(
 		new ConsultToolPolicy({ allow: ["edit"] }).allows("edit"),
 		false,
 		"a configured mutation tool is still denied",

@@ -90,10 +90,10 @@ export class ReceiptLedger {
 	}
 
 	/**
-	 * A finished consultation receipt: a direct `consult` result, the
-	 * delivered background result, or the legacy `consult_collect` receipt
-	 * that reports one. Pending receipts carry no provider session to resume
-	 * and are not history.
+	 * A finished consultation receipt: a direct `consult` result, a result a
+	 * `consult_wait` collected, the delivered background result, or the
+	 * legacy `consult_collect` receipt that reports one. Pending receipts
+	 * carry no provider session to resume and are not history.
 	 */
 	private consultReceipt(entry: BranchEntry): ConsultDetails | undefined {
 		const details = this.receiptDetails(entry);
@@ -105,15 +105,17 @@ export class ReceiptLedger {
 	}
 
 	/** The structured details of a finished-receipt entry: a delivered
-	 *  background result, or a successful `consult`/`consult_collect`
-	 *  tool result. */
+	 *  background result, or a successful `consult`/`consult_wait`/
+	 *  `consult_collect` tool result. */
 	private receiptDetails(entry: BranchEntry): Record<string, unknown> | undefined {
 		if (entry.type === "custom_message" && entry.customType === RESULT_MESSAGE) {
 			const details = entry.details as Record<string, unknown> | undefined;
 			return details?.schema === 2 || details?.schema === 3 ? details : undefined;
 		}
 		const toolName = entry.message?.toolName;
-		if (toolName !== "consult" && toolName !== "consult_collect") return undefined;
+		if (toolName !== "consult" && toolName !== "consult_wait" && toolName !== "consult_collect") {
+			return undefined;
+		}
 		return this.toolDetails(entry);
 	}
 

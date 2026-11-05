@@ -130,12 +130,17 @@ export class ConsultRecordStore {
 
 	/** Read a finished consult's receipt back from disk. */
 	async load(consultId: string): Promise<ConsultReceipt | undefined> {
-		for (const paths of await this.artifacts.listConsults()) {
-			if (basename(paths.dir) !== consultId) continue;
-			const details = await this.readReceipt(paths);
-			if (details) return details;
-		}
-		return undefined;
+		const paths = await this.find(consultId);
+		return paths ? this.readReceipt(paths) : undefined;
+	}
+
+	/** Whether the saved record of this consult ended under an explicit
+	 *  termination rather than on its own. */
+	async terminated(consultId: string): Promise<boolean> {
+		const paths = await this.find(consultId);
+		if (!paths) return false;
+		const manifest = await this.readManifest(paths.run);
+		return manifest?.state === "terminated";
 	}
 
 	/**
@@ -189,6 +194,14 @@ export class ConsultRecordStore {
 			runs,
 		};
 		return { details, answers };
+	}
+
+	/** The saved directory of one consult, whatever it holds. */
+	private async find(consultId: string): Promise<ConsultPaths | undefined> {
+		for (const paths of await this.artifacts.listConsults()) {
+			if (basename(paths.dir) === consultId) return paths;
+		}
+		return undefined;
 	}
 
 	private async readReceipt(paths: ConsultPaths): Promise<ConsultReceipt | undefined> {

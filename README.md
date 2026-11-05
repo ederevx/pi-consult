@@ -89,7 +89,7 @@ surfaced as a warning.
 
 ## How it works
 
-`pi-consult` registers four tools and one gate:
+`pi-consult` registers six tools and one gate:
 
 - **`pre_consult`** - the acknowledgement gate. Call it once per session; it
   returns the catalogue and records that briefs, and any file a consultant
@@ -108,8 +108,13 @@ surfaced as a warning.
   standard preview and expand toggle, with live activity in cards below it;
   the model-facing text is unchanged.
 - **`consult_terminate`** - the only path that ends a consultation early.
+- **`consult_wait`** - blocks on a running consult and collects its result in
+  the same turn, instead of ending the turn for the delivered message.
 - **`consult_reply`** - answers a consultant's bridge request by `requestId`,
   so the blocked consultant can continue; screened for secrets like a brief.
+- **`consult_execute`** - runs the pi tool a consultant requested through the
+  bridge, by `requestId`, and pipes the output back to it; the agent
+  authorizes every call.
 
 Continuations of one provider session are serialized: a Codex `exec resume`
 waits for the earlier run of the same thread instead of failing on Codex's
@@ -171,7 +176,8 @@ The catalogue instructs the agent, and the tool's prompt guidelines repeat it:
 From the first consultant answer that gives pi a plan without an approved
 verdict, pi-consult captures pi's thinking level and lowers it to `low`
 (`medium` where the model has no `low`) while pi executes that plan. Waiting on
-a consult lifts the level again; a background consult leaves it in place. The
+a consult lifts the level again; a background consult leaves it in place, and
+so does a `consult_wait`, which executes nothing while it blocks. The
 lift cannot cover the turn that writes the brief, which runs before pi-consult
 sees the call. When the consult finishes the level is captured and lowered
 again if the plan is still in force: a failed or timed-out consult leaves it in
@@ -244,6 +250,36 @@ of waiting for the turn to end. If pi is in another session when it finishes,
 delivery waits until it returns. `consult_terminate` is the only way to end one
 early.
 
+An agent with nothing else left calls `consult_wait { id }` instead of ending
+the turn. The wait attaches the invocation, so the answer is handed over in the
+call and never also steered; the result text is the one a delivery would carry.
+Any other way out - an expiring `timeout_s`, an Escape, a queued message, a
+consultant request, or a stall - releases it again, so delivery still runs and
+no result is lost. A wait can only report the consult still running, never
+fail for that. Only a result the consult already handed over here, or that the
+branch already carries, is refused with `already collected` instead of a second
+copy. When this process no longer owns the id, a consult whose receipt was
+saved is collected from disk: nothing is redelivered after a restart, so that
+is the only way such a result reaches the session.
+
+## The `consult_wait` tool
+
+| Parameter | Meaning |
+|---|---|
+| `id` | The consult id a background or detached call returned |
+| `timeout_s` | Seconds to wait, 1 to 3600; defaults to the configured consult timeout. Expiry reports the consult still running, not an error |
+
+It returns the consult's result text and details, with `wait.outcome` telling
+`collected` from `already_collected` and `running`, and `wait.stoppedBy` naming
+what ended an unfinished wait. A collected answer settles the effort cycle the
+way a foreground `consult` does; a wait that returns nothing leaves the cycle
+exactly as it was.
+
+A wait only collects a consult its own session started: another session's live
+run is left to it, and a finished one is read back from the saved record. A
+wait that expires with the run still live reports what the consultant has done
+so far, from the same bounded transcript the `consult` call shows.
+
 ## The `consult` tool
 
 | Parameter | Meaning |
@@ -263,7 +299,6 @@ also refused while the consult is still running, until its result is
 delivered.
 
 ### The bridge
-
 When `drive.enabled` is on (the default), each consultant run is given a local
 MCP server — the bridge — that exposes one tool, `drive_pi`. The consultant can
 call it to ask pi a question and block until pi answers: pi receives the

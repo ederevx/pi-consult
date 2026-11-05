@@ -40,6 +40,7 @@ import { FallbackModels, type BoundEnvironment } from "./fallback-models.ts";
 import { NativeFallbackService } from "./native-fallback.ts";
 import { NativeConsultant } from "./native-consultant.ts";
 import { ConsultToolPolicy } from "./consult-tool-policy.ts";
+import { ConsultWaitTool } from "./consult-wait-tool.ts";
 import { ClaudeConsultant } from "./consultants/claude-consultant.ts";
 import { CodexConsultant } from "./consultants/codex-consultant.ts";
 import { FailureClassifier } from "./failure-classifier.ts";
@@ -169,6 +170,16 @@ export class ConsultExtension {
 			bindEnvironment,
 		}).register(pi);
 		new ConsultTerminateTool(supervisor, effort).register(pi);
+		new ConsultWaitTool({
+			config,
+			ledger,
+			records,
+			supervisor,
+			foreground,
+			delivery,
+			identity,
+			effort,
+		}).register(pi);
 		new ConsultReplyTool(broker, new SecretScreen()).register(pi);
 		const toolPolicy = new ConsultToolPolicy(config.drive.tools);
 		new ConsultExecuteTool(

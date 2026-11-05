@@ -96,6 +96,9 @@ export class ConsultConfig {
 		"transcript_read",
 	];
 	private static readonly DEFAULT_DRIVE_TOOLS_ALLOW = ["read", "grep", "find", "ls", "bash"];
+	/** The longest wait one `consult` or `consult_wait` call may ask for:
+	 *  one hour, so a single wait covers the longest run those tools start. */
+	static readonly MAX_TIMEOUT_S = 3_600;
 	static readonly DEFAULT_DRIVE_MAX_REQUESTS = 256;
 	static readonly DEFAULT_FALLBACK_MAX_ROUNDS = 16;
 

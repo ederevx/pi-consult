@@ -31,7 +31,7 @@ import type { AnswerFormatter } from "./answer-formatter.ts";
 import type { ArtifactStore, ConsultPaths } from "./artifact-store.ts";
 import type { BridgeLauncher } from "./bridge-launcher.ts";
 import type { BriefComposer } from "./brief-composer.ts";
-import type { ConsultConfig } from "./consult-config.ts";
+import { ConsultConfig } from "./consult-config.ts";
 import type { ConsultForeground, ForegroundOutcome } from "./consult-foreground.ts";
 import { ConsultCallView } from "./consult-call-view.ts";
 import { ConsultStepCards, type ConsultStartInfo, type ConsultStepData } from "./consult-step-cards.ts";
@@ -149,7 +149,8 @@ export class ConsultTool {
 				"the same consultant session. Escape or a queued message detaches the " +
 				"call instead of cancelling it: the consultation keeps running and its " +
 				"full result is delivered to you as a message when it finishes; do not " +
-				"poll for it. Set background true to return at once and keep working; " +
+				"poll for it, and collect it with consult_wait once nothing else remains. " +
+				"Set background true to return at once and keep working; " +
 				"its result is steered back after the current tool batch. Never " +
 				"include secrets in a brief.",
 			parameters: Type.Object({
@@ -185,7 +186,7 @@ export class ConsultTool {
 					Type.String({ description: "Model override; only with a single target." }),
 				),
 				timeout_s: Type.Optional(
-					Type.Integer({ minimum: 30, maximum: 3600, description: "Per-consultant timeout in seconds." }),
+					Type.Integer({ minimum: 30, maximum: ConsultConfig.MAX_TIMEOUT_S, description: "Per-consultant timeout in seconds." }),
 				),
 				background: Type.Optional(
 					Type.Boolean({
@@ -522,13 +523,15 @@ export class ConsultTool {
 				"Do other work now; its full result is delivered to this session as a " +
 					"steered message when it finishes, after the current tool batch and " +
 					"before the next model call, or as a new turn if idle. Do not poll for " +
-					"it, and continue it only after that.",
+					"it: with nothing else left, consult_wait collects it in that call, and " +
+					"continue it only after that.",
 			]
 			: [
 				`pi-consult: consult ${details.consultId} was interrupted (${reason}) and keeps ` +
 					"running in the background.",
 				`Its full result is delivered to this session as a message when it ` +
-					"finishes; continue it after that.",
+					"finishes, or collected in one consult_wait call once nothing else " +
+					"remains; continue it after that.",
 			];
 		if (snapshot) lines.push("", ConsultTool.clip(snapshot, 4_000));
 		return lines.join("\n");

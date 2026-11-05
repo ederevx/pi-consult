@@ -91,6 +91,12 @@ export class ConsultSupervisor {
 		return this.finish(invocation, await invocation.done());
 	}
 
+	/** Whether this process already saved the invocation's receipt, without
+	 *  waiting for one still being written. */
+	finished(consultId: string): boolean {
+		return this.receipts.has(consultId);
+	}
+
 	/** The pending receipt for a still-running invocation. */
 	pending(invocation: ConsultInvocation): ConsultDetails {
 		return {

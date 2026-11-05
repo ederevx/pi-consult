@@ -98,6 +98,14 @@ export interface ConsultRun {
 	warnings: string[];
 }
 
+/** How a `consult_wait` call ended: the result was collected in the call,
+ *  already handed over, or the consult was still running when the wait
+ *  stopped. */
+export interface ConsultWaitDetails {
+	outcome: "collected" | "already_collected" | "running";
+	stoppedBy?: DetachReason;
+}
+
 /**
  * The `consult` tool result's structured details. It follows the session
  * branch, so the gate and continuation lookup can be rebuilt from it.
@@ -115,6 +123,8 @@ export interface ConsultDetails {
 	detachedBy?: DetachReason;
 	/** The live invocation's state, when the receipt is a running one. */
 	state?: InvocationState;
+	/** Present when a `consult_wait` call produced this receipt. */
+	wait?: ConsultWaitDetails;
 	runs: ConsultRun[];
 }
 
