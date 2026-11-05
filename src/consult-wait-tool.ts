@@ -82,7 +82,9 @@ export class ConsultWaitTool {
 					}),
 				),
 			}),
-			annotations: { readOnlyHint: true, openWorldHint: false },
+			// The wait saves a receipt, marks delivery and settles effort, so it
+			// is not a read: a read-only context must not run it.
+			annotations: { readOnlyHint: false, openWorldHint: false },
 			exposure: "model-only",
 			execute: async (
 				toolCallId: string,
@@ -118,7 +120,7 @@ export class ConsultWaitTool {
 		const invocation = owned && owned.sessionId === this.deps.identity.get()
 			? owned
 			: undefined;
-		if (!invocation) return this.elsewhere(handle, ctx);
+		if (!invocation) return this.elsewhere(handle, ctx, owned);
 		if (this.deps.delivery.delivered(handle) || this.handedOver(handle, ctx)) {
 			return this.already(handle, ctx);
 		}
@@ -127,26 +129,36 @@ export class ConsultWaitTool {
 		// lands in that same tick still knows the user stopped the turn.
 		const effective = signal ?? ctx.signal;
 		const sent = this.deps.delivery.sent;
-		const outcome = await this.deps.foreground.watch(
-			invocation,
-			effective,
-			() => ctx.hasPendingMessages() || this.deps.delivery.sent !== sent,
-			onUpdate,
-			{
-				completion: this.deps.supervisor.receipt(invocation),
-				timeoutMs: this.timeoutMs(params),
-			},
-		);
-		if (outcome.status === "interrupted") {
-			if (outcome.reason === "escape") invocation.detach("escape");
-			else invocation.release();
-			// A save that finished inside this tick won the race: collect it
-			// rather than leave the answer to a delivery that stood aside.
-			if (!this.deps.supervisor.finished(handle)) {
-				return this.running(invocation, outcome.reason);
+		let collecting = false;
+		try {
+			const outcome = await this.deps.foreground.watch(
+				invocation,
+				effective,
+				() => ctx.hasPendingMessages() || this.deps.delivery.sent !== sent,
+				onUpdate,
+				{
+					completion: this.deps.supervisor.receipt(invocation),
+					timeoutMs: this.timeoutMs(params),
+				},
+			);
+			if (outcome.status === "interrupted") {
+				if (outcome.reason === "escape") invocation.detach("escape");
+				else invocation.release();
+				// A save that finished inside this tick won the race: collect it
+				// rather than leave the answer to a delivery that stood aside.
+				if (!this.deps.supervisor.finished(invocation.consultId)) {
+					return this.running(invocation, outcome.reason);
+				}
+			}
+			collecting = true;
+			return await this.collect(invocation, effective);
+		} finally {
+			// A throw anywhere above must not leave the lease held: delivery
+			// would stand aside for nobody, and the result would be stranded.
+			if (!collecting && invocation.attachment === "foreground") {
+				invocation.release();
 			}
 		}
-		return this.collect(invocation, effective);
 	}
 
 	/** The lease is held and the result is ready: hand it over. */
@@ -188,13 +200,22 @@ export class ConsultWaitTool {
 		};
 	}
 
-	/** No invocation here: a saved record is the way a result reaches a
+	/** No invocation owned here: a saved record is the way a result reaches a
 	 *  session that restarted before anything was delivered. */
 	private async elsewhere(
 		handle: string,
 		ctx: ExtensionToolContext,
+		owned: ConsultInvocation | undefined,
 	): Promise<AgentToolResult<ConsultDetails>> {
 		if (!handle) return this.failure("-", "consult_wait needs a consult id", ctx.cwd);
+		if (owned) {
+			return this.failure(
+				handle,
+				`consult ${handle} belongs to another session; its result is delivered ` +
+					"there, not here.",
+				ctx.cwd,
+			);
+		}
 		if (this.deps.delivery.delivered(handle) || this.handedOver(handle, ctx)) {
 			return this.already(handle, ctx);
 		}

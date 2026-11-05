@@ -494,6 +494,24 @@ test("consult wait: a collected answer clears the owed id on a real effort polic
 	assertEq(owed().includes(id), false, "the collected answer settles the owed id");
 });
 
+test("consult wait: a watch that throws hands the lease back", async () => {
+	const fixture = buildConsultFixture(configFile(fakeClaude(600), fakeCodex()), "sess-wait-throw");
+	const { id } = await background(fixture, "sess-wait-throw");
+	const invocation = fixture.supervisor.get(id);
+	assert(invocation !== undefined, "the invocation is owned");
+	fixture.foreground.watch = async () => {
+		throw new Error("boom");
+	};
+	let thrown: unknown;
+	try {
+		await fixture.wait.execute("call-throw", { id }, undefined, undefined, context("sess-wait-throw") as never);
+	} catch (error) {
+		thrown = error;
+	}
+	assertEq((thrown as Error).message, "boom", "the throw propagates");
+	assertEq(invocation.attachment, "detached", "the lease is released for delivery");
+});
+
 test("consult sessions: the ledger records a collected wait and ignores a running one", () => {
 	const fixture = buildConsultFixture(configFile(fakeClaude(), fakeCodex()), "sess-wait-ledger");
 	const details: ConsultDetails = {
