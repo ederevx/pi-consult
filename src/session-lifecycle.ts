@@ -80,22 +80,34 @@ export class SessionLifecycle {
 		});
 		pi.on("agent_before_settle", (event) => {
 			if (event.outcome !== "aborted") return;
-			const session = this.identity.get();
-			for (const invocation of this.supervisor.list()) {
-				if (
-					invocation.sessionId === session &&
-					invocation.detachedBy === "background" &&
-					invocation.live
-				) {
-					invocation.detach("escape");
-				}
-			}
+			this.escaped();
+		});
+		// The host skips agent_before_settle on an aborted run, so the final
+		// notification is where an Escape is seen.
+		pi.on("agent_settled", (event) => {
+			if (!event.aborted) return;
+			this.escaped();
 		});
 		pi.on("session_shutdown", async () => {
 			this.supervisor.cancelAll();
 			this.processes.killAll();
 			await this.bridge.close().catch(() => undefined);
 		});
+	}
+
+	/** A run the user stopped: a background consult's result is recorded, not
+	 *  executed. */
+	private escaped(): void {
+		const session = this.identity.get();
+		for (const invocation of this.supervisor.list()) {
+			if (
+				invocation.sessionId === session &&
+				invocation.detachedBy === "background" &&
+				invocation.live
+			) {
+				invocation.detach("escape");
+			}
+		}
 	}
 
 	private async start(ctx: ExtensionContext): Promise<void> {

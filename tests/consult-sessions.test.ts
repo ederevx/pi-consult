@@ -8,6 +8,7 @@ import { ConsultContract } from "../src/consult-contract.ts";
 import { ConsultDelivery } from "../src/consult-delivery.ts";
 import { ConsultSupervisor } from "../src/consult-supervisor.ts";
 import { ReceiptLedger } from "../src/receipt-ledger.ts";
+import { SessionLifecycle } from "../src/session-lifecycle.ts";
 import type { ConsultDetails, ConsultReceipt } from "../src/contracts.ts";
 import { buildConsultFixture, configFile, fakeClaude, fakeCodex } from "./consult-fixture.ts";
 import { FakeContext, FakePi, assert, assertEq, assertIncludes, scratchDir, test, toolEntry } from "./harness.ts";
@@ -130,6 +131,39 @@ test("consult sessions: a background call returns at once and steers its result"
 	assertEq(options.triggerTurn, true, "a background result resumes the agent");
 	const message = delivered(fixture.pi);
 	assertIncludes(message.content, "FAKE ANSWER", "the delivery carries the answer");
+});
+
+test("consult sessions: an aborted settle stops a background consult's turn", async () => {
+	const fixture = buildConsultFixture(configFile(fakeClaude(600), fakeCodex()), "sess-escape-mark");
+	new SessionLifecycle(
+		fixture.ledger, fixture.supervisor, fixture.processes, fixture.artifacts,
+		fixture.records, fixture.identity, fixture.delivery, fixture.bridge,
+		new ConsultContract(), fixture.config,
+	).register(fixture.pi as never);
+	const settle = (aborted: boolean): void => {
+		for (const handler of fixture.pi.handlers.get("agent_settled") ?? []) {
+			handler({ type: "agent_settled", aborted }, context("sess-escape-mark") as never);
+		}
+	};
+	const started = await fixture.tool.execute(
+		"call-escape-mark-1",
+		{ target: "claude", brief: "Stopped by the user.", background: true, contains_no_secrets: true },
+		undefined, undefined, context("sess-escape-mark") as never);
+	const invocation = fixture.supervisor.get(started.details.consultId);
+	assert(invocation !== undefined, "the invocation is owned");
+
+	settle(false);
+	assertEq(invocation.detachedBy, "background", "a completed run leaves the consult background");
+
+	settle(true);
+	assertEq(invocation.detachedBy, "escape", "an aborted settle marks the consult escaped");
+
+	await invocation.done();
+	await delay(30);
+	const last = fixture.pi.messages.at(-1);
+	assert(last, "the result is still delivered");
+	assertEq((last.options as { triggerTurn?: boolean }).triggerTurn, false,
+		"an escaped result does not start a turn");
 });
 
 test("consult sessions: Escape detaches instead of aborting", async () => {
