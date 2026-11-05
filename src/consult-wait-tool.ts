@@ -37,7 +37,6 @@ export interface ConsultWaitParams {
 
 /** Everything the tool composes. */
 export interface ConsultWaitToolDeps {
-	config: ConsultConfig;
 	ledger: ReceiptLedger;
 	records: ConsultRecordStore;
 	supervisor: ConsultSupervisor;
@@ -205,7 +204,7 @@ export class ConsultWaitTool {
 		}
 		// A result delivered while the record was read is not handed over twice.
 		if (this.deps.delivery.delivered(handle) || this.handedOver(handle, ctx)) {
-			return this.already(handle, ctx);
+			return this.already(handle, ctx, receipt);
 		}
 		const terminated = await this.deps.records.terminated(handle);
 		this.deps.delivery.collect(handle);
@@ -228,11 +227,12 @@ export class ConsultWaitTool {
 	private async already(
 		consultId: string,
 		ctx: ExtensionToolContext,
+		saved?: ConsultReceipt,
 	): Promise<AgentToolResult<ConsultDetails>> {
 		const invocation = this.deps.supervisor.get(consultId);
-		const receipt = invocation && !invocation.live
+		const receipt = saved ?? (invocation && !invocation.live
 			? await this.deps.supervisor.receipt(invocation).catch(() => undefined)
-			: undefined;
+			: undefined);
 		// A no-op unless a crash left the id owed: nothing else settles it.
 		this.deps.effort?.settle(consultId, undefined, undefined, false);
 		const lines = [

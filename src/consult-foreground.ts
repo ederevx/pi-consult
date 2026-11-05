@@ -76,6 +76,10 @@ export class ConsultForeground {
 				finish({ status: "interrupted", reason }),
 			);
 			const onAbort = (): void => finish({ status: "interrupted", reason: "escape" });
+			// Attached before any early exit: the caller has already started the
+			// completion, and a rejection with no handler here would be unhandled.
+			const done = (): void => finish({ status: "complete" });
+			void (bound?.completion ?? invocation.done()).then(done, done);
 			const cleanup = (): void => {
 				clearInterval(poll);
 				if (deadline) clearTimeout(deadline);
@@ -90,8 +94,6 @@ export class ConsultForeground {
 				}
 				signal.addEventListener("abort", onAbort, { once: true });
 			}
-			const done = (): void => finish({ status: "complete" });
-			void (bound?.completion ?? invocation.done()).then(done, done);
 		});
 	}
 

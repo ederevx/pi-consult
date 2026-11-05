@@ -208,7 +208,6 @@ export function buildConsultFixture(
 		}),
 		terminate: new ConsultTerminateTool(supervisor, effort as never),
 		wait: new ConsultWaitTool({
-			config,
 			ledger,
 			records,
 			supervisor,

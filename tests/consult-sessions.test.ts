@@ -166,6 +166,39 @@ test("consult sessions: an aborted settle stops a background consult's turn", as
 		"an escaped result does not start a turn");
 });
 
+test("consult sessions: Escape also stops a finished run held for another session", async () => {
+	const fixture = buildConsultFixture(configFile(fakeClaude(120), fakeCodex()), "sess-late");
+	new SessionLifecycle(
+		fixture.ledger, fixture.supervisor, fixture.processes, fixture.artifacts,
+		fixture.records, fixture.identity, fixture.delivery, fixture.bridge,
+		new ConsultContract(), fixture.config,
+	).register(fixture.pi as never);
+	const started = await fixture.tool.execute(
+		"call-late-1",
+		{ target: "claude", brief: "Held while pi is elsewhere.", background: true, contains_no_secrets: true },
+		undefined, undefined, context("sess-late") as never);
+	const invocation = fixture.supervisor.get(started.details.consultId);
+	assert(invocation !== undefined, "the invocation is owned");
+	fixture.identity.observe(context("elsewhere") as never);
+	await invocation.done();
+	await delay(30);
+	assertEq(fixture.delivery.delivered(invocation.consultId), false,
+		"the finished result is held for its own session");
+	fixture.identity.observe(context("sess-late") as never);
+	for (const handler of fixture.pi.handlers.get("agent_settled") ?? []) {
+		handler({ type: "agent_settled", aborted: true }, context("sess-late") as never);
+	}
+	assertEq(invocation.detachedBy, "escape", "the held result is marked escaped");
+	for (const handler of fixture.pi.handlers.get("session_start") ?? []) {
+		handler({ type: "session_start" }, context("sess-late") as never);
+	}
+	await delay(30);
+	const last = fixture.pi.messages.at(-1);
+	assert(last, "the held result is still delivered");
+	assertEq((last.options as { triggerTurn?: boolean }).triggerTurn, false,
+		"an escaped held result does not start a turn");
+});
+
 test("consult sessions: Escape detaches instead of aborting", async () => {
 	const settleArgs: unknown[][] = [];
 	const effort = {

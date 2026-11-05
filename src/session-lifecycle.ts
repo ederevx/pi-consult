@@ -96,14 +96,15 @@ export class SessionLifecycle {
 	}
 
 	/** A run the user stopped: a background consult's result is recorded, not
-	 *  executed. */
+	 *  executed. A run that already finished but has not been handed over yet
+	 *  counts too: its delivery would otherwise start the stopped turn. */
 	private escaped(): void {
 		const session = this.identity.get();
 		for (const invocation of this.supervisor.list()) {
 			if (
 				invocation.sessionId === session &&
 				invocation.detachedBy === "background" &&
-				invocation.live
+				!this.delivery.delivered(invocation.consultId)
 			) {
 				invocation.detach("escape");
 			}

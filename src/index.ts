@@ -171,7 +171,6 @@ export class ConsultExtension {
 		}).register(pi);
 		new ConsultTerminateTool(supervisor, effort).register(pi);
 		new ConsultWaitTool({
-			config,
 			ledger,
 			records,
 			supervisor,

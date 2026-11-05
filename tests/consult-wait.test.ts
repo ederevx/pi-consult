@@ -3,11 +3,15 @@ import { join } from "node:path";
 
 import { ConsultForeground } from "../src/consult-foreground.ts";
 import type { ConsultInvocation } from "../src/consult-invocation.ts";
+import { AgentEffortPolicy } from "../src/agent-effort-policy.ts";
+import { ConsultConfig } from "../src/consult-config.ts";
 import type { ConsultDetails } from "../src/contracts.ts";
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { buildConsultFixture, configFile, fakeClaude, fakeCodex } from "./consult-fixture.ts";
 import {
 	FakeContext,
+	FakeEffortHost,
+	THINKING_LEVELS,
 	assert,
 	assertEq,
 	assertIncludes,
@@ -465,6 +469,31 @@ test("consult wait: after a restart a terminated record is collected with no tur
 	assertEq(settles[0][4], false, "a terminated result is not executed");
 });
 
+test("consult wait: a collected answer clears the owed id on a real effort policy", async () => {
+	const chosen = ConsultConfig.from(
+		{ claude: { enabled: true }, codex: { enabled: true } }, scratchDir());
+	const host = new FakeEffortHost("high", THINKING_LEVELS);
+	const policy = new AgentEffortPolicy(chosen);
+	policy.register(host as never);
+	const ctx = new FakeContext(host.branch, "sess-wait-hold", scratchDir(), true);
+	host.attachContext(ctx);
+	host.emit("session_start", {});
+	const fixture = buildConsultFixture(configFile(fakeClaude(), fakeCodex()), "sess-wait-hold", policy);
+	const { id } = await background(fixture, "sess-wait-hold");
+	policy.engage(ctx as never, id);
+	const owed = (): unknown[] => {
+		for (let i = host.branch.length - 1; i >= 0; i -= 1) {
+			const entry = host.branch[i] as { customType?: string; data?: { owed?: unknown[] } };
+			if (entry.customType === "pi-consult-effort") return entry.data?.owed ?? [];
+		}
+		return [];
+	};
+	assert(owed().includes(id), "the consult is owed before the wait");
+	await fixture.wait.execute(
+		"call-wait-30", { id }, undefined, undefined, context("sess-wait-hold") as never);
+	assertEq(owed().includes(id), false, "the collected answer settles the owed id");
+});
+
 test("consult sessions: the ledger records a collected wait and ignores a running one", () => {
 	const fixture = buildConsultFixture(configFile(fakeClaude(), fakeCodex()), "sess-wait-ledger");
 	const details: ConsultDetails = {
@@ -497,6 +526,11 @@ test("consult sessions: the ledger records a collected wait and ignores a runnin
 			toolEntry("e1", "consult_wait", details),
 			toolEntry("e2", "consult_wait", { ...details, phase: "running", runs: [], wait: { outcome: "running" } }),
 		],
+		[
+			toolEntry("e1", "consult_wait", details),
+			toolEntry("e2", "consult_wait", { ...details, phase: "running", runs: [], wait: { outcome: "running" } }),
+			toolEntry("e3", "consult_wait", { ...details, runs: [], wait: { outcome: "already_collected" } }),
+		],
 	);
 	assertEq(fixture.ledger.history().length, 1, "only the collected receipt is history");
 	assertEq(fixture.ledger.history()[0].consultId, "c-111111111111", "the collected id is recorded");
@@ -518,4 +552,23 @@ test("foreground: a bounded watch clears its timer and listeners on every exit",
 	assertEq(internals.attention.size, 0, "no attention listener is left behind");
 	await delay(300);
 	assertEq(internals.listeners.size, 0, "the poll stopped with the watch");
+});
+
+test("foreground: an already-aborted watch consumes a rejecting completion", async () => {
+	const fixture = buildConsultFixture(configFile(fakeClaude(600), fakeCodex()), "sess-wait-abort");
+	const { invocation } = await background(fixture, "sess-wait-abort");
+	const unhandled: unknown[] = [];
+	const onUnhandled = (reason: unknown): void => {
+		unhandled.push(reason);
+	};
+	process.on("unhandledRejection", onUnhandled);
+	const controller = new AbortController();
+	controller.abort();
+	const outcome = await new ConsultForeground().watch(
+		invocation, controller.signal, () => false, undefined,
+		{ completion: Promise.reject(new Error("disk full")), timeoutMs: 5 });
+	await delay(40);
+	process.off("unhandledRejection", onUnhandled);
+	assertEq(outcome.reason, "escape", "the aborted signal decides the outcome");
+	assertEq(unhandled.length, 0, "the rejecting completion is consumed, not unhandled");
 });

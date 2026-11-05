@@ -267,7 +267,7 @@ is the only way such a result reaches the session.
 | Parameter | Meaning |
 |---|---|
 | `id` | The consult id a background or detached call returned |
-| `timeout_s` | Seconds to wait, 1 to 3600; defaults to the configured consult timeout. Expiry reports the consult still running, not an error |
+| `timeout_s` | Seconds to wait, 1 to 3600; defaults to 20 minutes. Expiry reports the consult still running, not an error |
 
 It returns the consult's result text and details, with `wait.outcome` telling
 `collected` from `already_collected` and `running`, and `wait.stoppedBy` naming
@@ -299,6 +299,7 @@ also refused while the consult is still running, until its result is
 delivered.
 
 ### The bridge
+
 When `drive.enabled` is on (the default), each consultant run is given a local
 MCP server — the bridge — that exposes one tool, `drive_pi`. The consultant can
 call it to ask pi a question and block until pi answers: pi receives the
