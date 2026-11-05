@@ -40,6 +40,7 @@ import "./auditor-session.test.ts";
 import "./brief-composer.test.ts";
 import "./consult-sessions.test.ts";
 import "./consult-drive.test.ts";
+import "./consult-request-watch.test.ts";
 import "./pre-consult.test.ts";
 import "./consult-progress.test.ts";
 import "./settings.test.ts";

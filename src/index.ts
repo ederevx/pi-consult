@@ -27,6 +27,7 @@ import { ConsultIndex } from "./consult-index.ts";
 import { ConsultRecordStore } from "./consult-record-store.ts";
 import { ConsultReplyTool } from "./consult-reply-tool.ts";
 import { ConsultRequestBroker } from "./consult-request-broker.ts";
+import { ConsultRequestWatch } from "./consult-request-watch.ts";
 import { ConsultRunner } from "./consult-runner.ts";
 import { ConsultSettings } from "./consult-settings.ts";
 import { ConsultSettingsStore } from "./consult-settings-store.ts";
@@ -132,12 +133,14 @@ export class ConsultExtension {
 				control.revoke(`${consultId}:${participant}`);
 			}
 		});
+		const dispatcher = new ConsultDriveDispatcher({ pi, supervisor });
 		const broker = new ConsultRequestBroker(
-			new ConsultDriveDispatcher({ pi, supervisor }),
+			dispatcher,
 			config.drive.deadlineMs,
 			config.drive.maxRequestsPerInvocation,
 		);
 		control.bind(broker);
+		new ConsultRequestWatch(broker, dispatcher).register(pi);
 		const bridge = new BridgeLauncher(control, artifacts, config.drive);
 
 		effort.register(pi);

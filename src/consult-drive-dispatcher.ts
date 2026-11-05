@@ -5,7 +5,9 @@
  * session: release any foreground consult call that is still blocking, then
  * post the request as a custom message that starts a turn. It never waits for
  * the answer; consult_reply resolves a prose question, and consult_execute
- * claims and resolves a named-tool request.
+ * claims and resolves a named-tool request. A request the agent settled
+ * without servicing is posted once more, so it is not lost to a turn that
+ * ended early.
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -40,15 +42,28 @@ export class ConsultDriveDispatcher {
 
 	/** Post one request to the agent and let it decide how to answer. */
 	dispatch(request: DriveRequest, payload: RequestPayload): void {
+		this.post(
+			request,
+			payload.kind === "tool"
+				? ConsultDriveDispatcher.toolText(request, payload)
+				: ConsultDriveDispatcher.driveText(request, payload),
+		);
+	}
+
+	/** Post the request again, with what it asks for, so it is not lost to a
+	 *  turn that ended early. */
+	remind(request: DriveRequest, payload: RequestPayload): void {
+		this.post(request, ConsultDriveDispatcher.remindText(request, payload));
+	}
+
+	private post(request: DriveRequest, content: string): void {
 		// A foreground call must stop waiting before the agent can take a turn.
 		// Any foreground call blocks the agent, not only the one being served.
 		for (const invocation of this.supervisor.list()) invocation.requestAttention();
 		this.pi.sendMessage(
 			{
 				customType: "pi-consult-drive",
-				content: payload.kind === "tool"
-					? ConsultDriveDispatcher.toolText(request, payload)
-					: ConsultDriveDispatcher.driveText(request, payload),
+				content,
 				display: true,
 				details: {
 					requestId: request.requestId,
@@ -58,6 +73,17 @@ export class ConsultDriveDispatcher {
 			},
 			{ triggerTurn: true },
 		);
+	}
+
+	private static remindText(request: DriveRequest, payload: RequestPayload): string {
+		return [
+			`pi-consult: the ${request.consultant} consultant on consult ${request.consultId} is`,
+			`still blocked on request ${request.requestId}, which your last turn did not answer.`,
+			"",
+			payload.kind === "tool"
+				? ConsultDriveDispatcher.toolText(request, payload)
+				: ConsultDriveDispatcher.driveText(request, payload),
+		].join("\n");
 	}
 
 	private static driveText(request: DriveRequest, payload: { prompt: string }): string {

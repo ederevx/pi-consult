@@ -275,6 +275,11 @@ cancelled by a timeout. The endpoint is a Unix socket under the artifact
 directory, admitted only by a per-run random token written 0600 next to the
 brief, and both directions are bounded in size.
 
+A turn that ends without claiming or declining a pending request re-raises it
+once when the agent settles, repeating what it asked for and both ways to
+answer it. A run the user aborted with Escape only shows a notice, never a new
+turn.
+
 ### Native fallback
 
 When `fallback.enabled` is on (the default) and every requested consultant

@@ -211,6 +211,17 @@ export class ConsultRequestBroker {
 		return [...this.pending.values()].map((entry) => entry.request);
 	}
 
+	/** Every request the agent has neither claimed nor answered, with what it
+	 *  asks for. */
+	unclaimed(): { request: DriveRequest; payload: RequestPayload }[] {
+		const waiting: { request: DriveRequest; payload: RequestPayload }[] = [];
+		for (const entry of this.pending.values()) {
+			if (entry.claimed) continue;
+			waiting.push({ request: entry.request, payload: entry.payload });
+		}
+		return waiting;
+	}
+
 	/** Whether a pending request asks for a named tool run. */
 	isTool(requestId: string): boolean {
 		return this.pending.get(requestId)?.payload.kind === "tool";
