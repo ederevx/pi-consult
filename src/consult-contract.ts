@@ -23,7 +23,7 @@ export interface ConsultantTarget {
 
 export class ConsultContract {
 	/** Bump when the acknowledgement terms change; old receipts stop counting. */
-	static readonly VERSION = 16;
+	static readonly VERSION = 17;
 
 	/** The acknowledgement text the agent accepts by calling `pre_consult`. */
 	contractText(targets: readonly ConsultantTarget[]): string {
@@ -140,11 +140,14 @@ export class ConsultContract {
 			"  evidence. Execution safety stays yours: a consultant's plan never",
 			"  authorizes a destructive or irreversible step the user has not approved.",
 			"- From the first consultant answer that returns a plan without an approved",
-			"  verdict, pi-consult holds your own thinking effort at low (medium where the",
-			"  model has no low) while you execute that answer in the run that received",
-			"  it. Asking, waiting, or starting another consult never lowers it; an",
-			"  approved answer, a failed or terminated consult, or the end of the run",
-			"  returns you to normal. It never leaves you at high, xhigh, or max while",
+			"  verdict, pi-consult holds your own thinking effort at low (medium where",
+			"  the model has no low) while you execute that plan. Waiting on a consult",
+			"  lifts the hold; a background consult leaves it in place. When the",
+			"  consult finishes, however the wait ended, the hold returns if that plan",
+			"  is still in force: a failed or timed-out consult leaves it in force, and",
+			"  a result you stopped with Escape takes effect at the next run. An",
+			"  approved answer, a terminated consult, or the end of the run returns you",
+			"  to normal. It never leaves you at high, xhigh, or max while",
 			"  executing the plan; on a model with nothing lower it warns and",
 			"  reports the hold as unsupported. The deep reasoning belongs in the",
 			"  consult: rely on the plan as written, and meet every roadblock with",

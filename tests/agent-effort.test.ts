@@ -18,6 +18,7 @@ import {
 	assert,
 	assertEq,
 	assertIncludes,
+	assertNotIncludes,
 	assistantMessage,
 	assistantWithToolCall,
 	consultDetails,
@@ -220,12 +221,177 @@ test("agent effort: a manual level between consults survives the next hold", asy
 	assertEq(host.getThinkingLevel(), "medium", "the user's choice returns");
 });
 
-test("agent effort: engaging another consult while held stays low", () => {
+test("agent effort: engaging a background consult while held stays low", () => {
 	const { host, ctx, policy } = setup({ level: "high" });
 	policy.engage(ctx as never, "c-000009e");
 	policy.settle("c-000009e", consultDetails("c-000009e", [consultRun("claude", "ok")]));
-	policy.engage(ctx as never, "c-000009f");
-	assertEq(host.getThinkingLevel(), "low", "the running answer is still being executed");
+	policy.engage(ctx as never, "c-000009f", false);
+	assertEq(host.getThinkingLevel(), "low", "a background consult leaves pi executing at low");
+});
+
+test("agent effort: a foreground consult lifts a held level while it waits", () => {
+	const { host, ctx, policy } = setup({ level: "high" });
+	policy.engage(ctx as never, "c-010001");
+	policy.settle("c-010001", consultDetails("c-010001", [consultRun("claude", "ok")]), verdictAnswers({ claude: "The plan." }));
+	assertEq(host.getThinkingLevel(), "low", "the plan lowered the level");
+	policy.engage(ctx as never, "c-010002");
+	assertEq(host.getThinkingLevel(), "high", "waiting on the next consult lifts the hold");
+});
+
+test("agent effort: a manual level set during the lift is what the next hold captures", () => {
+	const { host, ctx, policy } = setup({ level: "high" });
+	policy.engage(ctx as never, "c-010003");
+	policy.settle("c-010003", consultDetails("c-010003", [consultRun("claude", "ok")]), verdictAnswers({ claude: "The plan." }));
+	policy.engage(ctx as never, "c-010004");
+	host.forceLevel("xhigh");
+	policy.settle("c-010004", consultDetails("c-010004", [consultRun("claude", "ok")]), verdictAnswers({ claude: "The next plan." }));
+	assertEq(lastEntry(host).previous, "xhigh", "the level the user chose while waiting is the one restored");
+	assertEq(host.getThinkingLevel(), "low");
+});
+
+test("agent effort: a timed-out consult reinstates the plan's hold", () => {
+	const { host, ctx, policy } = setup({ level: "high" });
+	policy.engage(ctx as never, "c-010010");
+	policy.settle("c-010010", consultDetails("c-010010", [consultRun("claude", "ok")]), verdictAnswers({ claude: "The plan." }));
+	policy.engage(ctx as never, "c-010011");
+	assertEq(host.getThinkingLevel(), "high", "waiting lifted the hold");
+	policy.settle("c-010011", consultDetails("c-010011", [consultRun("claude", "timeout")]));
+	assertEq(host.getThinkingLevel(), "low", "the plan is still in force, so the hold returns");
+	assertEq(lastEntry(host).plan, "c-010010");
+});
+
+test("agent effort: a timed-out consult settled after the run reinstates on delivery", async () => {
+	const { host, ctx, policy } = setup({ level: "high" });
+	policy.engage(ctx as never, "c-010020");
+	policy.settle("c-010020", consultDetails("c-010020", [consultRun("claude", "ok")]), verdictAnswers({ claude: "The plan." }));
+	policy.engage(ctx as never, "c-010021");
+	await host.run("Working on the plan.");
+	assertEq(host.getThinkingLevel(), "high", "the run ended with that consult still out");
+	policy.settle("c-010021", consultDetails("c-010021", [consultRun("claude", "timeout")]));
+	assertEq(host.getThinkingLevel(), "low", "the delivered timeout reinstates the plan's hold");
+});
+
+test("agent effort: a failed consult with no plan on record stays normal", () => {
+	const { host, ctx, policy } = setup({ level: "high" });
+	policy.engage(ctx as never, "c-010030");
+	policy.settle("c-010030", consultDetails("c-010030", [consultRun("claude", "error")]));
+	assertEq(host.getThinkingLevel(), "high");
+	assertEq(lastEntry(host).plan, undefined, "a failure never records a plan");
+});
+
+test("agent effort: an escaped unapproved answer lowers only at the next agent start", () => {
+	const { host, ctx, policy } = setup({ level: "high" });
+	policy.engage(ctx as never, "c-010040");
+	policy.settle("c-010040", consultDetails("c-010040", [consultRun("claude", "ok")]), verdictAnswers({ claude: "The plan." }));
+	policy.engage(ctx as never, "c-010041");
+	policy.settle(
+		"c-010041",
+		consultDetails("c-010041", [consultRun("claude", "ok")]),
+		verdictAnswers({ claude: "The next plan." }),
+		false,
+	);
+	assertEq(host.getThinkingLevel(), "high", "an escaped result starts no turn");
+	assertEq(lastEntry(host).due, true, "the hold is due at the next run");
+	host.emit("agent_start", {});
+	assertEq(host.getThinkingLevel(), "low", "the next run reinstates the hold");
+	host.emit("agent_settled", {});
+	assertEq(host.getThinkingLevel(), "high", "the end of that run releases it");
+});
+
+test("agent effort: an escaped timeout with a plan in force lowers at the next agent start", () => {
+	const { host, ctx, policy } = setup({ level: "high" });
+	policy.engage(ctx as never, "c-010050");
+	policy.settle("c-010050", consultDetails("c-010050", [consultRun("claude", "ok")]), verdictAnswers({ claude: "The plan." }));
+	policy.engage(ctx as never, "c-010051");
+	policy.settle("c-010051", consultDetails("c-010051", [consultRun("claude", "timeout")]), undefined, false);
+	assertEq(host.getThinkingLevel(), "high");
+	host.emit("agent_start", {});
+	assertEq(host.getThinkingLevel(), "low", "the plan in force lowers the next run");
+});
+
+test("agent effort: a due hold fires once", () => {
+	const { host, ctx, policy } = setup({ level: "high" });
+	policy.engage(ctx as never, "c-010060");
+	policy.settle(
+		"c-010060",
+		consultDetails("c-010060", [consultRun("claude", "ok")]),
+		verdictAnswers({ claude: "The plan." }),
+		false,
+	);
+	host.emit("agent_start", {});
+	assertEq(lastEntry(host).due, false, "the due hold is spent");
+	host.emit("agent_settled", {});
+	assertEq(host.getThinkingLevel(), "high", "the run's end released it");
+	host.emit("agent_start", {});
+	assertEq(host.getThinkingLevel(), "high", "a spent hold never fires again");
+});
+
+test("agent effort: a new foreground consult cancels a due hold", () => {
+	const { host, ctx, policy } = setup({ level: "high" });
+	policy.engage(ctx as never, "c-010070");
+	policy.settle(
+		"c-010070",
+		consultDetails("c-010070", [consultRun("claude", "ok")]),
+		verdictAnswers({ claude: "The plan." }),
+		false,
+	);
+	policy.engage(ctx as never, "c-010071");
+	assertEq(lastEntry(host).due, false);
+	host.emit("agent_start", {});
+	assertEq(host.getThinkingLevel(), "high", "a consult in flight holds nothing back");
+});
+
+test("agent effort: a terminated consult never reinstates a plan", () => {
+	const { host, ctx, policy } = setup({ level: "high" });
+	policy.engage(ctx as never, "c-010080");
+	policy.settle("c-010080", consultDetails("c-010080", [consultRun("claude", "ok")]), verdictAnswers({ claude: "The plan." }));
+	policy.engage(ctx as never, "c-010081");
+	policy.settle("c-010081", undefined, undefined, false);
+	assertEq(host.getThinkingLevel(), "high");
+	assertEq(lastEntry(host).plan, "c-010080", "the plan stays on record for a later failure");
+});
+
+test("agent effort: an approved answer clears the plan so a later failure stays normal", () => {
+	const { host, ctx, policy } = setup({ level: "high" });
+	policy.engage(ctx as never, "c-010090");
+	policy.settle("c-010090", consultDetails("c-010090", [consultRun("claude", "ok")]), verdictAnswers({ claude: "The plan." }));
+	policy.engage(ctx as never, "c-010091");
+	policy.settle(
+		"c-010091",
+		consultDetails("c-010091", [consultRun("claude", "ok")]),
+		verdictAnswers({ claude: APPROVED_VERDICT }),
+	);
+	assertEq(lastEntry(host).plan, undefined, "approval clears the plan");
+	policy.engage(ctx as never, "c-010092");
+	policy.settle("c-010092", consultDetails("c-010092", [consultRun("claude", "error")]));
+	assertEq(host.getThinkingLevel(), "high", "a later failure never reinstates a cleared plan");
+});
+
+test("agent effort: a closed cycle clears the plan and the due flag", async () => {
+	const { host, ctx, policy } = setup({ level: "high" });
+	policy.engage(ctx as never, "c-010100");
+	policy.settle(
+		"c-010100",
+		consultDetails("c-010100", [consultRun("claude", "ok")]),
+		verdictAnswers({ claude: "The plan." }),
+		false,
+	);
+	const handler = host.commands.get("consult-effort")?.handler as (
+		args: string,
+		commandCtx: unknown,
+	) => Promise<void>;
+	await handler("release", ctx);
+	assertEq(lastEntry(host).holding, false);
+	assertEq(lastEntry(host).due, false);
+	assertEq(lastEntry(host).plan, undefined);
+});
+
+test("agent effort: a reload keeps a due hold and it fires at the next run", () => {
+	const branch = [customEntry("e1", "pi-consult-effort", { holding: true, plan: "c-010110", due: true })];
+	const { host } = setup({ level: "high", branch });
+	assertEq(lastEntry(host).due, true);
+	host.emit("agent_start", {});
+	assertEq(host.getThinkingLevel(), "low", "the due hold fires at the next run");
 });
 
 test("agent effort: an approved settle releases without holding", async () => {
@@ -515,10 +681,20 @@ test("agent effort: malformed entries do not throw and fall back to defaults", (
 			auditFailed: "yes",
 			consulted: { "c-1": "claude", "c-2": ["bogus"] },
 			nudged: 3,
+			plan: 3,
+			due: "yes",
 		}),
 	];
 	const { policy } = setup({ level: "high", branch });
 	assertIncludes(policy.describe(), "effort hold: off");
+
+	const reloaded = setup({
+		level: "high",
+		branch: [customEntry("e2", "pi-consult-effort", { holding: true, plan: 3, due: "yes" })],
+	});
+	assertNotIncludes(reloaded.policy.describe(), "plan:");
+	reloaded.host.emit("agent_start", {});
+	assertEq(reloaded.host.getThinkingLevel(), "high", "a malformed due flag never fires");
 });
 
 test("agent effort: a mid-cycle model switch to a deep default still holds low", async () => {

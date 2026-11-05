@@ -273,10 +273,10 @@ test("consult tool: continue is refused when the target has no saved session", a
 });
 
 test("consult tool: engage starts the cycle and settle fires only on a foreground receipt", async () => {
-	const engages: string[] = [];
+	const engages: Array<{ id: string; waits?: boolean }> = [];
 	const settles: Array<{ id: string; details?: unknown; answers?: unknown }> = [];
 	const effort = {
-		engage: (_ctx: unknown, id: string) => engages.push(id),
+		engage: (_ctx: unknown, id: string, waits?: boolean) => engages.push({ id, waits }),
 		settle: (id: string, details?: unknown, answers?: unknown) => settles.push({ id, details, answers }),
 	};
 	const { tool } = buildConsultFixture(
@@ -293,7 +293,8 @@ test("consult tool: engage starts the cycle and settle fires only on a foregroun
 	);
 	assertEq(result.details.ok, true);
 	assertEq(engages.length, 1, "engage runs for the started consult");
-	assertEq(engages[0], result.details.consultId);
+	assertEq(engages[0].id, result.details.consultId);
+	assertEq(engages[0].waits, true, "a call that waits lifts the hold");
 	assertEq(settles.length, 1, "a foreground receipt settles the consult");
 	assertEq(settles[0].id, result.details.consultId);
 	assertEq(
@@ -329,4 +330,25 @@ test("consult tool: engage starts the cycle and settle fires only on a foregroun
 	const invocation = slow.supervisor.get(pending.details.consultId);
 	assert(invocation !== undefined, "the detached invocation is tracked");
 	await invocation.done();
+
+	const backgroundWaits: Array<boolean | undefined> = [];
+	const backgroundEffort = {
+		engage: (_ctx: unknown, _id: string, waits?: boolean) => backgroundWaits.push(waits),
+		settle: () => undefined,
+	};
+	const background = buildConsultFixture(
+		configFile(fakeClaude(600), fakeCodex()),
+		"sess-effort-3",
+		backgroundEffort,
+	);
+	const running = await background.tool.execute(
+		"call-effort-3",
+		{ target: "claude", brief: "Background one.", contains_no_secrets: true, background: true },
+		undefined,
+		undefined,
+		new FakeContext([], "sess-effort-3", scratchDir(), false) as never,
+	);
+	assertEq(running.details.phase, "running");
+	assertEq(backgroundWaits[0], false, "a background consult leaves the hold in place");
+	await background.supervisor.get(running.details.consultId)?.done();
 });

@@ -170,15 +170,17 @@ The catalogue instructs the agent, and the tool's prompt guidelines repeat it:
 
 From the first consultant answer that gives pi a plan without an approved
 verdict, pi-consult captures pi's thinking level and lowers it to `low`
-(`medium` where the model has no `low`) for the rest of that agent run while
-pi executes the plan. Asking is not executing: engaging a consult, waiting for
-one, or starting another while the first is running never lowers the level.
-When the agent run settles or is aborted, when the answer is approved, or when
-it fails or is terminated, the captured level returns at once and only a new
-unapproved answer can capture and lower it again. On a model with nothing
-below `high` it warns and reports the hold unsupported. While executing under
-the plan any raise, including the automatic one a model switch makes, is
-lowered again; only `/consult-effort release` ends a cycle early
+(`medium` where the model has no `low`) while pi executes that plan. Waiting on
+a consult lifts the level again; a background consult leaves it in place. The
+lift cannot cover the turn that writes the brief, which runs before pi-consult
+sees the call. When the consult finishes the level is captured and lowered
+again if the plan is still in force: a failed or timed-out consult leaves it in
+force, and a result the user stopped with Escape takes effect at the next run.
+An approved answer, a terminated consult, or the end of the run returns the
+captured level. On a model with nothing below `high` it warns and reports the
+hold unsupported. While executing under the plan any raise, including the
+automatic one a model switch makes, is lowered again; only
+`/consult-effort release` ends a cycle early
 (`/consult-effort` alone shows its state). The cycle ends, and pi's previous
 level returns, when one of these markers qualifies. Completion markers must be
 the final non-blank line; fallback and user-request markers must appear on

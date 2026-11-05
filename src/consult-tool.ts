@@ -325,7 +325,7 @@ export class ConsultTool {
 			consultId, sessionId, params, targets, composed, continuation, paths, ctx, nativeResume);
 		const invocation = await this.deps.supervisor.start(spec);
 
-		this.deps.effort?.engage(ctx, consultId);
+		this.deps.effort?.engage(ctx, consultId, params.background !== true);
 		const steps = ctx.mode === "tui" && this.append
 			? new ConsultStepCards(consultId, this.stepAppend(sessionId)) : undefined;
 		steps?.start(this.startInfo(params, spec));
