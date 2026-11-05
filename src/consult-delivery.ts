@@ -31,6 +31,9 @@ export class ConsultDelivery {
 	private readonly effort: AgentEffortPolicy | undefined;
 	private readonly announced = new Set<string>();
 	private readonly missed = new Map<string, HeldResult>();
+	/** Every delivery this process made, so a waiting caller can tell that a
+	 *  sibling's result was steered behind it. */
+	sent = 0;
 
 	constructor(
 		pi: ExtensionAPI,
@@ -48,7 +51,7 @@ export class ConsultDelivery {
 	 *  hold it while pi is elsewhere. */
 	announce(invocation: ConsultInvocation, receipt: ConsultReceipt): void {
 		if (invocation.attachment === "foreground") return;
-		if (this.announced.has(invocation.consultId)) return;
+		if (this.delivered(invocation.consultId)) return;
 		if (this.identity.get() !== invocation.sessionId) {
 			this.missed.set(invocation.consultId, { invocation, receipt });
 			return;
@@ -77,6 +80,19 @@ export class ConsultDelivery {
 		);
 	}
 
+	/** A background consult's result, once collected or delivered here.
+	 *  In memory only: the branch carries the durable record. */
+	delivered(consultId: string): boolean {
+		return this.announced.has(consultId);
+	}
+
+	/** A caller took this result over: nothing is steered for it, and a held
+	 *  copy is not delivered later. */
+	collect(consultId: string): void {
+		this.announced.add(consultId);
+		this.missed.delete(consultId);
+	}
+
 	/** pi entered a session: deliver what finished while it was elsewhere. */
 	redeliver(): void {
 		for (const [id, held] of [...this.missed]) {
@@ -87,7 +103,8 @@ export class ConsultDelivery {
 	}
 
 	private deliver(invocation: ConsultInvocation, receipt: ConsultReceipt): void {
-		this.announced.add(invocation.consultId);
+		this.collect(invocation.consultId);
+		this.sent += 1;
 		const terminated = invocation.state === "terminated";
 		const background = invocation.detachedBy === "background";
 		// A turn starts to execute the answer unless the consult ended or the
@@ -96,7 +113,7 @@ export class ConsultDelivery {
 		this.pi.sendMessage(
 			{
 				customType: RESULT_MESSAGE,
-				content: this.text(invocation, receipt, terminated),
+				content: this.resultText(receipt, terminated),
 				display: true,
 				details: receipt.details,
 			},
@@ -112,13 +129,10 @@ export class ConsultDelivery {
 		}
 	}
 
-	private text(
-		invocation: ConsultInvocation,
-		receipt: ConsultReceipt,
-		terminated: boolean,
-	): string {
+	/** The one wording of a result, whether it is steered or collected. */
+	resultText(receipt: ConsultReceipt, terminated: boolean): string {
 		const lines = [
-			`pi-consult: background consult ${invocation.consultId} finished` +
+			`pi-consult: background consult ${receipt.details.consultId} finished` +
 				`${terminated ? " (terminated)" : ""}.`,
 			"",
 			this.formatter.format(receipt.details, receipt.answers),

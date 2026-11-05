@@ -30,13 +30,17 @@ export class ConsultForeground {
 
 	/**
 	 * Wait for the invocation, streaming its progress, until it finishes or
-	 * the caller is interrupted. Never aborts or detaches the invocation.
+	 * the caller is interrupted. Never aborts or detaches the invocation. A
+	 * `bound` ends the wait on its own promise or deadline instead of the
+	 * run's completion, so a caller that collects the result itself stops
+	 * waiting for delivery's save.
 	 */
 	async watch(
 		invocation: ConsultInvocation,
 		signal: AbortSignal | undefined,
 		hasPendingMessages: () => boolean,
 		onUpdate: AgentToolUpdateCallback<ConsultDetails> | undefined,
+		bound?: { completion: Promise<unknown>; timeoutMs: number },
 	): Promise<WatchOutcome> {
 		return new Promise<WatchOutcome>((resolve) => {
 			let settled = false;
@@ -64,12 +68,17 @@ export class ConsultForeground {
 				}
 			}, ConsultForeground.POLL_MS);
 			poll.unref?.();
+			const deadline = bound
+				? setTimeout(() => finish({ status: "interrupted", reason: "wait_timeout" }), bound.timeoutMs)
+				: undefined;
+			deadline?.unref?.();
 			const unsubscribeAttention = invocation.onAttention((reason) =>
 				finish({ status: "interrupted", reason }),
 			);
 			const onAbort = (): void => finish({ status: "interrupted", reason: "escape" });
 			const cleanup = (): void => {
 				clearInterval(poll);
+				if (deadline) clearTimeout(deadline);
 				signal?.removeEventListener("abort", onAbort);
 				unsubscribe();
 				unsubscribeAttention();
@@ -81,7 +90,8 @@ export class ConsultForeground {
 				}
 				signal.addEventListener("abort", onAbort, { once: true });
 			}
-			void invocation.done().then(() => finish({ status: "complete" }));
+			const done = (): void => finish({ status: "complete" });
+			void (bound?.completion ?? invocation.done()).then(done, done);
 		});
 	}
 

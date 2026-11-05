@@ -205,6 +205,20 @@ export class ConsultInvocation {
 		this.detachedBy = reason;
 	}
 
+	/** Take a detached invocation back into a foreground wait that collects
+	 *  its own result. False when a call already watches it. */
+	attach(): boolean {
+		if (this.attachment === "foreground") return false;
+		this.attachment = "foreground";
+		return true;
+	}
+
+	/** Give the invocation back to delivery, keeping why it detached: a
+	 *  background result must stay a steer. */
+	release(): void {
+		this.attachment = "detached";
+	}
+
 	/** Explicitly end the invocation and its owned processes. */
 	terminate(): void {
 		if (this.state === "completed" || this.state === "failed") return;
