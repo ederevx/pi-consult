@@ -126,7 +126,10 @@ export class ClaudeConsultant implements Consultant {
 			timeoutMs: request.timeoutMs,
 			signal,
 			retainStdout: false,
-			onStdoutLine: (line) => parser.push(line),
+			onStdoutLine: (line) => {
+				request.onActivity?.();
+				parser.push(line);
+			},
 		});
 		return this.toResult(request, sessionId, parser.finish(), outcome);
 	}

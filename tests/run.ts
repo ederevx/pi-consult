@@ -41,6 +41,8 @@ import "./brief-composer.test.ts";
 import "./consult-sessions.test.ts";
 import "./consult-drive.test.ts";
 import "./consult-request-watch.test.ts";
+import "./consult-stall-watch.test.ts";
+import "./consult-stall-wiring.test.ts";
 import "./pre-consult.test.ts";
 import "./consult-progress.test.ts";
 import "./settings.test.ts";

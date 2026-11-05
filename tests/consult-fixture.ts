@@ -41,9 +41,9 @@ import { SessionIdentity } from "../src/session-identity.ts";
 import { FakePi, scratchDir } from "./harness.ts";
 
 /** Write an executable fake Claude that answers after `delayMs`,
- *  optionally reporting one tool use before the delay and a second after
- *  it, so a card-writing path can be tested. */
-export function fakeClaude(delayMs = 0, toolUse = false, lateToolUse = false): string {
+ *  optionally reporting one tool use before the delay, a second after it,
+ *  and one line the parser cannot read. */
+export function fakeClaude(delayMs = 0, toolUse = false, lateToolUse = false, noise = false): string {
 	const path = join(scratchDir(), `fake-claude-${Math.random().toString(16).slice(2)}.mjs`);
 	const body = [
 		'import { readFileSync, writeFileSync } from "node:fs";',
@@ -54,6 +54,7 @@ export function fakeClaude(delayMs = 0, toolUse = false, lateToolUse = false): s
 		...(toolUse ? [
 			'process.stdout.write(JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id: "tool-1", name: "Read", input: { file_path: "src/x.ts" } }] } }) + "\\n");',
 		] : []),
+		...(noise ? ['process.stdout.write("not a json line\\n");'] : []),
 		`await new Promise((resolve) => setTimeout(resolve, ${delayMs}));`,
 		...(lateToolUse ? [
 			'process.stdout.write(JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id: "tool-2", name: "Grep", input: { pattern: "late-step" } }] } }) + "\\n");',
@@ -68,8 +69,9 @@ export function fakeClaude(delayMs = 0, toolUse = false, lateToolUse = false): s
 }
 
 /** Write an executable fake Codex that answers after `delayMs`, optionally
- *  reporting commentary and one command before the answer. */
-export function fakeCodex(delayMs = 0, activity = false): string {
+ *  reporting commentary and one command before the answer, and one line the
+ *  parser cannot read. */
+export function fakeCodex(delayMs = 0, activity = false, noise = false): string {
 	const path = join(scratchDir(), `fake-codex-${Math.random().toString(16).slice(2)}.mjs`);
 	const body = [
 		'import { readFileSync, writeFileSync } from "node:fs";',
@@ -78,6 +80,7 @@ export function fakeCodex(delayMs = 0, activity = false): string {
 		"  writeFileSync(process.env.CODEX_FAKE_RECORD, JSON.stringify({ argv: process.argv.slice(2), brief }));",
 		"}",
 		`await new Promise((resolve) => setTimeout(resolve, ${delayMs}));`,
+		...(noise ? ['process.stdout.write("not a json line\\n");'] : []),
 		'process.stdout.write(JSON.stringify({ type: "thread.started", thread_id: "fake-thread" }) + "\\n");',
 		...(activity ? [
 			'process.stdout.write(JSON.stringify({ item: { type: "agent_message", text: "Looking at the parser.\\nSecond line of commentary." }, type: "item.completed" }) + "\\n");',
@@ -142,6 +145,7 @@ export function buildConsultFixture(
 	config: ConsultConfig,
 	sessionId = "sess-int",
 	effort?: unknown,
+	deps: Record<string, unknown> = {},
 ): ConsultFixture {
 	const processes = new ProcessRunner();
 	const runner = new ConsultRunner(
@@ -160,7 +164,7 @@ export function buildConsultFixture(
 	const formatter = new AnswerFormatter(config.output);
 	const delivery = new ConsultDelivery(
 		pi as never, identity, formatter, effort as never);
-	const supervisor = new ConsultSupervisor(runner, records, delivery);
+	const supervisor = new ConsultSupervisor(runner, records, delivery, undefined, deps as never);
 	const broker = new ConsultRequestBroker(
 		new ConsultDriveDispatcher({ pi: pi as never, supervisor }),
 		config.drive.deadlineMs,

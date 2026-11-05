@@ -64,8 +64,8 @@ export class ConsultForeground {
 				}
 			}, ConsultForeground.POLL_MS);
 			poll.unref?.();
-			const unsubscribeAttention = invocation.onAttention(() =>
-				finish({ status: "interrupted", reason: "pi_request" }),
+			const unsubscribeAttention = invocation.onAttention((reason) =>
+				finish({ status: "interrupted", reason }),
 			);
 			const onAbort = (): void => finish({ status: "interrupted", reason: "escape" });
 			const cleanup = (): void => {

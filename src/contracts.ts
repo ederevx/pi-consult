@@ -41,6 +41,9 @@ export interface FallbackMetadata {
 /** The custom-message type a delivered background result uses. */
 export const RESULT_MESSAGE = "pi-consult-result";
 
+/** The custom-message type a consultant silence wake uses. */
+export const STALL_MESSAGE = "pi-consult-stall";
+
 /** How one consultant run ended. */
 export type RunStatus =
 	| "ok"
@@ -62,8 +65,9 @@ export type InvocationState =
 /** Whether a tool call is still watching the invocation it started. */
 export type AttachmentState = "foreground" | "detached";
 
-/** Why a call stopped watching a still-running invocation. */
-export type DetachReason = "escape" | "steer" | "wait_timeout" | "pi_request" | "background";
+/** Why a call stopped watching a still-running invocation. A stall is a
+ *  consultant that stopped producing output, not a consultant request. */
+export type DetachReason = "escape" | "steer" | "wait_timeout" | "pi_request" | "stall" | "background";
 
 /** Whether a receipt describes a finished consultation or a live one. */
 export type ConsultPhase = "running" | "complete";
@@ -192,6 +196,10 @@ export interface ConsultRequest {
 	bridge?: BridgeConnection;
 	/** A completed activity line, already prefixed with the consultant name. */
 	onProgress?: (line: string) => void;
+	/** A raw stdout line arrived, parsed or not: the run is still working. */
+	onActivity?: () => void;
+	/** This run ended, whatever its outcome; its process stopped here. */
+	onEnded?: () => void;
 	/** A chunk of streamed answer text. */
 	onPartial?: (text: string) => void;
 	/** A complete prose message (e.g. a Codex agent message): `summary` is the

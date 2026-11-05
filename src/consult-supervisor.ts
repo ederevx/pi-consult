@@ -8,9 +8,10 @@
  */
 
 import type { ConsultDelivery } from "./consult-delivery.ts";
-import { ConsultInvocation, type InvocationSpec } from "./consult-invocation.ts";
+import { ConsultInvocation, type InvocationDeps, type InvocationSpec } from "./consult-invocation.ts";
 import type { ConsultRecordStore } from "./consult-record-store.ts";
 import type { ConsultRunner } from "./consult-runner.ts";
+import type { ConsultStall } from "./consult-stall-watch.ts";
 import type { ConsultDetails, ConsultReceipt, ConsultantResult } from "./contracts.ts";
 
 export class ConsultSupervisor {
@@ -28,21 +29,28 @@ export class ConsultSupervisor {
 		/** Called once per invocation that stopped running, so its bridge
 		 *  capability can be revoked by the owner that minted it. */
 		settled?: (consultId: string) => void,
+		/** What every invocation needs from the process it runs in. */
+		deps: Omit<InvocationDeps, "onStall"> = {},
 	) {
 		this.runner = runner;
 		this.records = records;
 		this.delivery = delivery;
 		this.settled = settled;
+		this.deps = deps;
 	}
 
 	private readonly settled?: (consultId: string) => void;
+	private readonly deps: Omit<InvocationDeps, "onStall">;
 	private readonly notified = new Set<string>();
 
 	/** Register, record the manifest, then start one invocation. A manifest
 	 *  that cannot be written never blocks the consult: without one, nothing
 	 *  can later mark the run abandoned. */
 	async start(spec: InvocationSpec): Promise<ConsultInvocation> {
-		const invocation = new ConsultInvocation(spec, this.runner);
+		const invocation = new ConsultInvocation(spec, this.runner, {
+			...this.deps,
+			onStall: (stalled, stall) => this.stalled(stalled, stall),
+		});
 		this.invocations.set(spec.consultId, invocation);
 		await this.records.saveRun(invocation).catch(() => undefined);
 		invocation.start();
@@ -131,6 +139,15 @@ export class ConsultSupervisor {
 			this.receipts.delete(invocation.consultId);
 			this.finishing.delete(invocation.consultId);
 		}
+	}
+
+	/** A consultant went quiet: free any blocking call so pi can act, then let
+	 *  delivery wake the session that started the consult. A notice of the
+	 *  first level is the card's, so it wakes nothing. */
+	private stalled(invocation: ConsultInvocation, stall: ConsultStall): void {
+		if (stall.level < 2) return;
+		for (const live of this.list()) live.requestAttention("stall");
+		this.delivery.stalled(invocation, stall);
 	}
 
 	/** Report settlement exactly once per invocation, whatever the record

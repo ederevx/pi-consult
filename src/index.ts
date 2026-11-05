@@ -132,6 +132,9 @@ export class ConsultExtension {
 			for (const participant of ["claude", "codex", "fallback"] as const) {
 				control.revoke(`${consultId}:${participant}`);
 			}
+		}, {
+			waitingOnPi: (invocationId) =>
+				broker.list().some((request) => request.invocationId === invocationId),
 		});
 		const dispatcher = new ConsultDriveDispatcher({ pi, supervisor });
 		const broker = new ConsultRequestBroker(
