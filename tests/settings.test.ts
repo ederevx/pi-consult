@@ -205,6 +205,35 @@ test("settings: warns when a retired pi-consult.json exists and the namespace do
 	assertEq(sessionStart(quiet).length, 0, "no notice without a legacy source");
 });
 
+test("settings: the removed drive keys are no longer settable", () => {
+	const { store } = make("settings-drive-set");
+	for (const key of [
+		"drive.enabled",
+		"drive.deadlineMs",
+		"drive.tools.allow",
+		"drive.maxRequestsPerInvocation",
+	]) {
+		assertIncludes(String(store.apply(key, "1")), "unknown setting", `${key} is gone`);
+	}
+	assertEq(
+		store.specs().some((spec) => spec.key.startsWith("drive.")),
+		false,
+		"no drive row is left",
+	);
+});
+
+test("settings: a legacy drive block draws one notice and is never rewritten", () => {
+	const { store, file } = make("settings-drive-notice");
+	writeFileSync(file, JSON.stringify({ piConsult: { drive: { enabled: false } } }));
+	const notifications = sessionStart(store);
+	assertEq(notifications.length, 1, "one notice per session");
+	assertEq(notifications[0].level, "warning");
+	assertIncludes(notifications[0].text, "removed drive support");
+	assertIncludes(notifications[0].text, "may be deleted");
+	const raw = JSON.parse(readFileSync(file, "utf8"));
+	assertEq(raw.piConsult.drive.enabled, false, "the retired settings stay as they were");
+});
+
 /** Run the registered command handler and capture what it reports. */
 async function runCommand(
 	store: ConsultSettings,

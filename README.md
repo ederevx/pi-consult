@@ -56,6 +56,12 @@ remove the old file and unset the variable. pi-consult warns once per session
 when the retired file exists and `piConsult` is absent, and separately when
 `PI_CONSULT_CONFIG` is still set.
 
+**Migrating from v0.22 and earlier:** version 0.23.0 removes the drive/MCP
+bridge and the `consult_execute` and `consult_reply` tools. An existing `drive`
+configuration is ignored and may be deleted; pi-consult says so once per
+session. Consultation, continuation, background results, progress, and
+termination are unchanged.
+
 - `confirmFirstConsult` is off by default, so briefs are granted without a
   prompt. When on, it shows a UI confirmation before the first brief of a
   session; with approval on and no interactive UI, `consult` refuses instead

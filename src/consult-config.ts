@@ -5,8 +5,8 @@
  * values live in the `piConsult` namespace of pi's own `settings.json`, read
  * through `ConsultSettingsStore`; this class touches no filesystem itself.
  * Missing or malformed configuration falls back to the defaults. Legacy keys
- * (gate.allowBashBeforeConsult, gate.consultEffort) are ignored: their
- * mechanisms no longer exist.
+ * (gate.allowBashBeforeConsult, gate.consultEffort, and the whole retired
+ * drive block) are ignored: their mechanisms no longer exist.
  */
 
 import { homedir } from "node:os";
@@ -61,29 +61,11 @@ export interface FallbackSettings {
 	reasoning?: ReasoningLevel;
 }
 
-/** Whether, and how long, a consultant may block on the pi agent. */
-export interface DriveSettings {
-	enabled: boolean;
-	deadlineMs: number;
-	/** Which tools pi may be asked to run for a consultant. */
-	tools: DriveToolSettings;
-	/** Request admission bound per invocation, so replay history stays bounded. */
-	maxRequestsPerInvocation: number;
-}
-
-/** The consultant-requested tool policy's configurable values. */
-export interface DriveToolSettings {
-	/** Tool names pi may be asked to run; pi still decides every run. An
-	 *  explicitly empty list allows none. */
-	allow: string[];
-}
-
 export class ConsultConfig {
 	static readonly DEFAULT_TIMEOUT_MS = 1_200_000;
 	static readonly DEFAULT_TOTAL_BYTES = 24_000;
 	static readonly DEFAULT_ANSWER_BYTES = 12_000;
 	static readonly DEFAULT_MAX_LINES = 800;
-	static readonly DEFAULT_DRIVE_DEADLINE_MS = 600_000;
 	static readonly DEFAULT_SILENCE_NOTICE_MS = 300_000;
 	private static readonly DEFAULT_ARTIFACT_DIR_NAME = "pi-consult";
 	private static readonly DEFAULT_GATE_ALLOW = [
@@ -93,8 +75,6 @@ export class ConsultConfig {
 		"pre_teams",
 		"transcript_read",
 	];
-	private static readonly DEFAULT_DRIVE_TOOLS_ALLOW = ["read", "grep", "find", "ls", "bash"];
-	static readonly DEFAULT_DRIVE_MAX_REQUESTS = 256;
 
 	readonly enabled: boolean;
 	readonly confirmFirstConsult: boolean;
@@ -104,7 +84,6 @@ export class ConsultConfig {
 	readonly output: OutputSettings;
 	readonly gate: GateSettings;
 	readonly fallback: FallbackSettings;
-	readonly drive: DriveSettings;
 	readonly claude: ConsultantSettings;
 	readonly codex: ConsultantSettings;
 
@@ -132,27 +111,6 @@ export class ConsultConfig {
 			allow: allow.length > 0 ? allow : [...ConsultConfig.DEFAULT_GATE_ALLOW],
 			block,
 			trustReadOnlyHint: ConsultConfig.bool(gate.trustReadOnlyHint, false),
-		};
-
-		const drive = ConsultConfig.record(raw.drive);
-		const toolSettings = ConsultConfig.record(drive.tools);
-		this.drive = {
-			enabled: ConsultConfig.bool(drive.enabled, true),
-			deadlineMs: ConsultConfig.positiveNumber(
-				drive.deadlineMs,
-				ConsultConfig.DEFAULT_DRIVE_DEADLINE_MS,
-			),
-			// An explicit empty array allows no tools; only an absent or invalid
-			// value falls back to the default list.
-			tools: {
-				allow: Array.isArray(toolSettings.allow)
-					? ConsultConfig.stringList(toolSettings.allow)
-					: [...ConsultConfig.DEFAULT_DRIVE_TOOLS_ALLOW],
-			},
-			maxRequestsPerInvocation: ConsultConfig.positiveNumber(
-				drive.maxRequestsPerInvocation,
-				ConsultConfig.DEFAULT_DRIVE_MAX_REQUESTS,
-			),
 		};
 
 		const fallback = ConsultConfig.record(raw.fallback);

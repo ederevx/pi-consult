@@ -73,13 +73,9 @@ export class ConsultSettings {
 		{ key: "gate.allow", label: "Gate allow", path: ["gate", "allow"], kind: "json", description: "Tool names always allowed before the acknowledgement (JSON array)" },
 		{ key: "gate.block", label: "Gate block", path: ["gate", "block"], kind: "json", description: "Tool names always blocked before the acknowledgement (JSON array)" },
 		{ key: "gate.trustReadOnlyHint", label: "Trust read-only hints", path: ["gate", "trustReadOnlyHint"], kind: "boolean", values: ["off", "on"], description: "Trust a tool's self-declared readOnlyHint" },
-		{ key: "drive.enabled", label: "Consultant bridge", path: ["drive", "enabled"], kind: "boolean", values: ["off", "on"], description: "Let a consultant ask pi a question and block on the answer" },
-		{ key: "drive.deadlineMs", label: "Bridge deadline (ms)", path: ["drive", "deadlineMs"], kind: "number", description: "How long a consultant waits for pi before the request expires" },
-		{ key: "drive.tools.allow", label: "Bridge tools", path: ["drive", "tools", "allow"], kind: "json", description: "Tool names a consultant may ask pi to run (JSON array; pi still decides every run)" },
 		{ key: "fallback.enabled", label: "Native fallback", path: ["fallback", "enabled"], kind: "boolean", values: ["off", "on"], description: "Let an available pi model serve a consultation whose consultant failed" },
 		{ key: "fallback.model", label: "Fallback model", path: ["fallback", "model"], kind: "model", description: "The pi model that serves a failed consultation; unset follows pi's default" },
 		{ key: "fallback.reasoning", label: "Fallback reasoning", path: ["fallback", "reasoning"], kind: "enum", valuesFromModel: true, description: "Reasoning effort for the fallback model; offered levels come from the model, unset follows its default" },
-		{ key: "drive.maxRequestsPerInvocation", label: "Bridge request limit", path: ["drive", "maxRequestsPerInvocation"], kind: "number", description: "Bridge requests one invocation may make before further ones are busy" },
 	];
 
 	private readonly store: ConsultSettingsStore;
@@ -217,19 +213,33 @@ export class ConsultSettings {
 	/** Warn once per session when a retired configuration source is present. */
 	private warnLegacy(ctx: ExtensionContext): void {
 		if (this.warned) return;
+		const drive = this.store.namespace().drive !== undefined;
 		const legacy = this.store.legacySources();
-		if (!legacy.env && !(legacy.file && !this.store.hasNamespace())) return;
+		const retiredFile = legacy.file && !this.store.hasNamespace();
+		if (!drive && !legacy.env && !retiredFile) return;
 		this.warned = true;
 		if (!ctx.hasUI) return;
-		const notice =
-			`pi-consult v0.7: legacy configuration is no longer loaded. Copy its settings ` +
-			`into the ${ConsultSettingsStore.NAMESPACE} object in ${this.store.path()}, then ` +
-			"/reload." +
-			(legacy.env ? " PI_CONSULT_CONFIG is no longer supported." : "");
-		try {
-			ctx.ui.notify(notice, "warning");
-		} catch {
-			// No notification surface; nothing else to do.
+		const notices: string[] = [];
+		if (drive) {
+			notices.push(
+				"pi-consult 0.23.0 removed drive support; the drive configuration is " +
+					"ignored and may be deleted.",
+			);
+		}
+		if (legacy.env || retiredFile) {
+			notices.push(
+				`pi-consult v0.7: legacy configuration is no longer loaded. Copy its settings ` +
+					`into the ${ConsultSettingsStore.NAMESPACE} object in ${this.store.path()}, then ` +
+					"/reload." +
+					(legacy.env ? " PI_CONSULT_CONFIG is no longer supported." : ""),
+			);
+		}
+		for (const notice of notices) {
+			try {
+				ctx.ui.notify(notice, "warning");
+			} catch {
+				// No notification surface; nothing else to do.
+			}
 		}
 	}
 
