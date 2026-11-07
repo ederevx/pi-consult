@@ -42,17 +42,15 @@ function service(artifacts: ArtifactStore, fallback: { enabled: boolean; model?:
 	const models = new FallbackModels();
 	const consultant = new NativeConsultant({
 		registry: new OneShotStream() as unknown as NativeStream,
-		broker: { submit: async () => ({ status: "answered", answer: "pi" }) } as never,
 		artifacts,
 		systemPrompt: () => "consultant preamble",
 	});
 	return new NativeFallbackService({
-		settings: () => ({ maxRounds: 16, ...fallback }),
+		settings: () => ({ ...fallback }),
 		models: () => models,
 		context: () => context,
 		native: () => consultant,
 		classifier: new FailureClassifier(),
-		bridge: () => true,
 	});
 }
 
@@ -157,10 +155,10 @@ test("record store: malformed fallback transcripts never resume", async () => {
 		["missing-content", [{ role: "assistant" }]],
 		["malformed-tool-result", [{ role: "toolResult", toolCallId: 1 }]],
 		["null-content-block", [{ role: "assistant", content: [null] }]],
-		["non-text-content", [{ role: "toolResult", toolCallId: "x", toolName: "drive_pi", content: [{ type: "text", text: 42 }] }]],
+		["non-text-content", [{ role: "toolResult", toolCallId: "x", toolName: "read", content: [{ type: "text", text: 42 }] }]],
 		["unsupported-system", [{ role: "system" }]],
 		["bare-thinking", [{ role: "assistant", content: [{ type: "thinking" }] }]],
-		["array-tool-arguments", [{ role: "assistant", content: [{ type: "toolCall", id: "1", name: "drive_pi", arguments: [] }] }]],
+		["array-tool-arguments", [{ role: "assistant", content: [{ type: "toolCall", id: "1", name: "read", arguments: [] }] }]],
 		["thinking-in-user", [{ role: "user", content: [{ type: "thinking", thinking: "x" }] }]],
 		["nonarray", { role: "user", content: [] }],
 	];
@@ -173,7 +171,7 @@ test("record store: malformed fallback transcripts never resume", async () => {
 		"a missing transcript never resumes");
 	await artifacts.write(join(paths.dir, "good.json"), JSON.stringify([
 		{ role: "user", content: [{ type: "text", text: "hi" }] },
-		{ role: "toolResult", toolCallId: "c1", toolName: "drive_pi", content: [], isError: false },
+		{ role: "toolResult", toolCallId: "c1", toolName: "read", content: [], isError: false },
 	]));
 	assert((await store.conversation(join(paths.dir, "good.json"))) !== undefined,
 		"a well-formed transcript resumes");
@@ -188,27 +186,24 @@ test("native consultant: a deadline expiry reports timeout, a cancellation abort
 	const hanging = { streamSimple: () => ({ result: () => new Promise(() => undefined) }) };
 	const consultant = new NativeConsultant({
 		registry: hanging as never,
-		broker: { submit: async () => ({ status: "answered", answer: "x" }) } as never,
 		artifacts,
 		systemPrompt: () => "p",
 	});
 	const timed = await consultant.consult(
 		{ provider: "one", id: "fast", name: "Fast" },
-		"c-aga111222333",
 		"b",
 		paths,
 		new AbortController().signal,
-		{ timeoutMs: 50, maxRounds: 2, bridge: false },
+		{ timeoutMs: 50 },
 	);
 	assertEq(timed.status, "timeout", "a deadline expiry alone is a timeout");
 	const controller = new AbortController();
 	const cancelled = consultant.consult(
 		{ provider: "one", id: "fast", name: "Fast" },
-		"c-aga111222333",
 		"b",
 		paths,
 		controller.signal,
-		{ timeoutMs: 5000, maxRounds: 2, bridge: false },
+		{ timeoutMs: 5000 },
 	);
 	controller.abort();
 	assertEq((await cancelled).status, "aborted", "the caller's cancellation is aborted");
@@ -234,17 +229,15 @@ test("native consultant: a failed run reports no responder it never had", async 
 	};
 	const consultant = new NativeConsultant({
 		registry: failing as never,
-		broker: { submit: async () => ({ status: "answered", answer: "x" }) } as never,
 		artifacts,
 		systemPrompt: () => "p",
 	});
 	const outcome = await consultant.consult(
 		{ provider: "one", id: "fast", name: "Fast" },
-		"c-aha111222333",
 		"b",
 		paths,
 		new AbortController().signal,
-		{ timeoutMs: 5000, maxRounds: 2, bridge: false },
+		{ timeoutMs: 5000 },
 	);
 	assertEq(outcome.status, "error");
 	assertEq(outcome.error, "quota exhausted");
@@ -265,11 +258,10 @@ test("native resume: a refused resume names no responder from the earlier run", 
 		scopedModels: [],
 	};
 	const service = new NativeFallbackService({
-		settings: () => ({ enabled: false, maxRounds: 4 }),
+		settings: () => ({ enabled: false }),
 		models: () => models,
 		native: () => undefined,
 		classifier: new FailureClassifier(),
-		bridge: () => true,
 	});
 	const refused = await service.takeover({
 		consultId: "c-aja111222333",
@@ -308,50 +300,4 @@ test("fallback models: a bound environment's defaults drive the resolution", asy
 	};
 	assertEq(models.resolve(environment as never)?.value, "one/fast",
 		"the snapshot's qualified default wins, even ambiguous unqualified");
-});
-
-test("native consultant: cancellation during submission ends the wait at once", async () => {
-	const { NativeConsultant } = await import("../src/native-consultant.ts");
-	const { ArtifactStore } = await import("../src/artifact-store.ts");
-	const artifacts = new ArtifactStore(join(scratchDir(), `sub-${Date.now()}`));
-	const paths = await artifacts.prepare("s", "c-aka111222333");
-	const controller = new AbortController();
-	let cancelled = "";
-	const consultant = new NativeConsultant({
-		registry: {
-			streamSimple: () => ({
-				result: async () => ({
-					role: "assistant",
-					content: [{ type: "toolCall", id: "c1", name: "drive_pi", arguments: { prompt: "p" } }],
-					usage: { input: 1, output: 1, cost: { total: 0 } },
-					stopReason: "stop",
-					provider: "one",
-					model: "fast",
-				}),
-			}),
-		} as never,
-		broker: {
-			submit: async () => {
-				// The caller cancels while the submission itself runs; the
-				// abort event fires before the race listener is registered.
-				controller.abort();
-				return new Promise(() => undefined);
-			},
-			cancel: async () => {
-				cancelled = "yes";
-			},
-		} as never,
-		artifacts,
-		systemPrompt: () => "p",
-	});
-	const outcome = await consultant.consult(
-		{ provider: "one", id: "fast", name: "Fast" },
-		"c-aka111222333",
-		"b",
-		paths,
-		controller.signal,
-		{ timeoutMs: 200, maxRounds: 2, bridge: true },
-	);
-	assertEq(outcome.status, "aborted", "the wait ends at the abort, not the bound");
-	assertEq(cancelled, "yes", "the broker request is cancelled");
 });

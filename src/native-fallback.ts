@@ -42,8 +42,6 @@ export interface FallbackServiceDeps {
 	/** Builds the consultant bound to one invocation's own environment. */
 	native: (environment: object) => NativeConsultant | undefined;
 	classifier: FailureClassifier;
-	/** Whether the bridge tools may be offered to the native model. */
-	bridge: () => boolean;
 }
 
 export class NativeFallbackService {
@@ -103,15 +101,12 @@ export class NativeFallbackService {
 
 		const outcome = await native.consult(
 			choice.model,
-			context.consultId,
 			context.brief,
 			context.paths,
 			context.signal,
 			{
 				timeoutMs: context.timeoutMs,
-				maxRounds: settings.maxRounds,
 				reasoning,
-				bridge: this.deps.bridge(),
 			},
 			context.kind === "resume" ? (context.messages as never) : undefined,
 		);

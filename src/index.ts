@@ -89,14 +89,12 @@ export class ConsultExtension {
 				return registry
 					? new NativeConsultant({
 							registry: registry as never,
-							broker,
 							artifacts,
-							systemPrompt: () => new BriefComposer().systemPrompt(),
+							systemPrompt: () => new BriefComposer().contextPrompt(),
 						})
 					: undefined;
 			},
 			classifier: failureClassifier,
-			bridge: () => ConsultConfig.load(store).drive.enabled,
 		});
 		new ConsultSettings(store, {
 			choices: () =>

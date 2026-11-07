@@ -2,40 +2,32 @@
  * pi-consult — the native fallback conversation.
  *
  * Owns the private model conversation that serves a consultation when its
- * consultant CLIs failed eligibility: one isolated loop through the model
- * registry's streaming API — never pi's own transcript, never setModel —
- * with the bridge's two tools routed through the request broker so every
- * question and tool run still goes through pi. The whole loop is bounded by
- * the request's timeout and the invocation's abort signal, its usage is
- * accumulated across rounds, and its transcript is persisted for a
+ * consultant CLIs failed eligibility: one isolated request through the model
+ * registry's streaming API — never pi's own transcript, never setModel — with
+ * no tools at all, so the answer is drawn from the supplied context. The
+ * request is bounded by the request's timeout and the invocation's abort
+ * signal, its usage is reported, and its transcript is persisted for a
  * continuation to resume.
  */
 
-import { randomUUID } from "node:crypto";
-
-import type { AssistantMessage, Message, Tool } from "@earendil-works/pi-ai";
+import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
 import type { ArtifactStore, ConsultPaths } from "./artifact-store.ts";
-import type { FallbackMetadata, ReasoningLevel, RunParticipant } from "./contracts.ts";
+import type { FallbackMetadata, ReasoningLevel } from "./contracts.ts";
 import { REASONING_LEVELS } from "./contracts.ts";
-import type { ConsultRequestBroker } from "./consult-request-broker.ts";
 
 /** The registry seam the conversation streams through. */
 export interface NativeStream {
 	streamSimple(
 		model: object,
-		context: { systemPrompt?: string; messages: Message[]; tools?: Tool[] },
+		context: { systemPrompt?: string; messages: Message[] },
 		options?: { signal?: AbortSignal; reasoning?: ReasoningLevel },
 	): { result(): Promise<AssistantMessage> };
 }
 
 /** One native run's configuration. */
 export interface NativeConfig {
-	/** The whole-loop bound, from the owning request timeout. */
+	/** The whole-run bound, from the owning request timeout. */
 	timeoutMs: number;
-	/** The tool-round bound; configured, sixteen by default. */
-	maxRounds: number;
-	/** Whether the bridge tools are offered at all. */
-	bridge: boolean;
 	/** The reasoning effort the stream runs at; absent follows pi-ai's default. */
 	reasoning?: ReasoningLevel;
 }
@@ -58,37 +50,18 @@ export interface NativeOutcome {
 
 export interface NativeConsultantDeps {
 	registry: NativeStream;
-	broker: ConsultRequestBroker;
 	artifacts: ArtifactStore;
-	/** The consultant preamble the CLI runs share. */
+	/** The context-only preamble the fallback conversation runs under. */
 	systemPrompt: () => string;
-}
-
-/** The bridge tools a fallback conversation may call. */
-interface DriveArguments {
-	prompt?: unknown;
-	name?: unknown;
-	arguments?: unknown;
-	client_request_id?: unknown;
-}
-
-/** One model tool call as pi-ai shapes it. */
-interface ModelToolCall {
-	type: "toolCall";
-	id: string;
-	name: string;
-	arguments: unknown;
 }
 
 export class NativeConsultant {
 	private readonly registry: NativeStream;
-	private readonly broker: ConsultRequestBroker;
 	private readonly artifacts: ArtifactStore;
 	private readonly systemPrompt: () => string;
 
 	constructor(deps: NativeConsultantDeps) {
 		this.registry = deps.registry;
-		this.broker = deps.broker;
 		this.artifacts = deps.artifacts;
 		this.systemPrompt = deps.systemPrompt;
 	}
@@ -100,7 +73,6 @@ export class NativeConsultant {
 	 */
 	async consult(
 		model: object,
-		consultId: string,
 		brief: string,
 		paths: ConsultPaths,
 		signal: AbortSignal,
@@ -108,106 +80,74 @@ export class NativeConsultant {
 		conversation?: Message[],
 	): Promise<NativeOutcome> {
 		const startedAt = Date.now();
-		const invocationId = `${consultId}:fallback`;
 		const messages: Message[] = conversation
 			? [...conversation, { role: "user", content: [{ type: "text", text: brief }] }]
 			: [{ role: "user", content: [{ type: "text", text: brief }] }];
-		const tools: Tool[] = config.bridge ? [this.tool("drive_pi"), this.tool("use_tool")] : [];
 		const usage = { inputTokens: 0, outputTokens: 0, costUsd: 0 };
 		const sawUsage = { any: false };
 		const serving = new Map<string, { provider: string; model: string }>();
 		let final: { provider: string; model: string } | undefined;
 		let servedReasoning: ReasoningLevel | undefined;
-		// The whole loop is bounded by the request timeout composed with the
+		// The run is bounded by the request timeout composed with the
 		// invocation signal; whichever fires first ends the conversation.
 		const timeout = AbortSignal.timeout(config.timeoutMs);
 		const deadline = AbortSignal.any([signal, timeout]);
 		const expired = (): boolean => timeout.aborted && !signal.aborted;
 		let status: NativeOutcome["status"] = "ok";
 		let error: string | undefined;
+		let answer: AssistantMessage | undefined;
 		try {
-			for (let round = 0; round < config.maxRounds; round += 1) {
-				if (deadline.aborted) throw new Error("aborted");
-				// The deadline bounds the wait; it cannot stop a provider that
-				// ignores cancellation, but the loop never outlives its bound.
-				const onDeadline = (): void => rejectDeadline(new Error("aborted by the caller"));
-				let rejectDeadline!: (error: Error) => void;
-				const expired_ = new Promise<never>((_, reject) => {
-					rejectDeadline = reject;
-					deadline.addEventListener("abort", onDeadline, { once: true });
-				});
-				if (deadline.aborted) onDeadline();
-				try {
-					var answer = await Promise.race([
-						this.registry
-							.streamSimple(model, {
-								systemPrompt: this.systemPrompt(),
-								messages,
-								tools,
-							}, config.reasoning
-								? { signal: deadline, reasoning: config.reasoning }
-								: { signal: deadline })
-							.result(),
-						expired_,
-					]);
-				} finally {
-					deadline.removeEventListener("abort", onDeadline);
-				}
-				const identity = `${answer.provider}/${answer.model}`;
-				if (!serving.has(identity)) {
-					serving.set(identity, { provider: answer.provider, model: answer.model });
-				}
-				final = { provider: answer.provider, model: answer.model };
-				// The provider's own report of the level it ran at, when it gives
-				// one; validated against the known set, never trusted blind.
-				const reported = (answer as { thinkingLevel?: unknown; providerThinkingLevel?: unknown })
-					.thinkingLevel ?? (answer as { providerThinkingLevel?: unknown }).providerThinkingLevel;
-				if (
-					typeof reported === "string"
-					&& (REASONING_LEVELS as readonly string[]).includes(reported)
-				) {
-					servedReasoning = reported as ReasoningLevel;
-				}
-				this.accumulate(usage, sawUsage, answer.usage);
-				const calls = answer.content.filter(
-					(part): part is ModelToolCall => part.type === "toolCall",
-				);
-				messages.push(answer as Message);
-				if (answer.stopReason === "aborted") {
-					status = signal.aborted ? "aborted" : expired() ? "timeout" : "error";
-					error = "the fallback model stopped mid-answer";
-					break;
-				}
-				if (answer.stopReason === "error") {
-					status = "error";
-					error = answer.errorMessage ?? "the fallback model reported an error";
-					break;
-				}
-				if (answer.stopReason === "length") {
-					status = "error";
-					error = "the fallback answer exceeded the model's output limit";
-					break;
-				}
-				if (calls.length === 0) {
-					return this.finish({
-						answer: NativeConsultant.text(answer),
-						status: "ok",
-						usage: sawUsage.any ? usage : undefined,
-						startedAt,
-						serving,
-						final,
-						reasoning: servedReasoning,
-						messages,
-						paths,
-					});
-				}
-				for (const call of calls) {
-					messages.push(await this.drive(invocationId, consultId, call, deadline));
-				}
+			if (deadline.aborted) throw new Error("aborted");
+			// The deadline bounds the wait; it cannot stop a provider that
+			// ignores cancellation, but the run never outlives its bound.
+			const onDeadline = (): void => rejectDeadline(new Error("aborted by the caller"));
+			let rejectDeadline!: (error: Error) => void;
+			const expired_ = new Promise<never>((_, reject) => {
+				rejectDeadline = reject;
+				deadline.addEventListener("abort", onDeadline, { once: true });
+			});
+			if (deadline.aborted) onDeadline();
+			try {
+				answer = await Promise.race([
+					this.registry
+						.streamSimple(model, {
+							systemPrompt: this.systemPrompt(),
+							messages,
+						}, config.reasoning
+							? { signal: deadline, reasoning: config.reasoning }
+							: { signal: deadline })
+						.result(),
+					expired_,
+				]);
+			} finally {
+				deadline.removeEventListener("abort", onDeadline);
 			}
-			if (status === "ok") {
-				error = "the fallback conversation exceeded its tool-round bound";
+			const identity = `${answer.provider}/${answer.model}`;
+			if (!serving.has(identity)) {
+				serving.set(identity, { provider: answer.provider, model: answer.model });
+			}
+			final = { provider: answer.provider, model: answer.model };
+			// The provider's own report of the level it ran at, when it gives
+			// one; validated against the known set, never trusted blind.
+			const reported = (answer as { thinkingLevel?: unknown; providerThinkingLevel?: unknown })
+				.thinkingLevel ?? (answer as { providerThinkingLevel?: unknown }).providerThinkingLevel;
+			if (
+				typeof reported === "string"
+				&& (REASONING_LEVELS as readonly string[]).includes(reported)
+			) {
+				servedReasoning = reported as ReasoningLevel;
+			}
+			this.accumulate(usage, sawUsage, answer.usage);
+			messages.push(answer as Message);
+			if (answer.stopReason === "aborted") {
+				status = signal.aborted ? "aborted" : expired() ? "timeout" : "error";
+				error = "the fallback model stopped mid-answer";
+			} else if (answer.stopReason === "error") {
 				status = "error";
+				error = answer.errorMessage ?? "the fallback model reported an error";
+			} else if (answer.stopReason === "length") {
+				status = "error";
+				error = "the fallback answer exceeded the model's output limit";
 			}
 		} catch (failure) {
 			// A cancellation is aborted; a deadline expiry on its own is a
@@ -218,6 +158,19 @@ export class NativeConsultant {
 				: status === "timeout"
 					? `the fallback exceeded its ${config.timeoutMs} ms bound`
 					: failure instanceof Error ? failure.message : String(failure);
+		}
+		if (status === "ok" && answer) {
+			return this.finish({
+				answer: NativeConsultant.text(answer),
+				status: "ok",
+				usage: sawUsage.any ? usage : undefined,
+				startedAt,
+				serving,
+				final,
+				reasoning: servedReasoning,
+				messages,
+				paths,
+			});
 		}
 		return this.finish({
 			answer: status === "aborted" ? "" : NativeConsultant.tail(messages),
@@ -231,107 +184,6 @@ export class NativeConsultant {
 			messages,
 			paths,
 		});
-	}
-
-	/** One bridge tool's schema; its calls route through the broker. */
-	private tool(name: "drive_pi" | "use_tool"): Tool {
-		const properties = name === "drive_pi"
-			? { prompt: { type: "string", description: "The question for the pi agent." } }
-			: {
-					name: { type: "string", description: "The pi tool to run." },
-					arguments: { type: "object", description: "The tool's arguments." },
-				};
-		return {
-			name,
-			description: name === "drive_pi"
-				? "Ask the pi agent a question and wait for its answer."
-				: "Ask the pi agent to run one of its tools and return the output.",
-			parameters: {
-				type: "object",
-				properties: {
-					...properties,
-					client_request_id: { type: "string", description: "Optional idempotency key." },
-				},
-				required: name === "drive_pi" ? ["prompt"] : ["name", "arguments"],
-			} as never,
-		};
-	}
-
-	/** Turn one model tool call into a broker request and its tool result. */
-	private async drive(
-		invocationId: string,
-		consultId: string,
-		call: ModelToolCall,
-		signal: AbortSignal,
-	): Promise<Message> {
-		const result = (text: string, isError = true): Message =>
-			({
-				role: "toolResult",
-				toolCallId: call.id,
-				toolName: call.name,
-				content: [{ type: "text", text }],
-				isError,
-			}) as Message;
-		if (call.name !== "drive_pi" && call.name !== "use_tool") {
-			return result(`unknown tool ${call.name}; only drive_pi and use_tool exist`);
-		}
-		if (typeof call.arguments !== "object" || call.arguments === null || Array.isArray(call.arguments)) {
-			return result("arguments must be an object");
-		}
-		const args = call.arguments as DriveArguments;
-		const isQuestion = call.name === "drive_pi";
-		if (isQuestion && typeof args.prompt !== "string") {
-			return result("drive_pi needs a prompt string");
-		}
-		if (
-			!isQuestion &&
-			(typeof args.name !== "string" ||
-				typeof args.arguments !== "object" ||
-				args.arguments === null ||
-				Array.isArray(args.arguments))
-		) {
-			return result("use_tool needs a tool name and an arguments object");
-		}
-		const clientRequestId = typeof args.client_request_id === "string" && args.client_request_id
-			? args.client_request_id
-			: randomUUID();
-		const payload = isQuestion
-			? args.prompt!
-			: {
-					kind: "tool",
-					name: args.name!,
-					arguments: args.arguments as Record<string, unknown>,
-				};
-		// An abort cancels the broker request instead of waiting out its
-		// deadline; the model sees the loop end either way.
-		if (signal.aborted) throw new Error("aborted by the caller");
-		const waiter = this.broker.submit(
-			invocationId,
-			consultId,
-			"fallback" as RunParticipant,
-			clientRequestId,
-			payload,
-		);
-		let rejectAbort!: (error: Error) => void;
-		const onCancelled = (): void => rejectAbort(new Error("aborted by the caller"));
-		const cancelled = new Promise<never>((_, reject) => {
-			rejectAbort = reject;
-			signal.addEventListener("abort", onCancelled, { once: true });
-		});
-		// Cancellation during submission emitted before this listener was
-		// registered; the state check catches it.
-		if (signal.aborted) onCancelled();
-		let outcome;
-		try {
-			outcome = await Promise.race([waiter, cancelled]);
-		} catch (failure) {
-			this.broker.cancel(invocationId, clientRequestId);
-			throw failure;
-		} finally {
-			signal.removeEventListener("abort", onCancelled);
-		}
-		const text = outcome.answer ?? `[${outcome.status}]`;
-		return result(text, outcome.status !== "answered" || outcome.isError === true);
 	}
 
 	private accumulate(

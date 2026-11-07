@@ -11,7 +11,7 @@ import { readFileSync } from "node:fs";
 
 /** A scripted registry: each round's assistant message in order. */
 class ScriptedStream {
-	readonly calls: Array<{ messages: unknown[]; tools: string[]; reasoning?: string }> = [];
+	readonly calls: Array<{ messages: unknown[]; hasTools: boolean; tools: string[]; reasoning?: string }> = [];
 	constructor(private readonly rounds: object[]) {}
 
 	streamSimple(
@@ -21,6 +21,7 @@ class ScriptedStream {
 	): { result: () => Promise<object> } {
 		this.calls.push({
 			messages: [...context.messages],
+			hasTools: "tools" in context,
 			tools: (context.tools ?? []).map((tool) => tool.name),
 			reasoning: options?.reasoning,
 		});
@@ -45,23 +46,16 @@ function textPart(text: string): object {
 	return { type: "text", text };
 }
 
-/** A broker whose every request pi answers at once. */
-function broker(): ConsultRequestBroker {
-	return {
-		submit: async () => ({ status: "answered", answer: "pi answered" }),
-	} as never;
-}
-
+/** A native consultant over one scripted stream. */
 function native(stream: ScriptedStream, artifacts: ArtifactStore): NativeConsultant {
 	return new NativeConsultant({
 		registry: stream as unknown as NativeStream,
-		broker: broker(),
 		artifacts,
 		systemPrompt: () => "consultant preamble",
 	});
 }
 
-const CONFIG = { timeoutMs: 5000, maxRounds: 16, bridge: true };
+const CONFIG = { timeoutMs: 5000 };
 
 function failure(name: "claude", status: ConsultantResult["status"], error?: string): ConsultantResult {
 	return {
@@ -82,7 +76,6 @@ test("native consultant: a text-only round answers and persists the transcript",
 	const paths = await artifacts.prepare("s", "c-aaa111222333");
 	const outcome = await native(stream, artifacts).consult(
 		{ provider: "one", id: "fast" },
-		"c-aaa111222333",
 		"the brief",
 		paths,
 		new AbortController().signal,
@@ -94,30 +87,28 @@ test("native consultant: a text-only round answers and persists the transcript",
 	assertEq(outcome.provider, "one", "the serving model is reported");
 	const persisted = JSON.parse(readFileSync(outcome.conversationPath!, "utf8"));
 	assertEq(persisted.length, 2, "the brief and the answer are persisted");
-	assertEq(stream.calls[0].tools.join(","), "drive_pi,use_tool", "the bridge tools are offered");
+	assertEq(stream.calls[0].hasTools, false, "the fallback is sent no tools at all");
 });
 
-test("native consultant: tool rounds route through the broker and keep going", async () => {
+test("native consultant: a tool call in the answer is never executed", async () => {
 	const artifacts = new ArtifactStore(join(scratchDir(), `nat2-${Date.now()}`));
 	const stream = new ScriptedStream([
 		assistant([
-			{ type: "toolCall", id: "call-1", name: "drive_pi", arguments: { prompt: "which file?" } },
+			{ type: "toolCall", id: "call-1", name: "read", arguments: { path: "src/x.ts" } },
+			textPart("from what I was given"),
 		]),
-		assistant([textPart("now I know")]),
 	]);
 	const paths = await artifacts.prepare("s", "c-bbb111222333");
 	const outcome = await native(stream, artifacts).consult(
 		{ provider: "one", id: "fast" },
-		"c-bbb111222333",
 		"the brief",
 		paths,
 		new AbortController().signal,
 		CONFIG,
 	);
 	assertEq(outcome.status, "ok");
-	assertEq(outcome.answer, "now I know");
-	assertEq(outcome.usage?.costUsd, 0.02, "usage accumulates across rounds");
-	assertEq(stream.calls.length, 2, "the loop ran two rounds");
+	assertEq(outcome.answer, "from what I was given");
+	assertEq(stream.calls.length, 1, "there is no tool round to run");
 });
 
 test("native fallback service: takeover follows the decision table", async () => {
@@ -133,12 +124,11 @@ test("native fallback service: takeover follows the decision table", async () =>
 	const consultant = native(stream, artifacts);
 	const make = (fallback: { enabled: boolean; model?: string }) =>
 		new NativeFallbackService({
-			settings: () => ({ maxRounds: 16, ...fallback }),
+			settings: () => ({ ...fallback }),
 			models: () => models,
 			context: () => context,
 			native: () => consultant,
 			classifier: new FailureClassifier(),
-			bridge: () => true,
 		});
 	const paths = await artifacts.prepare("s", "c-ccc111222333");
 	const signal = new AbortController().signal;
@@ -224,7 +214,7 @@ test("native fallback service: reasoning forwards only when the model supports i
 	const streams: ScriptedStream[] = [];
 	const make = (reasoning?: string) =>
 		new NativeFallbackService({
-			settings: () => ({ enabled: true, maxRounds: 16, reasoning: reasoning as never }),
+			settings: () => ({ enabled: true, reasoning: reasoning as never }),
 			models: () => models,
 			context: () => context,
 			native: () => {
@@ -233,7 +223,6 @@ test("native fallback service: reasoning forwards only when the model supports i
 				return native(stream, artifacts);
 			},
 			classifier: new FailureClassifier(),
-			bridge: () => true,
 		});
 	const paths = await artifacts.prepare("s", "c-eee111222333");
 	const base = {
@@ -267,12 +256,11 @@ test("native fallback service: fallback fires only when every consultant exhaust
 		defaults: { defaultProvider: "one", defaultModel: "fast" },
 	};
 	const service = new NativeFallbackService({
-		settings: () => ({ enabled: true, maxRounds: 16 }),
+		settings: () => ({ enabled: true }),
 		models: () => models,
 		context: () => context,
 		native: () => native(new ScriptedStream([assistant([textPart("served")])]), artifacts),
 		classifier: new FailureClassifier(),
-		bridge: () => true,
 	});
 	const paths = await artifacts.prepare("s", "c-fff111222333");
 	const base = {
@@ -315,12 +303,11 @@ test("native fallback service: both-target skips when either CLI succeeds", asyn
 		defaults: { defaultProvider: "one", defaultModel: "fast" },
 	};
 	const service = new NativeFallbackService({
-		settings: () => ({ enabled: true, maxRounds: 16 }),
+		settings: () => ({ enabled: true }),
 		models: () => models,
 		context: () => context,
 		native: () => native(new ScriptedStream([]), artifacts),
 		classifier: new FailureClassifier(),
-		bridge: () => true,
 	});
 	const paths = await artifacts.prepare("s", "c-ddd111222333");
 	const result = await service.takeover({
@@ -349,12 +336,11 @@ test("native fallback service: an aborted signal refuses the takeover", async ()
 		defaults: { defaultProvider: "one", defaultModel: "fast" },
 	};
 	const service = new NativeFallbackService({
-		settings: () => ({ enabled: true, maxRounds: 16 }),
+		settings: () => ({ enabled: true }),
 		models: () => models,
 		context: () => context,
 		native: () => native(new ScriptedStream([]), artifacts),
 		classifier: new FailureClassifier(),
-		bridge: () => true,
 	});
 	const paths = await artifacts.prepare("s", "c-eee111222333");
 	const controller = new AbortController();

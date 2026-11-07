@@ -1,10 +1,11 @@
 /**
  * pi-consult — brief composition.
  *
- * Owns the consultant role preamble and the assembly of the final brief
- * text that is written to a consultant's stdin. Claude receives the role
- * through `--append-system-prompt`; Codex, which has no system-prompt
- * flag, receives it inline at the top of the same text.
+ * Owns the consultant role preambles and the assembly of the final brief
+ * text that is written to a consultant's stdin. Claude receives its role
+ * through `--append-system-prompt`; Codex, which has no system-prompt flag,
+ * receives it inline at the top of the same text. The native fallback runs
+ * under its own context-only role, because it has no tools at all.
  */
 
 export class BriefComposer {
@@ -22,13 +23,24 @@ export class BriefComposer {
 		"answer needs evidence from the machine, request it through the available",
 		"bridge tools instead of guessing or substituting assumptions. If they",
 		"are unavailable or a request is declined, state what remains unverified.",
-		"",
+	].join("\n");
+
+	private static readonly CONTEXT_ONLY = [
+		"You are an external implementation consultant working from the supplied",
+		"context only. You have no file-reading or execution tools and cannot ask pi",
+		"to execute actions. Return your findings and proposed changes as prose, with",
+		"code or patches where useful. State what you could not verify.",
+	].join("\n");
+
+	private static readonly GUIDANCE = [
 		"Answer with concrete, actionable implementation detail: exact code or",
 		"patches, signatures, file paths, and the reasoning that matters for the",
 		"decision. Prefer specifics over prose. State assumptions explicitly and",
 		"flag anything you could not verify. When the brief asks a question, answer",
 		"it directly first, then the supporting detail.",
-		"",
+	].join("\n");
+
+	private static readonly VERIFICATION = [
 		"When the brief asks you to verify finished work, first audit it against",
 		"every convention that governs it: the conventions the brief quotes or",
 		"lists, and any AGENTS.md, CLAUDE.md, or RULES.md in the working",
@@ -45,9 +57,14 @@ export class BriefComposer {
 		"approval unless the convention audit line directly precedes it.",
 	].join("\n");
 
-	/** The consultant role text. */
+	/** The role a consultant CLI runs under. */
 	systemPrompt(): string {
-		return BriefComposer.ROLE;
+		return [BriefComposer.ROLE, BriefComposer.GUIDANCE, BriefComposer.VERIFICATION].join("\n\n");
+	}
+
+	/** The role the native fallback runs under: supplied context only. */
+	contextPrompt(): string {
+		return [BriefComposer.CONTEXT_ONLY, BriefComposer.GUIDANCE, BriefComposer.VERIFICATION].join("\n\n");
 	}
 
 	/** Compose the text sent to a consultant. */
