@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.23.2
+
+### Fixed
+
+- An isolated Codex run names the sandbox backend Windows needs. Isolating the
+  consultant drops the user's own configuration, and codex refuses every command
+  when no backend is named, so a Windows consult could not read a file at all.
+
 ## 0.23.1
 
 ### Removed

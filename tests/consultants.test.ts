@@ -89,6 +89,20 @@ test("claude adapter: a request model overrides the configured model", () => {
 	assertEq(args[index + 1], "requested");
 });
 
+test("codex adapter: an isolated run names the sandbox backend Windows needs", () => {
+	const consultant = new CodexConsultant(
+		{ enabled: true, command: "codex", timeoutMs: 1000, isolation: "clean" },
+		runner,
+	);
+	const named = process.platform === "win32";
+	for (const args of [
+		consultant.buildArgs({ ...request(), consultant: "codex" }),
+		consultant.buildArgs({ ...request("tid-xyz"), consultant: "codex", resumeSessionId: "tid-xyz" }),
+	]) {
+		assertEq(args.includes('windows.sandbox="elevated"'), named, "backend named only where the platform needs one");
+	}
+});
+
 test("codex adapter: isolation inherit keeps the user's own configuration", () => {
 	const consultant = new CodexConsultant(
 		{ enabled: true, command: "codex", timeoutMs: 1000, isolation: "inherit" },
