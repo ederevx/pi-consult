@@ -11,21 +11,12 @@ import { join } from "node:path";
 
 import { AnswerFormatter } from "../src/answer-formatter.ts";
 import { ArtifactStore } from "../src/artifact-store.ts";
-import { BridgeLauncher } from "../src/bridge-launcher.ts";
 import { BriefComposer } from "../src/brief-composer.ts";
 import { ConsultConfig } from "../src/consult-config.ts";
-import { ConsultControlServer } from "../src/consult-control-server.ts";
 import { ConsultDelivery } from "../src/consult-delivery.ts";
-import { ConsultExecuteTool } from "../src/consult-execute-tool.ts";
-import { ConsultToolCompletion } from "../src/consult-tool-completion.ts";
-import { ConsultToolOutput } from "../src/consult-tool-output.ts";
-import { ConsultToolPolicy } from "../src/consult-tool-policy.ts";
-import { ConsultDriveDispatcher } from "../src/consult-drive-dispatcher.ts";
 import { ConsultForeground } from "../src/consult-foreground.ts";
 import { ConsultIndex } from "../src/consult-index.ts";
 import { ConsultRecordStore } from "../src/consult-record-store.ts";
-import { ConsultReplyTool } from "../src/consult-reply-tool.ts";
-import { ConsultRequestBroker } from "../src/consult-request-broker.ts";
 import { ConsultRunner } from "../src/consult-runner.ts";
 import { ConsultSettingsStore } from "../src/consult-settings-store.ts";
 import { ConsultSupervisor } from "../src/consult-supervisor.ts";
@@ -129,15 +120,10 @@ export interface ConsultFixture {
 	records: ConsultRecordStore;
 	supervisor: ConsultSupervisor;
 	processes: ProcessRunner;
-	broker: ConsultRequestBroker;
-	control: ConsultControlServer;
-	bridge: BridgeLauncher;
 	tool: ConsultTool;
 	identity: SessionIdentity;
 	delivery: ConsultDelivery;
 	terminate: ConsultTerminateTool;
-	reply: ConsultReplyTool;
-	execute: ConsultExecuteTool;
 }
 
 /** Build the real owners over the given configuration. */
@@ -145,7 +131,6 @@ export function buildConsultFixture(
 	config: ConsultConfig,
 	sessionId = "sess-int",
 	effort?: unknown,
-	deps: Record<string, unknown> = {},
 ): ConsultFixture {
 	const processes = new ProcessRunner();
 	const runner = new ConsultRunner(
@@ -164,14 +149,7 @@ export function buildConsultFixture(
 	const formatter = new AnswerFormatter(config.output);
 	const delivery = new ConsultDelivery(
 		pi as never, identity, formatter, effort as never);
-	const supervisor = new ConsultSupervisor(runner, records, delivery, undefined, deps as never);
-	const broker = new ConsultRequestBroker(
-		new ConsultDriveDispatcher({ pi: pi as never, supervisor }),
-		config.drive.deadlineMs,
-		config.drive.maxRequestsPerInvocation,
-	);
-	const control = new ConsultControlServer({ broker, root: config.artifactDir });
-	const screen = new SecretScreen();
+	const supervisor = new ConsultSupervisor(runner, records, delivery);
 	return {
 		config,
 		pi,
@@ -181,11 +159,8 @@ export function buildConsultFixture(
 		records,
 		supervisor,
 		processes,
-		broker,
-		control,
 		identity,
 		delivery,
-		bridge: new BridgeLauncher(control, artifacts, config.drive),
 		tool: new ConsultTool({
 			config,
 			ledger,
@@ -193,21 +168,13 @@ export function buildConsultFixture(
 			artifacts,
 			identity,
 			records,
-			screen,
+			screen: new SecretScreen(),
 			composer: new BriefComposer(),
 			formatter,
 			supervisor,
 			foreground: new ConsultForeground(),
-			bridge: new BridgeLauncher(control, artifacts, config.drive),
 			effort: effort as never,
 		}),
 		terminate: new ConsultTerminateTool(supervisor, effort as never),
-		reply: new ConsultReplyTool(broker, screen),
-		execute: new ConsultExecuteTool(
-			broker,
-			new ConsultToolPolicy(config.drive.tools),
-			new ConsultToolOutput(screen),
-			new ConsultToolCompletion(pi.events, new ConsultToolPolicy(config.drive.tools)),
-		),
 	};
 }

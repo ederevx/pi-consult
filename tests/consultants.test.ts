@@ -99,31 +99,34 @@ test("codex adapter: isolation inherit keeps the user's own configuration", () =
 	assert(!args.includes("--ignore-rules"), "user rules kept");
 });
 
-test("codex adapter: the bridge call outlives the drive deadline", () => {
-	const consultant = new CodexConsultant(
-		{ enabled: true, command: "codex", timeoutMs: 1000, isolation: "inherit" },
+test("claude adapter: a clean run reads with its own tools and generates no MCP setup", () => {
+	const consultant = new ClaudeConsultant(
+		{ enabled: true, command: "claude", timeoutMs: 1000, isolation: "clean" },
 		runner,
 	);
-	const args = consultant.buildArgs({
-		...request(),
-		consultant: "codex",
-		bridge: {
-			command: "node",
-			args: [],
-			descriptorPath: "/d.json",
-			invocationId: "c-1:codex",
-			toolTimeoutSec: 660,
-			serverName: "pi_consult",
-			toolName: "drive_pi",
-			qualifiedToolName: "mcp__pi_consult__drive_pi",
-			useToolName: "use_tool",
-			qualifiedUseToolName: "mcp__pi_consult__use_tool",
-		},
-	});
-	assert(args.includes("mcp_servers.pi_consult.tool_timeout_sec=660"),
-		"codex waits longer than the drive deadline");
-	const timeout = args.indexOf("mcp_servers.pi_consult.tool_timeout_sec=660");
-	assertEq(args[timeout - 1], "-c", "the override is a config flag, not a positional argument");
+	for (const args of [
+		consultant.buildArgs(request(), "11111111-2222-3333-4444-555555555555"),
+		consultant.buildArgs(request("sid-abc"), "11111111-2222-3333-4444-555555555555"),
+	]) {
+		assertEq(args[args.indexOf("--tools") + 1], "Read,Grep,Glob", "only the read tools");
+		assertEq(args[args.indexOf("--allowed-tools") + 1], "Read,Grep,Glob", "allowed and offered agree");
+		assert(!args.includes("--mcp-config"), "no generated MCP configuration");
+		assert(!args.includes("--strict-mcp-config"), "no MCP server is registered");
+	}
+});
+
+test("codex adapter: a clean run generates no MCP server configuration", () => {
+	const consultant = new CodexConsultant(
+		{ enabled: true, command: "codex", timeoutMs: 1000, isolation: "clean" },
+		runner,
+	);
+	for (const args of [
+		consultant.buildArgs({ ...request(), consultant: "codex" }),
+		consultant.buildArgs({ ...request("tid-xyz"), consultant: "codex", resumeSessionId: "tid-xyz" }),
+	]) {
+		assert(!args.some((arg) => arg.includes("mcp_servers")), "no MCP server is registered");
+		assert(!args.some((arg) => arg.includes("mcp__pi_consult")), "no bridge tool is named");
+	}
 });
 
 test("codex adapter: an agent message is prose, not progress", async () => {

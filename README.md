@@ -40,7 +40,6 @@ Missing or malformed values fall back to the defaults.
     "maxConcurrent": 2,
     "output": { "totalBytes": 24000, "answerBytes": 12000, "maxLines": 800 },
     "gate": { "allow": ["pre_memory", "pre_daemon", "pre_cache", "pre_teams", "transcript_read"], "block": [], "trustReadOnlyHint": false },
-    "drive": { "enabled": true, "deadlineMs": 600000 },
     "claude": { "enabled": true, "command": "claude", "isolation": "clean", "timeoutMs": 1200000, "silenceNoticeMs": 300000 },
     "codex": { "enabled": true, "command": "codex", "isolation": "clean", "timeoutMs": 1200000, "silenceNoticeMs": 300000 }
   }
@@ -62,11 +61,9 @@ when the retired file exists and `piConsult` is absent, and separately when
   session; with approval on and no interactive UI, `consult` refuses instead
   of sending silently.
 - `isolation: "clean"` runs the consultant without the user's own hooks and
-  instructions. With the bridge on (the default) Claude gets
-  `--setting-sources "" --restricted --strict-mcp-config --mcp-config …` and
-  may call `drive_pi`; Codex gets `--ignore-user-config --ignore-rules`. A
-  bridge-disabled Claude run uses `--safe-mode --restricted` instead.
-  `"inherit"` keeps the user's configuration.
+  instructions: Claude gets `--safe-mode --restricted`, Codex gets
+  `--ignore-user-config --ignore-rules`. `"inherit"` keeps the user's
+  configuration.
 - `gate.allow`/`gate.block` shape **pre-acknowledgement** classification only.
   The allow list exempts other extensions' onboarding tools (`pre_memory`,
   `pre_daemon`, ...); it can never exempt pi's built-in mutations. `gate.block`
@@ -81,15 +78,18 @@ and `..` are rejected, obvious secret-bearing names (`.env*`, `*.pem`, `*.key`,
 `id_*`, `.ssh`, `.aws`) are refused, and each listed file's contents are
 screened before anything is sent.
 
-Both consultants run read-only: Claude is restricted to `Read,Grep,Glob` plus
-`mcp__pi_consult__drive_pi` when the bridge is attached, with denied reads for
-common secret paths, and Codex runs with `-s read-only` (on a continuation,
-`-c sandbox_mode="read-only"`). A report of file changes from Codex is
-surfaced as a warning.
+CLI consultants inspect files using their own native read tools. Claude
+receives `Read`, `Grep`, and `Glob`, with denied reads for common secret
+paths; Codex runs with `-s read-only` (on a continuation,
+`-c sandbox_mode="read-only"`) and approvals disabled. pi no longer mediates
+or screens individual file reads, so the native filesystem permissions and
+the consultant runtime restrictions determine what is readable; the brief and
+its listed files are still screened for secrets. A report of file changes from
+Codex is surfaced as a warning.
 
 ## How it works
 
-`pi-consult` registers four tools and one gate:
+`pi-consult` registers three tools and one gate:
 
 - **`pre_consult`** - the acknowledgement gate. Call it once per session; it
   returns the catalogue and records that briefs, and any file a consultant
@@ -108,8 +108,6 @@ surfaced as a warning.
   standard preview and expand toggle, with live activity in cards below it;
   the model-facing text is unchanged.
 - **`consult_terminate`** - the only path that ends a consultation early.
-- **`consult_reply`** - answers a consultant's bridge request by `requestId`,
-  so the blocked consultant can continue; screened for secrets like a brief.
 
 Continuations of one provider session are serialized: a Codex `exec resume`
 waits for the earlier run of the same thread instead of failing on Codex's
@@ -237,7 +235,7 @@ run settles, then the stream closes with any trailing prose. The pending tool
 receipt does not carry the answer; the full result (status, answer, answer
 paths, consult id) is delivered into the starting session as a
 `pi-consult-result` message, which continues the agent after a steer or a
-consultant request and waits for the next prompt after Escape. A call started
+stall wake and waits for the next prompt after Escape. A call started
 with `background: true` is delivered as a steer after the current tool batch and
 before the next model call, so it lands while the agent is still working instead
 of waiting for the turn to end. If pi is in another session when it finishes,
@@ -262,33 +260,23 @@ consult, instead of silently starting fresh under a `continuedFrom` id; it is
 also refused while the consult is still running, until its result is
 delivered.
 
-### The bridge
+### Native reading
 
-When `drive.enabled` is on (the default), each consultant run is given a local
-MCP server — the bridge — that exposes one tool, `drive_pi`. The consultant can
-call it to ask pi a question and block until pi answers: pi receives the
-request as a message naming a `requestId` (stepping any foreground `consult`
-call aside), acts on it if it belongs to the task, and calls
-`consult_reply { requestId, status, answer }`. A request that is never answered
-expires after `drive.deadlineMs` and the consultant is told so; it is never
-cancelled by a timeout. The endpoint is a Unix socket under the artifact
-directory, admitted only by a per-run random token written 0600 next to the
-brief, and both directions are bounded in size.
-
-A turn that ends without claiming or declining a pending request re-raises it
-once when the agent settles, repeating what it asked for and both ways to
-answer it. A run the user aborted with Escape only shows a notice, never a new
-turn.
+Each consultant run is a plain read-only CLI invocation: its brief arrives on
+stdin, and it inspects the files it needs with its own tools - `Read`, `Grep`,
+and `Glob` for Claude, a read-only sandbox for Codex. pi admits no individual
+read and screens no individual file it opens. Consultants return advice, code,
+or proposed patches through the consultation result; they cannot ask pi to
+execute a tool or an action, and pi performs every change.
 
 ### A silent consultant
 
 A consultant that prints nothing for `claude.silenceNoticeMs` (or
 `codex.silenceNoticeMs`, 300000 by default) is reported in its progress
 card; at twice that silence, pi is woken with the options to keep waiting or
-`consult_terminate`, unless the wait was already escaped. A run whose request
-is waiting on pi is not counted as silent, and the silence never stops a run:
-the whole-run `timeoutMs` still bounds it. A value at or above `timeoutMs`
-disables the notice.
+`consult_terminate`, unless the wait was already escaped. The silence never
+stops a run: the whole-run `timeoutMs` still bounds it. A value at or above
+`timeoutMs` disables the notice.
 
 ### Native fallback
 
@@ -303,28 +291,12 @@ non-eligible error blocks the takeover. The fallback model is chosen in
 `fallback.reasoning`: the row offers only the levels the selected model's
 thinking map supports, unset follows the model's default, and a level the
 resolved model does not support is dropped with a warning, never guessed down.
-The conversation's only
-tools are the bridge pair, its transcript is persisted for `continue` to
+The conversation receives no tools at all, so it works from the supplied
+context and says so in its role, its transcript is persisted for `continue` to
 resume, and every answer opens with a disclosure naming the serving model,
 the reasoning level it ran at when one was reported, its cost, and the
 consultants it replaced. One decision per invocation; a
 native failure never cascades further.
-
-### Consultant-requested tool usage
-
-The bridge also carries `use_tool`: the consultant names one of pi's own tools
-and its arguments, and the request reaches pi as a message instructing it to
-call `consult_execute { requestId }` (or decline it). A claimed request runs
-through the session's own tool path — the same validation, hooks, and
-permission checks as a model-issued call — and the tool's output is piped
-straight back to the waiting consultant: screened for secrets, bounded to the
-answer size, never retyped by the model. A bridged Claude holds no tools of
-its own, so every read and every command runs in pi; a bridged Codex keeps
-its read-only sandbox but also goes through the bridge. Which tools may be
-requested is operator-configured (`drive.tools.allow`, default
-`read, grep, find, ls, bash`), and the bridge's own tools are never
-requestable. Tool failures come back as MCP tool errors with their output;
-transport status and tool status are separate facts.
 
 The returned details carry the consult id, each consultant's status, usage, and
 the path of the full answer. Model-facing text is bounded per the `output`

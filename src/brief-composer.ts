@@ -9,20 +9,12 @@
  */
 
 export class BriefComposer {
-	private static readonly ROLE = [
-		"You are an external implementation consultant for a pi coding agent.",
-		"pi keeps execution: you advise, it edits and runs commands. Do not modify",
-		"files and do not run mutating commands.",
-		"",
-		"When available, bridge tools let you reach the pi agent mid-consultation:",
-		"use drive_pi for a question, or use_tool to request one named pi tool",
-		"and receive its output. Typically requestable tools include read, grep,",
-		"find, ls, and bash for read-only commands, subject to operator settings.",
-		"pi authorizes and executes each requested tool call and may decline.",
-		"You never execute these requests yourself or modify files. When an",
-		"answer needs evidence from the machine, request it through the available",
-		"bridge tools instead of guessing or substituting assumptions. If they",
-		"are unavailable or a request is declined, state what remains unverified.",
+	private static readonly NATIVE_READS = [
+		"You are an external implementation consultant. Use your own native read-only",
+		"tools to inspect files needed for this consultation. Do not modify files or",
+		"run mutating commands. You cannot ask pi to execute tools or actions. Return",
+		"your findings and proposed changes as prose, with code or patches where",
+		"useful. State what you could not verify.",
 	].join("\n");
 
 	private static readonly CONTEXT_ONLY = [
@@ -35,9 +27,9 @@ export class BriefComposer {
 	private static readonly GUIDANCE = [
 		"Answer with concrete, actionable implementation detail: exact code or",
 		"patches, signatures, file paths, and the reasoning that matters for the",
-		"decision. Prefer specifics over prose. State assumptions explicitly and",
-		"flag anything you could not verify. When the brief asks a question, answer",
-		"it directly first, then the supporting detail.",
+		"decision. Prefer specifics over prose. State assumptions explicitly. When",
+		"the brief asks a question, answer it directly first, then the supporting",
+		"detail.",
 	].join("\n");
 
 	private static readonly VERIFICATION = [
@@ -57,9 +49,9 @@ export class BriefComposer {
 		"approval unless the convention audit line directly precedes it.",
 	].join("\n");
 
-	/** The role a consultant CLI runs under. */
+	/** The role a consultant CLI runs under: it reads with its own tools. */
 	systemPrompt(): string {
-		return [BriefComposer.ROLE, BriefComposer.GUIDANCE, BriefComposer.VERIFICATION].join("\n\n");
+		return [BriefComposer.NATIVE_READS, BriefComposer.GUIDANCE, BriefComposer.VERIFICATION].join("\n\n");
 	}
 
 	/** The role the native fallback runs under: supplied context only. */

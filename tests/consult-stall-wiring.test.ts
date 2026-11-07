@@ -1,8 +1,8 @@
 /**
- * pi-consult — the stall and request wiring.
+ * pi-consult — the stall wiring.
  *
- * The watches are unit-tested next to themselves; these tests drive the
- * owners around them, so a hook that stops being called is caught here.
+ * The watch is unit-tested next to itself; these tests drive the owners
+ * around it, so a hook that stops being called is caught here.
  */
 
 import type { Consultant, ConsultRequest } from "../src/contracts.ts";
@@ -165,58 +165,6 @@ test("delivery: a stall wake honours Escape and the owning session", () => {
 	assertEq(woken.options.triggerTurn, true, "an ordinary wait is woken");
 });
 
-test("stall wiring: one consultant waiting on pi does not pause the other", async () => {
-	const config = configFile(fakeClaude(9_000), fakeCodex(9_000), {
-		claude: { command: fakeClaude(9_000), silenceNoticeMs: 60_000 },
-		codex: { command: fakeCodex(9_000), silenceNoticeMs: 1 },
-	});
-	const asked: string[] = [];
-	const fixture = buildConsultFixture(config, "sess-wiring", undefined, {
-		waitingOnPi: (invocationId: string) => {
-			asked.push(invocationId);
-			return invocationId.endsWith(":claude");
-		},
-	});
-	fixture.tool.register(fixture.pi as never);
-	const ctx = new FakeContext([], "sess-wiring", scratchDir(), true);
-	ctx.mode = "tui";
-	const run = await fixture.tool.execute(
-		"call-stall-1",
-		{ target: "both", brief: "Both, quietly.", contains_no_secrets: true, background: true },
-		undefined,
-		undefined,
-		ctx as never,
-	);
-	const consultId = run.details.consultId;
-	assert(consultId.length > 0, "the run is tracked");
-
-	const stalls = (): unknown[] => fixture.pi.messages.filter(
-		(entry) => (entry.message as { customType?: string }).customType === "pi-consult-stall",
-	);
-	await until(() => stalls().length > 0);
-	const stallMessages = stalls();
-	assertEq(stallMessages.length, 1, "the silent codex run wakes pi once");
-	const wake = stallMessages[0].message as { content: string };
-	assert(wake.content.includes("codex"), "the wake names the silent consultant");
-	assert(!wake.content.includes("claude"), "the consultant waiting on pi is not reported");
-	assert(
-		asked.includes(`${consultId}:codex`),
-		"the clock asks about that consultant of that invocation",
-	);
-	const silentCard = (): unknown => fixture.pi.entries.find((entry) => {
-		if (entry.customType !== "pi-consult-step") return false;
-		const data = entry.data as { consultant?: string; lines?: string[] };
-		return data.consultant === "codex" &&
-			(data.lines ?? []).some((text) => text.includes("silent for"));
-	});
-	// The card is flushed on its own, so it may land just after the wake.
-	await until(() => silentCard() !== undefined);
-	assert(silentCard() !== undefined, "the silence reaches the codex card");
-
-	fixture.supervisor.cancelAll();
-	await fixture.control.close();
-});
-
 test("stall wiring: a foreground call steps aside for the silence", async () => {
 	const config = configFile(fakeClaude(9_000), fakeCodex(), {
 		claude: { command: fakeClaude(9_000), silenceNoticeMs: 1 },
@@ -243,7 +191,6 @@ test("stall wiring: a foreground call steps aside for the silence", async () => 
 		"stepping aside leaves the consult running",
 	);
 	fixture.supervisor.cancelAll();
-	await fixture.control.close();
 });
 
 test("stall wiring: the first notice reaches the card and wakes nothing", async () => {
@@ -275,5 +222,4 @@ test("stall wiring: the first notice reaches the card and wakes nothing", async 
 		"a single notice is the card's business, not a wake",
 	);
 	fixture.supervisor.cancelAll();
-	await fixture.control.close();
 });

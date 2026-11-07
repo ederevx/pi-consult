@@ -39,8 +39,6 @@ import "./agent-effort-audit.test.ts";
 import "./auditor-session.test.ts";
 import "./brief-composer.test.ts";
 import "./consult-sessions.test.ts";
-import "./consult-drive.test.ts";
-import "./consult-request-watch.test.ts";
 import "./consult-stall-watch.test.ts";
 import "./consult-stall-wiring.test.ts";
 import "./pre-consult.test.ts";
@@ -60,12 +58,6 @@ import "./consult-step-cards.test.ts";
 import "./consult-step-renderer.test.ts";
 import "./consult-foreground.test.ts";
 import "./availability.test.ts";
-import "./mcp-bridge.test.ts";
-import "./consult-control-server.test.ts";
-import "./consult-execute.test.ts";
-import "./consult-tool-completion.test.ts";
-import "./supervisor-settlement.test.ts";
-import "./bridge-e2e.test.ts";
 
 // A test that waits on a deadline rides an unref'd timer, so this ref'd one
 // holds the loop open, and a test that never settles fails instead of hanging.

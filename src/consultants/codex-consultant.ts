@@ -69,7 +69,6 @@ export class CodexConsultant implements Consultant {
 			"--json",
 			"--skip-git-repo-check",
 			...isolation,
-			...CodexConsultant.bridgeArgs(request),
 		];
 		const model = request.model ?? this.settings.model;
 		const modelArgs = model ? ["-m", model] : [];
@@ -109,27 +108,6 @@ export class CodexConsultant implements Consultant {
 			"-o",
 			request.lastMessagePath,
 			"-",
-		];
-	}
-
-	/** Codex's TOML overrides that register the bridge as an MCP server. */
-	private static bridgeArgs(request: ConsultRequest): string[] {
-		const bridge = request.bridge;
-		if (!bridge) return [];
-		return [
-			"-c",
-			`mcp_servers.${bridge.serverName}.command=${JSON.stringify(bridge.command)}`,
-			"-c",
-			`mcp_servers.${bridge.serverName}.args=${JSON.stringify(bridge.args)}`,
-			// Codex defaults to 300 s, which is shorter than the drive deadline.
-			"-c",
-			`mcp_servers.${bridge.serverName}.tool_timeout_sec=${bridge.toolTimeoutSec}`,
-			// Codex refuses an MCP call under approval_policy="never" unless the
-			// tool itself is pre-approved.
-			"-c",
-			`mcp_servers.${bridge.serverName}.tools.${bridge.toolName}.approval_mode="approve"`,
-			"-c",
-			`mcp_servers.${bridge.serverName}.tools.${bridge.useToolName}.approval_mode="approve"`,
 		];
 	}
 

@@ -1,6 +1,6 @@
 import { ConsultExtension } from "../src/index.ts";
 import { ConsultSettingsStore } from "../src/consult-settings-store.ts";
-import { FakePi, assert, scratchDir, test } from "./harness.ts";
+import { FakePi, assert, assertEq, scratchDir, test } from "./harness.ts";
 import { join } from "node:path";
 
 import { writeFileSync } from "node:fs";
@@ -19,6 +19,19 @@ test("extension: registration constructs with the fallback enabled", () => {
 
 test("extension: registration constructs with the extension disabled", () => {
 	registersWith({ enabled: false });
+});
+
+test("extension: only the surviving consultation tools are registered", () => {
+	const file = join(scratchDir(), `tools-${Math.random().toString(16).slice(2)}.json`);
+	writeFileSync(file, JSON.stringify({ piConsult: {} }));
+	const pi = new FakePi();
+	new ConsultExtension().registerWith(pi, new ConsultSettingsStore(file));
+	const names = [...pi.tools.keys()].sort();
+	assertEq(
+		names.join(","),
+		"consult,consult_terminate,pre_consult",
+		"the consultation tools survive and the bridge tools are gone",
+	);
 });
 
 test("extension: the registered fallback row offers the bound models", async () => {

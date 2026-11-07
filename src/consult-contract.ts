@@ -23,7 +23,7 @@ export interface ConsultantTarget {
 
 export class ConsultContract {
 	/** Bump when the acknowledgement terms change; old receipts stop counting. */
-	static readonly VERSION = 17;
+	static readonly VERSION = 18;
 
 	/** The acknowledgement text the agent accepts by calling `pre_consult`. */
 	contractText(targets: readonly ConsultantTarget[]): string {
@@ -41,16 +41,15 @@ export class ConsultContract {
 			"  locally and describe the shape of what matters, not its value.",
 			"- Consultants are read-only advisors: they must not modify the working",
 			"  tree, and pi executes every change itself.",
+			"- A consultant CLI inspects files with its own native read-only tools;",
+			"  the native fallback works from the supplied brief alone. pi mediates",
+			"  no individual read, so the files a CLI opens leave this machine too.",
 			"- Interrupting a consult (Escape, or a queued user message) does not cancel",
 			"  it: the call returns with its consult id and the consultation keeps",
 			"  running in the background. When it finishes, its full result arrives in",
 			"  this session as a pi-consult message carrying the answer and the consult",
 			"  id; do not poll for it, and continue it only after it arrives.",
 			"  consult_terminate is the only way to end one early.",
-			"- A consultant may ask pi a question through a local bridge; the request",
-			"  arrives as a message naming a requestId and pi answers it with",
-			"  consult_reply. That answer leaves the machine, so it is screened for",
-			"  secrets exactly like a brief.",
 			"- When every requested consultant CLI of a consultation fails on",
 			"  availability, credentials, quota, throttling, or a provider error,",
 			"  a native fallback conversation with the configured pi model serves",
@@ -58,14 +57,6 @@ export class ConsultContract {
 			"  disclosed in the answer with its model and cost. A continuation of",
 			"  a fallback-served consult resumes that private transcript; its",
 			"  answer is one perspective, never two.",
-			"- A consultant may also request that pi run one of pi's own tools",
-			"  through the bridge: the request names the tool and its arguments,",
-			"  pi authorizes it and runs it with consult_execute, and the tool's",
-			"  output is piped back to the consultant automatically, screened for",
-			"  secrets and bounded like any answer. The screening is a high-",
-			"  confidence pattern check, not proof: authorize a run only when the",
-			"  output may leave this machine. The consultant never executes",
-			"  anything itself.",
 			"- Each brief is persisted under the pi-consult artifact directory before it",
 			"  is sent, as the audit record of what left the machine.",
 			"- By calling pre_consult you acknowledge the terms above and the workflow",
@@ -117,7 +108,7 @@ export class ConsultContract {
 			"- A task is a user request for work: a change, an investigation, or an",
 			"  answer drawn from code, documents, or this machine. A reply that only",
 			"  asks the user a question or waits on their decision does not end a",
-			"  task, and answering a consultant's bridge request is not one.",
+			"  task.",
 			"- Offload thinking work: evaluation, audit, and investigative tasks lean",
 			"  toward consulting. Evaluation judges an artifact (a diff, plan, design,",
 			"  result, or set of options) against criteria: correct, complete, best,",
@@ -297,14 +288,6 @@ export class ConsultContract {
 		);
 		lines.push(
 			"- consult_terminate: end a background consult early; nothing else stops one.",
-		);
-		lines.push(
-			"- consult_reply: answer a request a consultant made through the bridge, by " +
-				"its requestId, so the blocked consultant can continue.",
-		);
-		lines.push(
-			"- consult_execute: run the tool a consultant requested through the bridge, " +
-				"by its requestId; the output is piped back to the consultant for you.",
 		);
 		lines.push("");
 		lines.push(this.contractText(targets));

@@ -2,9 +2,8 @@
  * pi-consult — the `consult_terminate` tool.
  *
  * Owns the only path that ends a consultation early. Nothing else — Escape,
- * steering, a disconnecting bridge, or a request deadline — stops
- * a consultant, so this tool is the explicit terminate the lifetime rule
- * requires.
+ * steering, or a request deadline — stops a consultant, so this tool is the
+ * explicit terminate the lifetime rule requires.
  */
 
 import type {

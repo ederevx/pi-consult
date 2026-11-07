@@ -13,33 +13,23 @@ import { AgentEffortPolicy } from "./agent-effort-policy.ts";
 import { AuditorSession } from "./auditor-session.ts";
 import { AnswerFormatter } from "./answer-formatter.ts";
 import { ArtifactStore } from "./artifact-store.ts";
-import { BridgeLauncher } from "./bridge-launcher.ts";
 import { BriefComposer } from "./brief-composer.ts";
 import { ConsultCommands } from "./consult-commands.ts";
 import { ConsultConfig } from "./consult-config.ts";
 import { ConsultContract } from "./consult-contract.ts";
-import { ConsultControlServer } from "./consult-control-server.ts";
 import { ConsultDelivery } from "./consult-delivery.ts";
-import { ConsultDriveDispatcher } from "./consult-drive-dispatcher.ts";
-import { ConsultExecuteTool } from "./consult-execute-tool.ts";
 import { ConsultForeground } from "./consult-foreground.ts";
 import { ConsultIndex } from "./consult-index.ts";
 import { ConsultRecordStore } from "./consult-record-store.ts";
-import { ConsultReplyTool } from "./consult-reply-tool.ts";
-import { ConsultRequestBroker } from "./consult-request-broker.ts";
-import { ConsultRequestWatch } from "./consult-request-watch.ts";
 import { ConsultRunner } from "./consult-runner.ts";
 import { ConsultSettings } from "./consult-settings.ts";
 import { ConsultSettingsStore } from "./consult-settings-store.ts";
 import { ConsultSupervisor } from "./consult-supervisor.ts";
 import { ConsultTerminateTool } from "./consult-terminate-tool.ts";
 import { ConsultTool } from "./consult-tool.ts";
-import { ConsultToolCompletion } from "./consult-tool-completion.ts";
-import { ConsultToolOutput } from "./consult-tool-output.ts";
 import { FallbackModels, type BoundEnvironment } from "./fallback-models.ts";
 import { NativeFallbackService } from "./native-fallback.ts";
 import { NativeConsultant } from "./native-consultant.ts";
-import { ConsultToolPolicy } from "./consult-tool-policy.ts";
 import { ClaudeConsultant } from "./consultants/claude-consultant.ts";
 import { CodexConsultant } from "./consultants/codex-consultant.ts";
 import { FailureClassifier } from "./failure-classifier.ts";
@@ -125,24 +115,7 @@ export class ConsultExtension {
 		const effort = new AgentEffortPolicy(config);
 		const formatter = new AnswerFormatter(config.output);
 		const delivery = new ConsultDelivery(pi, identity, formatter, effort);
-		const control = new ConsultControlServer({ root: config.artifactDir });
-		const supervisor = new ConsultSupervisor(runner, records, delivery, (consultId) => {
-			for (const participant of ["claude", "codex", "fallback"] as const) {
-				control.revoke(`${consultId}:${participant}`);
-			}
-		}, {
-			waitingOnPi: (invocationId) =>
-				broker.list().some((request) => request.invocationId === invocationId),
-		});
-		const dispatcher = new ConsultDriveDispatcher({ pi, supervisor });
-		const broker = new ConsultRequestBroker(
-			dispatcher,
-			config.drive.deadlineMs,
-			config.drive.maxRequestsPerInvocation,
-		);
-		control.bind(broker);
-		new ConsultRequestWatch(broker, dispatcher).register(pi);
-		const bridge = new BridgeLauncher(control, artifacts, config.drive);
+		const supervisor = new ConsultSupervisor(runner, records, delivery);
 
 		effort.register(pi);
 		new AuditorSession().register(pi);
@@ -161,20 +134,11 @@ export class ConsultExtension {
 			formatter,
 			supervisor,
 			foreground,
-			bridge,
 			effort,
 			fallback: (context) => nativeFallback.takeover(context),
 			bindEnvironment,
 		}).register(pi);
 		new ConsultTerminateTool(supervisor, effort).register(pi);
-		new ConsultReplyTool(broker, new SecretScreen()).register(pi);
-		const toolPolicy = new ConsultToolPolicy(config.drive.tools);
-		new ConsultExecuteTool(
-			broker,
-			toolPolicy,
-			new ConsultToolOutput(new SecretScreen()),
-			new ConsultToolCompletion(pi.events, toolPolicy),
-		).register(pi);
 		new ImplementationGate(ledger, toolClassifier, contract).register(pi);
 		new AgentAvailability(failureClassifier, () => index.latest()?.consultId ?? null).register(pi);
 		new SessionLifecycle(
@@ -185,7 +149,6 @@ export class ConsultExtension {
 			records,
 			identity,
 			delivery,
-			bridge,
 			contract,
 			config,
 		).register(pi);

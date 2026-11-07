@@ -9,7 +9,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import type { ArtifactStore } from "./artifact-store.ts";
-import type { BridgeLauncher } from "./bridge-launcher.ts";
 import type { ConsultConfig } from "./consult-config.ts";
 import type { ConsultContract } from "./consult-contract.ts";
 import type { ConsultDelivery } from "./consult-delivery.ts";
@@ -28,7 +27,6 @@ export class SessionLifecycle {
 	private readonly records: ConsultRecordStore;
 	private readonly identity: SessionIdentity;
 	private readonly delivery: ConsultDelivery;
-	private readonly bridge: BridgeLauncher;
 	private readonly contract: ConsultContract;
 	private readonly config: ConsultConfig;
 
@@ -40,7 +38,6 @@ export class SessionLifecycle {
 		records: ConsultRecordStore,
 		identity: SessionIdentity,
 		delivery: ConsultDelivery,
-		bridge: BridgeLauncher,
 		contract: ConsultContract,
 		config: ConsultConfig,
 	) {
@@ -51,7 +48,6 @@ export class SessionLifecycle {
 		this.records = records;
 		this.identity = identity;
 		this.delivery = delivery;
-		this.bridge = bridge;
 		this.contract = contract;
 		this.config = config;
 	}
@@ -94,7 +90,6 @@ export class SessionLifecycle {
 		pi.on("session_shutdown", async () => {
 			this.supervisor.cancelAll();
 			this.processes.killAll();
-			await this.bridge.close().catch(() => undefined);
 		});
 	}
 

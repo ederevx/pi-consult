@@ -14,7 +14,6 @@ import type { ConsultRunner } from "./consult-runner.ts";
 import { ConsultStallWatch, type ConsultStall } from "./consult-stall-watch.ts";
 import type {
 	AttachmentState,
-	BridgeConnection,
 	ConsultRequest,
 	ConsultantName,
 	ConsultantResult,
@@ -33,7 +32,6 @@ export interface InvocationRequestSpec {
 	sessionId?: string;
 	model?: string;
 	timeoutMs: number;
-	bridge?: BridgeConnection;
 }
 
 /** One live consumer of a running invocation's steps: the transcript
@@ -79,9 +77,6 @@ export interface InvocationSpec {
 
 /** What one invocation needs from its owner beyond the run itself. */
 export interface InvocationDeps {
-	/** Whether a consultant request for this invocation is waiting on pi,
-	 *  which pauses the clock of that one run. */
-	waitingOnPi?: (invocationId: string) => boolean;
 	/** A consultant went quiet; the owner decides what the user sees. */
 	onStall?: (invocation: ConsultInvocation, stall: ConsultStall) => void;
 }
@@ -128,8 +123,6 @@ export class ConsultInvocation {
 		this.feed = new ConsultProgressFeed(spec.targets, (snapshot) => this.publish(snapshot));
 		this.stall = new ConsultStallWatch(
 			new Map(spec.requests.map((request) => [request.consultant, request.settings.silenceNoticeMs])),
-			// A request pending for this consultant means it waits on pi.
-			(name) => deps.waitingOnPi?.(`${this.consultId}:${name}`) === true,
 			(stall) => this.reportStall(stall),
 		);
 	}
@@ -214,7 +207,7 @@ export class ConsultInvocation {
 
 	/** Whether the invocation is still producing a result. */
 	get live(): boolean {
-		return this.state === "queued" || this.state === "running" || this.state === "waiting_for_pi";
+		return this.state === "queued" || this.state === "running";
 	}
 
 	/** The current bounded progress transcript. */
@@ -240,9 +233,8 @@ export class ConsultInvocation {
 	}
 
 	/**
-	 * Watch for a consultant request that the agent must service, or for a
-	 * consultant that stopped producing output. A blocking foreground caller
-	 * uses it to step aside.
+	 * Watch for a consultant that stopped producing output. A blocking
+	 * foreground caller uses it to step aside.
 	 */
 	onAttention(listener: (reason: DetachReason) => void): () => void {
 		this.attention.add(listener);
@@ -306,7 +298,6 @@ export class ConsultInvocation {
 			timeoutMs: request.timeoutMs,
 			systemPrompt: this.spec.systemPrompt,
 			lastMessagePath: this.paths.lastMessage(request.consultant),
-			bridge: request.bridge,
 			onProgress: (line: string) => {
 				this.feed.event(request.consultant, line);
 				this.publishStep("event", request.consultant, line);

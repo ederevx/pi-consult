@@ -1,12 +1,11 @@
 /**
  * pi-consult — when a consultant counts as silent.
  *
- * Owns the one signal a run offers from the outside: a raw stdout line while
- * that consultant has no request pending in the broker. Silence cannot
- * separate long thinking from a hang, so it is only ever reported: once at
- * the notice level, and once more, at twice that silence, at the wake level.
- * It never stops a run, because a false positive would throw away a finished
- * answer.
+ * Owns the one signal a run offers from the outside: a raw stdout line. A
+ * silence cannot separate long thinking from a hang, so it is only ever
+ * reported: once at the notice level, and once more, at twice that silence,
+ * at the wake level. It never stops a run, because a false positive would
+ * throw away a finished answer.
  */
 
 import type { ConsultantName } from "./contracts.ts";
@@ -23,7 +22,6 @@ export class ConsultStallWatch {
 	private static readonly TICK_MS = 5_000;
 	private static readonly WAKE_FACTOR = 2;
 	private readonly limits: ReadonlyMap<ConsultantName, number>;
-	private readonly waitingOnPi: (name: ConsultantName) => boolean;
 	private readonly report: (stall: ConsultStall) => void;
 	private readonly tickMs: number;
 	private readonly now: () => number;
@@ -32,13 +30,11 @@ export class ConsultStallWatch {
 
 	constructor(
 		limits: ReadonlyMap<ConsultantName, number>,
-		waitingOnPi: (name: ConsultantName) => boolean,
 		report: (stall: ConsultStall) => void,
 		tickMs = ConsultStallWatch.TICK_MS,
 		now: () => number = Date.now,
 	) {
 		this.limits = limits;
-		this.waitingOnPi = waitingOnPi;
 		this.report = report;
 		this.tickMs = Math.max(1, tickMs);
 		this.now = now;
@@ -84,12 +80,6 @@ export class ConsultStallWatch {
 		for (const [name, clock] of [...this.clocks]) {
 			const limit = this.limits.get(name);
 			if (limit === undefined) continue;
-			// A consultant blocked on the agent is not silent, it is waiting.
-			if (this.waitingOnPi(name)) {
-				clock.last = now;
-				clock.level = 0;
-				continue;
-			}
 			const silentMs = now - clock.last;
 			const level: 0 | 1 | 2 = silentMs >= limit * ConsultStallWatch.WAKE_FACTOR
 				? 2

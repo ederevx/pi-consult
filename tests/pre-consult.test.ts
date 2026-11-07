@@ -178,22 +178,24 @@ test("pre_consult: a nested call is rejected", async () => {
 	assertEq(threw, true);
 });
 
-test("pre_consult: contract v17 states the hold, the verdict and the completion line", async () => {
+test("pre_consult: contract v18 states the hold, the verdict and the completion line", async () => {
 	const text = await contractText();
-	assertEq(ConsultContract.VERSION, 17);
+	assertEq(ConsultContract.VERSION, 18);
 	assertIncludes(text, "holds your own thinking effort");
 	assertIncludes(text, "It never leaves you at high, xhigh, or max");
 	assertIncludes(text, "you own the implementation and the\n  execution");
 	assertIncludes(text, "Consultant verdict: approved - <one-line reason>.");
-	assertIncludes(text, "pi authorizes it and runs it with consult_execute");
-	assertIncludes(text, "The consultant never executes");
+	assertIncludes(text, "inspects files with its own native read-only tools");
+	assertIncludes(text, "pi mediates\n  no individual read");
+	assertNotIncludes(text, "consult_execute");
+	assertNotIncludes(text, "consult_reply");
 	assertIncludes(text, "Consultation cycle: complete - <consult id> verified.");
 	assertIncludes(text, "Never write the line earlier, and never quote, indent, or fence it.");
 	assertIncludes(text, "/consult-effort release");
 	assertNotIncludes(text, "low; never high, xhigh, or max)");
 });
 
-test("pre_consult: contract v17 requires a convention audit in every closing consultation", async () => {
+test("pre_consult: contract v18 requires a convention audit in every closing consultation", async () => {
 	const definition = register(runner(async () => [], TARGETS));
 	const text = await contractText();
 	assertIncludes(text, "Every closing consultation audits convention compliance");

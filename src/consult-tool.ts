@@ -29,7 +29,6 @@ import type {
 import type { AgentEffortPolicy } from "./agent-effort-policy.ts";
 import type { AnswerFormatter } from "./answer-formatter.ts";
 import type { ArtifactStore, ConsultPaths } from "./artifact-store.ts";
-import type { BridgeLauncher } from "./bridge-launcher.ts";
 import type { BriefComposer } from "./brief-composer.ts";
 import type { ConsultConfig } from "./consult-config.ts";
 import type { ConsultForeground, ForegroundOutcome } from "./consult-foreground.ts";
@@ -74,7 +73,6 @@ export interface ConsultToolDeps {
 	formatter: AnswerFormatter;
 	supervisor: ConsultSupervisor;
 	foreground: ConsultForeground;
-	bridge: BridgeLauncher;
 	/** pi's thinking-level cycle; engaged by a consult, settled by its receipt. */
 	effort?: AgentEffortPolicy;
 	/** Snapshots the session that starts an invocation: registry, copied
@@ -490,9 +488,6 @@ export class ConsultTool {
 				sessionId: freshSessionId,
 				model: params.model && targets.length === 1 ? params.model : settings.model,
 				timeoutMs: params.timeout_s ? params.timeout_s * 1000 : settings.timeoutMs,
-				bridge: await this.deps.bridge
-					.open(consultId, name, paths)
-					.catch(() => undefined),
 			});
 		}
 		return {

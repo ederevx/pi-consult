@@ -16,7 +16,6 @@ test("stall watch: each silence level is reported once", async () => {
 	const stalls: ConsultStall[] = [];
 	const watch = new ConsultStallWatch(
 		new Map([["claude", 1_000]]),
-		() => false,
 		(stall) => stalls.push(stall),
 		2,
 		clock.now,
@@ -44,7 +43,6 @@ test("stall watch: output restarts the silence", async () => {
 	const stalls: ConsultStall[] = [];
 	const watch = new ConsultStallWatch(
 		new Map([["codex", 1_000]]),
-		() => false,
 		(stall) => stalls.push(stall),
 		2,
 		clock.now,
@@ -65,35 +63,11 @@ test("stall watch: output restarts the silence", async () => {
 	watch.stop();
 });
 
-test("stall watch: a consultant waiting on pi is not silent", async () => {
-	const clock = new FakeClock();
-	const stalls: ConsultStall[] = [];
-	let waiting = true;
-	const watch = new ConsultStallWatch(
-		new Map([["claude", 1_000]]),
-		() => waiting,
-		(stall) => stalls.push(stall),
-		2,
-		clock.now,
-	);
-	watch.activity("claude");
-	clock.millis += 5_000;
-	await delay(20);
-	assertEq(stalls.length, 0, "the clock pauses while pi owes the answer");
-
-	waiting = false;
-	clock.millis += 1_100;
-	await delay(20);
-	assertEq(stalls.length, 1, "the silence counts from the answer, not the wait");
-	watch.stop();
-});
-
 test("stall watch: a finished consultant stops counting and a queued one has no clock", async () => {
 	const clock = new FakeClock();
 	const stalls: ConsultStall[] = [];
 	const watch = new ConsultStallWatch(
 		new Map([["claude", 1_000], ["codex", 1_000]]),
-		() => false,
 		(stall) => stalls.push(stall),
 		2,
 		clock.now,
@@ -118,7 +92,6 @@ test("stall watch: stop clears every clock", async () => {
 	const stalls: ConsultStall[] = [];
 	const watch = new ConsultStallWatch(
 		new Map([["claude", 1_000]]),
-		() => false,
 		(stall) => stalls.push(stall),
 		2,
 		clock.now,
