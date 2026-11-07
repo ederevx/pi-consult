@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.23.3
+
+### Added
+
+- `codex.windowsSandbox` chooses the backend an isolated Codex run names on
+  Windows: `elevated`, `mxc`, or `unelevated`. 0.23.2 hardcoded `elevated`, the
+  fallback codex documents where MXC cannot run; a host that can run MXC now
+  says so instead of paying for elevation on every command.
+
 ## 0.23.2
 
 ### Fixed

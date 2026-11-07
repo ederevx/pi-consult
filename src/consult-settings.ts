@@ -66,6 +66,7 @@ export class ConsultSettings {
 		{ key: "codex.enabled", label: "Codex enabled", path: ["codex", "enabled"], kind: "boolean", values: ["off", "on"], description: "Allow the codex consultant" },
 		{ key: "codex.model", label: "Codex model", path: ["codex", "model"], kind: "string", description: "Default codex model (empty for the CLI default)" },
 		{ key: "codex.isolation", label: "Codex isolation", path: ["codex", "isolation"], kind: "enum", values: ["clean", "inherit"], description: "Run codex without (clean) or with (inherit) your own agent setup" },
+		{ key: "codex.windowsSandbox", label: "Codex Windows sandbox", path: ["codex", "windowsSandbox"], kind: "enum", values: ["elevated", "mxc", "unelevated"], description: "Sandbox backend an isolated codex names on Windows; elevated is the fallback it documents where MXC cannot run" },
 		{ key: "codex.timeoutMs", label: "Codex timeout (ms)", path: ["codex", "timeoutMs"], kind: "number", description: "Per-consult timeout for codex" },
 		{ key: "codex.silenceNoticeMs", label: "Codex silence notice (ms)", path: ["codex", "silenceNoticeMs"], kind: "number", description: "How long codex may print nothing before it is reported" },
 		{ key: "artifactDir", label: "Artifact directory", path: ["artifactDir"], kind: "string", description: "Where briefs and answers are written" },

@@ -19,6 +19,13 @@ import type { ConsultantName, ReasoningLevel } from "./contracts.ts";
 /** How isolated a consultant CLI run is from the user's own agent setup. */
 export type Isolation = "clean" | "inherit";
 
+/** A sandbox backend Codex's Windows configuration accepts. */
+export type WindowsSandbox = "elevated" | "mxc" | "unelevated";
+
+/** The backend an isolated run names when none is configured: the fallback
+ *  Codex documents for hosts without MXC eligibility. */
+export const DEFAULT_WINDOWS_SANDBOX: WindowsSandbox = "elevated";
+
 /** Model-thinking effort levels accepted by the supported CLIs. */
 export type Effort = "low" | "medium" | "high" | "xhigh";
 
@@ -33,6 +40,10 @@ export interface ConsultantSettings {
 	 *  or above `timeoutMs` the notice can never fire. */
 	silenceNoticeMs: number;
 	isolation: Isolation;
+	/** The sandbox backend an isolated codex names on Windows, where dropping
+	 *  the user's configuration would otherwise leave it without one; unset
+	 *  names `DEFAULT_WINDOWS_SANDBOX`. */
+	windowsSandbox?: WindowsSandbox;
 }
 
 /** Which tools the acknowledgement gate covers, before acknowledgement only. */
@@ -172,6 +183,8 @@ export class ConsultConfig {
 		const model = ConsultConfig.str(raw.model);
 		const effort = ConsultConfig.effort(raw.effort);
 		const isolation = raw.isolation === "inherit" ? "inherit" : "clean";
+		const sandbox = ConsultConfig.str(raw.windowsSandbox);
+		const windowsSandbox = ConsultConfig.windowsSandbox(sandbox);
 		return {
 			enabled: ConsultConfig.bool(raw.enabled, true),
 			command: ConsultConfig.str(raw.command) ?? name,
@@ -183,7 +196,15 @@ export class ConsultConfig {
 				ConsultConfig.DEFAULT_SILENCE_NOTICE_MS,
 			),
 			isolation,
+			windowsSandbox,
 		};
+	}
+
+	private static windowsSandbox(value: string | undefined): WindowsSandbox {
+		if (value === "elevated" || value === "mxc" || value === "unelevated") {
+			return value;
+		}
+		return DEFAULT_WINDOWS_SANDBOX;
 	}
 
 	private static effort(value: unknown): Effort | undefined {

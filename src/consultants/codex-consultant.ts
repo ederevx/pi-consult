@@ -16,6 +16,7 @@ import type {
 	RunStatus,
 } from "../contracts.ts";
 import type { ConsultantSettings } from "../consult-config.ts";
+import { DEFAULT_WINDOWS_SANDBOX } from "../consult-config.ts";
 import { ConsultantEnv } from "../consultant-env.ts";
 import { ProcessRunner, type ProcessOutcome } from "../process-runner.ts";
 import { CodexEventParser, type CodexParseResult } from "./codex-event-parser.ts";
@@ -25,10 +26,6 @@ export class CodexConsultant implements Consultant {
 	private static readonly PROBE_TIMEOUT_MS = 10_000;
 	private static readonly READ_ONLY = 'sandbox_mode="read-only"';
 	private static readonly NO_APPROVAL = 'approval_policy="never"';
-	/** Codex's Windows sandbox backend. `--ignore-user-config` drops the user's
-	 *  choice of it, and without a backend codex refuses every command, so an
-	 *  isolated run names it itself or a consultant cannot read a file. */
-	private static readonly WINDOWS_SANDBOX = 'windows.sandbox="elevated"';
 
 	readonly settings: ConsultantSettings;
 	private readonly runner: ProcessRunner;
@@ -75,7 +72,7 @@ export class CodexConsultant implements Consultant {
 			...isolation,
 		];
 		const sandboxBackend = isolation.length > 0 && process.platform === "win32"
-			? ["-c", CodexConsultant.WINDOWS_SANDBOX]
+			? ["-c", `windows.sandbox="${this.settings.windowsSandbox ?? DEFAULT_WINDOWS_SANDBOX}"`]
 			: [];
 		const model = request.model ?? this.settings.model;
 		const modelArgs = model ? ["-m", model] : [];

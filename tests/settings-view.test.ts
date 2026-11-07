@@ -102,7 +102,7 @@ test("settings dock: every setting becomes a row, plus restore", () => {
 		unset: () => undefined,
 	});
 	const items = new ConsultSettingsPresenter(settings).items();
-	assertEq(items.length, 22, "21 settings plus the restore action");
+	assertEq(items.length, 23, "22 settings plus the restore action");
 	assertEq(items[0].id, "enabled");
 	assertEq(items[0].label, "Enabled");
 	assertEq(items[0].currentValue, "on", "the effective default is shown");
@@ -112,6 +112,11 @@ test("settings dock: every setting becomes a row, plus restore", () => {
 		items.find((item) => item.id === "claude.isolation")?.values?.join(","),
 		"clean,inherit",
 		"an enum cycles its fixed values",
+	);
+	assertEq(
+		items.find((item) => item.id === "codex.windowsSandbox")?.currentValue,
+		"elevated",
+		"an unset sandbox backend shows the one an isolated run names",
 	);
 	const reasoningRow = items.find((item) => item.id === "fallback.reasoning");
 	assertEq(reasoningRow?.values, undefined,
