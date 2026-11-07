@@ -1,5 +1,6 @@
 import { ClaudeConsultant } from "../src/consultants/claude-consultant.ts";
 import { CodexConsultant } from "../src/consultants/codex-consultant.ts";
+import { ConsultantEnv } from "../src/consultant-env.ts";
 import type { ConsultRequest } from "../src/contracts.ts";
 import { ProcessRunner } from "../src/process-runner.ts";
 import { fakeCodex } from "./consult-fixture.ts";
@@ -17,6 +18,18 @@ function request(resumeSessionId?: string): ConsultRequest {
 		lastMessagePath: "/artifacts/last.md",
 	};
 }
+
+test("consultant env: a codex child keeps the Windows runtime it needs", () => {
+	const env = ConsultantEnv.codex();
+	assertEq(env.NO_COLOR, "1", "output colouring stays off");
+	if (process.platform === "win32") {
+		const names = Object.keys(env).map((key) => key.toUpperCase());
+		for (const key of ["SYSTEMROOT", "COMSPEC", "APPDATA", "USERPROFILE"]) {
+			assert(names.includes(key), `${key} reaches the child`);
+		}
+	}
+	assert(!("AWS_SECRET_ACCESS_KEY" in env), "an unrelated secret stays out");
+});
 
 test("claude adapter: first call isolates, restricts tools, and names a session", () => {
 	const consultant = new ClaudeConsultant(

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.23.4
+
+### Fixed
+
+- A consultant child on Windows keeps the runtime variables it cannot work
+  without: its system directory, the command processor, the executable
+  suffixes, and the profile directories its CLI keeps its configuration in.
+  The scrub that keeps unrelated secrets out dropped all of them, so an
+  isolated Codex run reached no backend and could not spawn a command, and
+  every read it attempted was reported as rejected.
+
 ## 0.23.3
 
 ### Added

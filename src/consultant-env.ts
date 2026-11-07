@@ -33,6 +33,34 @@ export class ConsultantEnv {
 		"GOOGLE_",
 	];
 	private static readonly CODEX_PREFIX = ["OPENAI_", "CODEX_", "AZURE_OPENAI_"];
+	/** Windows variables a child cannot work without: its system directory (TLS
+	 *  and the shell resolve through it), the command processor, the executable
+	 *  suffixes, and the profile directories a CLI keeps its own configuration
+	 *  in. Without them an isolated codex reaches no backend and cannot spawn a
+	 *  single command. Windows spells these in either case, so they are matched
+	 *  case-insensitively. */
+	private static readonly WINDOWS = [
+		"SYSTEMROOT",
+		"SYSTEMDRIVE",
+		"WINDIR",
+		"COMSPEC",
+		"PATHEXT",
+		"USERPROFILE",
+		"APPDATA",
+		"LOCALAPPDATA",
+		"PROGRAMDATA",
+		"PROGRAMFILES",
+		"COMMONPROGRAMFILES",
+		"ALLUSERSPROFILE",
+		"PUBLIC",
+		"HOMEDRIVE",
+		"HOMEPATH",
+		"TEMP",
+		"TMP",
+		"OS",
+		"NUMBER_OF_PROCESSORS",
+		"PROCESSOR_ARCHITECTURE",
+	];
 
 	/** The environment for a Claude Code child. */
 	static claude(): NodeJS.ProcessEnv {
@@ -54,7 +82,8 @@ export class ConsultantEnv {
 			if (
 				ConsultantEnv.COMMON.includes(key) ||
 				ConsultantEnv.matches(key, ConsultantEnv.COMMON_PREFIX) ||
-				ConsultantEnv.matches(key, providerPrefixes)
+				ConsultantEnv.matches(key, providerPrefixes) ||
+				(process.platform === "win32" && ConsultantEnv.WINDOWS.includes(key.toUpperCase()))
 			) {
 				env[key] = value;
 			}
