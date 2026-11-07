@@ -357,31 +357,6 @@ test("consult sessions: reconcile marks a dead host's manifest as abandoned", as
 	assertEq(receipt.details.runs[0].sessionId, "sess-1", "provider session survives for continuation");
 });
 
-test("consult sessions: a manifest left in the retired waiting_for_pi state is reconciled", async () => {
-	const root = scratchDir();
-	const artifacts = new ArtifactStore(root);
-	const paths = await artifacts.prepare("s1b", "c-aaaaaaaa1111");
-	await artifacts.write(
-		paths.run,
-		JSON.stringify({
-			schema: 1,
-			consultId: "c-aaaaaaaa1111",
-			sessionId: "s1b",
-			cwd: "/x",
-			briefPath: paths.brief,
-			targets: ["claude"],
-			state: "waiting_for_pi",
-			startedAt: Date.now(),
-			providerSessions: {},
-		}),
-	);
-	const records = new ConsultRecordStore(artifacts);
-	assertEq(await records.retain(paths.dir), true, "a mid-drive manifest is never reclaimed by age");
-	await records.reconcile(new Set());
-	const receipt = await records.load("c-aaaaaaaa1111");
-	assertEq(receipt?.details.runs[0].status, "aborted", "the retired state reads as abandoned");
-});
-
 test("consult sessions: reconcile leaves a live manifest alone", async () => {
 	const root = scratchDir();
 	const artifacts = new ArtifactStore(root);

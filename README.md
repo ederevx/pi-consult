@@ -10,7 +10,7 @@ execution, at low thinking effort, and consults again at any roadblock.
 ## Install
 
 ```bash
-pi install git:github.com/ederevx/pi-consult@v0.22.0
+pi install git:github.com/ederevx/pi-consult@v0.23.1
 ```
 
 The package has no runtime dependencies; it uses the host-provided
@@ -55,12 +55,6 @@ object under `piConsult` without replacing pi's other settings, `/reload`, then
 remove the old file and unset the variable. pi-consult warns once per session
 when the retired file exists and `piConsult` is absent, and separately when
 `PI_CONSULT_CONFIG` is still set.
-
-**Migrating from v0.22 and earlier:** version 0.23.0 removes the drive/MCP
-bridge and the `consult_execute` and `consult_reply` tools. An existing `drive`
-configuration is ignored and may be deleted; pi-consult says so once per
-session. Consultation, continuation, background results, progress, and
-termination are unchanged.
 
 - `confirmFirstConsult` is off by default, so briefs are granted without a
   prompt. When on, it shows a UI confirmation before the first brief of a

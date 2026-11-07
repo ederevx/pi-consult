@@ -280,11 +280,8 @@ export class ConsultRecordStore {
 		return false;
 	}
 
-	/** A manifest an older release left mid-drive can still name the retired
-	 *  waiting_for_pi state; it is unfinished just the same, so reconcile marks
-	 *  it failed instead of leaving it behind. */
 	private static unfinished(state: string): boolean {
-		return state === "queued" || state === "running" || state === "waiting_for_pi";
+		return state === "queued" || state === "running";
 	}
 
 	private static message(error: unknown): string {

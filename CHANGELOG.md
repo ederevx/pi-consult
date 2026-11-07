@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.23.1
+
+### Removed
+
+- The session-start notice for a `drive` block left in the `piConsult`
+  namespace, and the last read of that retired key: nothing reads the block, so
+  there is nothing left to report, and the README's v0.22 migration note goes
+  with it.
+- The retired `waiting_for_pi` record state from reconciliation: a manifest
+  still carrying it is neither retained nor marked failed, so it ages out.
+
 ## 0.23.0
 
 ### Removed

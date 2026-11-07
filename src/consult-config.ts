@@ -5,8 +5,8 @@
  * values live in the `piConsult` namespace of pi's own `settings.json`, read
  * through `ConsultSettingsStore`; this class touches no filesystem itself.
  * Missing or malformed configuration falls back to the defaults. Legacy keys
- * (gate.allowBashBeforeConsult, gate.consultEffort, and the whole retired
- * drive block) are ignored: their mechanisms no longer exist.
+ * (gate.allowBashBeforeConsult and gate.consultEffort) are ignored: their
+ * mechanisms no longer exist.
  */
 
 import { homedir } from "node:os";

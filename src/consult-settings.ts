@@ -213,33 +213,20 @@ export class ConsultSettings {
 	/** Warn once per session when a retired configuration source is present. */
 	private warnLegacy(ctx: ExtensionContext): void {
 		if (this.warned) return;
-		const drive = this.store.namespace().drive !== undefined;
 		const legacy = this.store.legacySources();
 		const retiredFile = legacy.file && !this.store.hasNamespace();
-		if (!drive && !legacy.env && !retiredFile) return;
+		if (!legacy.env && !retiredFile) return;
 		this.warned = true;
 		if (!ctx.hasUI) return;
-		const notices: string[] = [];
-		if (drive) {
-			notices.push(
-				"pi-consult 0.23.0 removed drive support; the drive configuration is " +
-					"ignored and may be deleted.",
-			);
-		}
-		if (legacy.env || retiredFile) {
-			notices.push(
-				`pi-consult v0.7: legacy configuration is no longer loaded. Copy its settings ` +
-					`into the ${ConsultSettingsStore.NAMESPACE} object in ${this.store.path()}, then ` +
-					"/reload." +
-					(legacy.env ? " PI_CONSULT_CONFIG is no longer supported." : ""),
-			);
-		}
-		for (const notice of notices) {
-			try {
-				ctx.ui.notify(notice, "warning");
-			} catch {
-				// No notification surface; nothing else to do.
-			}
+		const notice =
+			`pi-consult v0.7: legacy configuration is no longer loaded. Copy its settings ` +
+			`into the ${ConsultSettingsStore.NAMESPACE} object in ${this.store.path()}, then ` +
+			"/reload." +
+			(legacy.env ? " PI_CONSULT_CONFIG is no longer supported." : "");
+		try {
+			ctx.ui.notify(notice, "warning");
+		} catch {
+			// No notification surface; nothing else to do.
 		}
 	}
 

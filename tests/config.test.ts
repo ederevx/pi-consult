@@ -95,19 +95,17 @@ test("config: a retired pi-consult.json never supplies values", () => {
 	assertEq(config.maxConcurrent, 2, "the retired file supplies nothing");
 });
 
-test("config: a legacy drive block configures nothing and disturbs nothing", () => {
+test("config: an unknown block configures nothing and disturbs nothing", () => {
 	const config = loadSettings({
 		piConsult: {
-			drive: {
+			unrelated: {
 				enabled: false,
-				deadlineMs: 1,
 				tools: { allow: [] },
-				maxRequestsPerInvocation: 1,
 			},
 			maxConcurrent: 3,
 		},
 	});
-	assertEq("drive" in config, false, "no drive setting is parsed any more");
+	assertEq("unrelated" in config, false, "no unknown setting is parsed");
 	assertEq(config.maxConcurrent, 3, "unrelated settings still load");
 	assertEq(config.enabled, true, "the extension default is unchanged");
 });

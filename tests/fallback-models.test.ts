@@ -91,7 +91,7 @@ test("fallback config: parsed with the fallback on and no model by default", () 
 test("settings store: unset removes one key and preserves its siblings", () => {
 	const file = join(scratchDir(), `unset-${Math.random().toString(16).slice(2)}.json`);
 	writeFileSync(file, JSON.stringify({
-		piConsult: { fallback: { enabled: true, model: "one/deep" }, drive: { enabled: false } },
+		piConsult: { fallback: { enabled: true, model: "one/deep" }, unrelated: { enabled: false } },
 		other: 1,
 	}));
 	const store = new ConsultSettingsStore(file);
@@ -99,7 +99,7 @@ test("settings store: unset removes one key and preserves its siblings", () => {
 	const namespace = store.namespace();
 	assertEq((namespace.fallback as { model?: string }).model, undefined, "the model key is gone");
 	assertEq((namespace.fallback as { enabled?: boolean }).enabled, true, "the sibling survives");
-	assertEq((namespace.drive as { enabled?: boolean }).enabled, false, "other settings survive");
+	assertEq((namespace.unrelated as { enabled?: boolean }).enabled, false, "other settings survive");
 	assertEq((namespace as { other?: number }).other, undefined, "the namespace stays isolated");
 });
 
