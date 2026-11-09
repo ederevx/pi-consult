@@ -1,15 +1,21 @@
 # Changelog
 
+## 0.24.6
+
+### Changed
+
+- The 0.24.5 notes now describe the behaviour it adds, and a test pins it: a
+  session branch saved with an outstanding consult id while no cycle was open no
+  longer carries that id into the next cycle.
+
 ## 0.24.5
 
 ### Fixed
 
-- The debt a cycle ends with is cleared where every cycle starts and ends, not
-  only where it ends, so a branch left holding an id while no cycle is open
-  starts clean instead of carrying it into the next one. This is the same cure
-  as 0.24.4 with the clear moved to the cycle reset; the tests now assert that
-  the cycle closes rather than that the level is high, which a passing answer
-  leaves unchanged either way.
+- A session branch saved with an outstanding consult id while no cycle was open
+  no longer carries that id into the next cycle, so the next cycle's completion
+  line, fallback line and independent audit are not refused for a result that
+  will never arrive.
 
 ## 0.24.4
 

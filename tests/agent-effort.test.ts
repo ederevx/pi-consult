@@ -809,6 +809,22 @@ test("agent effort: a released stale id no longer refuses the fallback line", as
 	assertEq(lastEntry(host).holding, false, "the fallback line closes the cycle");
 });
 
+test("agent effort: an id persisted outside a cycle is not carried into the next one", async () => {
+	const { host, ctx, policy } = setup({
+		level: "high",
+		branch: [customEntry("e1", "pi-consult-effort", { holding: false, owed: ["c-dead01"] })],
+	});
+	policy.engage(ctx as never, "c-000049");
+	assertEq((lastEntry(host).owed as string[]).join(","), "c-000049", "only the new consult is owed");
+	policy.settle(
+		"c-000049",
+		consultDetails("c-000049", [consultRun("claude", "ok")]),
+		verdictAnswers({ claude: APPROVED_VERDICT }),
+	);
+	await host.run("Consultation cycle: complete - c-000049 verified.");
+	assertEq(lastEntry(host).holding, false, "the leftover id no longer refuses the close");
+});
+
 test("agent effort: navigate before the cycle restores; navigating back releases the hold", () => {
 	const { host, ctx, policy } = setup({ level: "high" });
 	policy.engage(ctx as never, "c-000037");
