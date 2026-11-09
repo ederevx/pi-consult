@@ -1,17 +1,27 @@
+# Changelog
+
+## 0.24.5
+
+### Fixed
+
+- The debt a cycle ends with is cleared where every cycle starts and ends, not
+  only where it ends, so a branch left holding an id while no cycle is open
+  starts clean instead of carrying it into the next one. This is the same cure
+  as 0.24.4 with the clear moved to the cycle reset; the tests now assert that
+  the cycle closes rather than that the level is high, which a passing answer
+  leaves unchanged either way.
+
 ## 0.24.4
 
 ### Fixed
 
-- Ending a cycle clears what it still owed. An id whose receipt never reached
-  the model - a pi process killed mid-consult, a detached consult that died
-  with it - stayed owed for good, and through `owedRefusal` it refused every
-  later completion line, fallback line and independent audit on that branch,
-  naming a result that could never arrive. `/consult-effort release` cleared
-  the hold but not the id, so nothing ended it. `restore`, the path that ends
-  a cycle, now clears `owed` as well, which also makes release the way out of a
-  branch a dead id already blocks.
-
-# Changelog
+- A consultation cycle now ends with nothing outstanding. An id whose receipt
+  never reached the model - a pi process killed mid-consult, a detached consult
+  that died with it - used to refuse every later completion line, fallback line
+  and independent audit on that branch, naming a result that could never
+  arrive; ending the hold by hand left the id in place, so nothing could clear
+  it. Ending a cycle now clears it as well, which makes ending the hold the way
+  out of a branch a dead id already blocks.
 
 ## 0.24.3
 

@@ -789,7 +789,8 @@ test("agent effort: a release clears an id that never delivered, so the next cyc
 	);
 	await host.run("Consultation cycle: complete - c-000046 verified.");
 	assertNotIncludes(notices(ctx), "still running or undelivered");
-	assertEq(host.getThinkingLevel(), "high", "the next cycle's approve line closes it");
+	assertEq(lastEntry(host).holding, false, "the next cycle's approve line closes it");
+	assertIncludes(notices(ctx), "the consultant handed control back");
 });
 
 test("agent effort: a released stale id no longer refuses the fallback line", async () => {
@@ -801,11 +802,11 @@ test("agent effort: a released stale id no longer refuses the fallback line", as
 	policy.engage(ctx as never, "c-000047");
 	await handler("release", ctx);
 	policy.engage(ctx as never, "c-000048");
-	policy.settle("c-000048", consultDetails("c-000048", [consultRun("claude", "error", "boom")], false));
-	policy.observeAvailability(ctx as never, [{ name: "claude", available: false, error: "missing" }]);
+	policy.settle("c-000048", consultDetails("c-000048", [consultRun("claude", "unavailable")], false));
 	await host.run("Consultant fallback: no consultant available - roadblock.");
 	assertNotIncludes(notices(ctx), "still running or undelivered");
-	assertEq(host.getThinkingLevel(), "high");
+	assertIncludes(notices(ctx), "consultant fallback; pi's thinking level restored");
+	assertEq(lastEntry(host).holding, false, "the fallback line closes the cycle");
 });
 
 test("agent effort: navigate before the cycle restores; navigating back releases the hold", () => {
