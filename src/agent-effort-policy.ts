@@ -263,6 +263,12 @@ export class AgentEffortPolicy {
 		this.previous = undefined;
 		this.unsupported = false;
 		this.spawns.clear();
+		// The cycle ends here, so nothing can still be owed to it: an id whose
+		// receipt never reached the model (a killed pi, a detached consult that
+		// died with its process) would otherwise refuse every later completion
+		// line, the fallback line and the independent audit on this branch, with
+		// no way out - release is the way out.
+		this.owed.clear();
 		this.resetCycle();
 		this.persist();
 		if (previous && previous !== pi.getThinkingLevel()) pi.setThinkingLevel(previous);

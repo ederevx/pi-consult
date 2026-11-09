@@ -771,6 +771,43 @@ test("agent effort: /consult-effort release restores and describe() reports the 
 	assertIncludes(notices(ctx), "effort hold:");
 });
 
+test("agent effort: a release clears an id that never delivered, so the next cycle closes", async () => {
+	const { host, ctx, policy } = setup({ level: "high" });
+	const handler = host.commands.get("consult-effort")?.handler as (
+		args: string,
+		commandCtx: unknown,
+	) => Promise<void>;
+	policy.engage(ctx as never, "c-000045");
+	await handler("release", ctx);
+	assertEq((lastEntry(host).owed as string[]).length, 0, "the released cycle owes nothing");
+
+	policy.engage(ctx as never, "c-000046");
+	policy.settle(
+		"c-000046",
+		consultDetails("c-000046", [consultRun("claude", "ok")]),
+		verdictAnswers({ claude: APPROVED_VERDICT }),
+	);
+	await host.run("Consultation cycle: complete - c-000046 verified.");
+	assertNotIncludes(notices(ctx), "still running or undelivered");
+	assertEq(host.getThinkingLevel(), "high", "the next cycle's approve line closes it");
+});
+
+test("agent effort: a released stale id no longer refuses the fallback line", async () => {
+	const { host, ctx, policy } = setup({ config: config({ codex: { enabled: false } }) });
+	const handler = host.commands.get("consult-effort")?.handler as (
+		args: string,
+		commandCtx: unknown,
+	) => Promise<void>;
+	policy.engage(ctx as never, "c-000047");
+	await handler("release", ctx);
+	policy.engage(ctx as never, "c-000048");
+	policy.settle("c-000048", consultDetails("c-000048", [consultRun("claude", "error", "boom")], false));
+	policy.observeAvailability(ctx as never, [{ name: "claude", available: false, error: "missing" }]);
+	await host.run("Consultant fallback: no consultant available - roadblock.");
+	assertNotIncludes(notices(ctx), "still running or undelivered");
+	assertEq(host.getThinkingLevel(), "high");
+});
+
 test("agent effort: navigate before the cycle restores; navigating back releases the hold", () => {
 	const { host, ctx, policy } = setup({ level: "high" });
 	policy.engage(ctx as never, "c-000037");

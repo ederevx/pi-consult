@@ -1,3 +1,16 @@
+## 0.24.4
+
+### Fixed
+
+- Ending a cycle clears what it still owed. An id whose receipt never reached
+  the model - a pi process killed mid-consult, a detached consult that died
+  with it - stayed owed for good, and through `owedRefusal` it refused every
+  later completion line, fallback line and independent audit on that branch,
+  naming a result that could never arrive. `/consult-effort release` cleared
+  the hold but not the id, so nothing ended it. `restore`, the path that ends
+  a cycle, now clears `owed` as well, which also makes release the way out of a
+  branch a dead id already blocks.
+
 # Changelog
 
 ## 0.24.3
