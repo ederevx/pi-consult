@@ -148,6 +148,7 @@ test("native consultant: a successful read then answer is usable", async () => {
 test("native consultant: failed reads never verify", async () => {
 	const cwd = join(scratchDir(), `nat-fail-${Date.now()}`);
 	mkdirSync(cwd, { recursive: true });
+	writeFileSync(join(cwd, "here.ts"), "here\n");
 	const artifacts = new ArtifactStore(join(scratchDir(), `nat3-${Date.now()}`));
 	const stream = new ScriptedStream([
 		assistant([{ type: "toolCall", id: "call-1", name: "read_file", arguments: { path: "gone.ts" } }]),
@@ -170,7 +171,14 @@ test("native consultant: failed reads never verify", async () => {
 	const transcript = JSON.parse(readFileSync(outcome.conversationPath!, "utf8"));
 	const results = transcript.filter((message: { role: string }) => message.role === "toolResult");
 	assertEq(results.length, 3, "every call received a matching result");
-	assert(results.every((message: { isError: boolean }) => message.isError), "all three failed");
+	assert(
+		results.filter((message: { isError: boolean }) => message.isError).length === 2,
+		"the missing file and the escape failed",
+	);
+	assert(
+		results.find((message: { toolCallId: string }) => message.toolCallId === "call-2").isError === false,
+		"the listing itself succeeds",
+	);
 });
 
 test("native consultant: all calls receive matching tool results", async () => {
@@ -519,4 +527,100 @@ test("invocation: the hook receives the bound context and failed primaries survi
 	assert(JSON.stringify((seen[0] as { environment: object }).environment) === '{"bound":true}',
 		"the hook sees the invocation's bound environment");
 	assertEq((seen[0] as { timeoutMs: number }).timeoutMs, 5000);
+});
+
+test("native consultant: an executor that throws still answers every call", async () => {
+	const cwd = join(scratchDir(), `nat-throw-${Date.now()}`);
+	mkdirSync(cwd, { recursive: true });
+	const artifacts = new ArtifactStore(join(scratchDir(), `nat5-${Date.now()}`));
+	const stream = new ScriptedStream([
+		assistant([
+			{ type: "toolCall", id: "call-1", name: "read_file", arguments: { path: "a.ts" } },
+			{ type: "toolCall", id: "call-2", name: "list_dir", arguments: { path: "." } },
+		]),
+	]);
+	const paths = await artifacts.prepare("s", "c-dda111222333");
+	const outcome = await new NativeConsultant({
+		registry: stream as unknown as NativeStream,
+		artifacts,
+		systemPrompt: () => "p",
+	}).consult(
+		{ provider: "one", id: "fast" },
+		"the brief",
+		paths,
+		new AbortController().signal,
+		{
+			...config(cwd),
+			tools: () => ({
+				definitions: () => [],
+				execute: async () => {
+					throw new Error("the executor broke");
+				},
+			}) as never,
+		},
+	);
+	assertEq(outcome.status, "error", "a broken executor ends the run as an error");
+	assertIncludes(outcome.error ?? "", "the executor broke", "the failure is named");
+	const transcript = JSON.parse(readFileSync(outcome.conversationPath!, "utf8"));
+	const results = transcript.filter((message: { role: string }) => message.role === "toolResult");
+	assertEq(results.length, 2, "both calls received a result, so the transcript stays replayable");
+	assertEq(results[0].toolCallId, "call-1", "the first call is answered");
+	assertEq(results[1].toolCallId, "call-2", "the call that came after the failure is answered too");
+	assert(results.every((message: { isError: boolean }) => message.isError), "each says it failed");
+});
+
+test("native fallback: a resume never inherits the earlier run's evidence", async () => {
+	const cwd = join(scratchDir(), `nat-resume-${Date.now()}`);
+	mkdirSync(cwd, { recursive: true });
+	writeFileSync(join(cwd, "a.ts"), "a\n");
+	const artifacts = new ArtifactStore(join(scratchDir(), `nat6-${Date.now()}`));
+	// A resume whose conversation answers straight away, reading nothing.
+	const stream = new ScriptedStream([assistant([textPart("served again")])]);
+	const paths = await artifacts.prepare("s", "c-ddb111222333");
+	const service = new NativeFallbackService({
+		settings: () => ({ enabled: true, maxRounds: 16 }),
+		models: () => new FallbackModels(),
+		context: () => ({
+			modelRegistry: { getAvailable: () => [{ provider: "one", id: "fast", name: "Fast" }] },
+			scopedModels: [],
+			defaults: { defaultProvider: "one", defaultModel: "fast" },
+		}),
+		native: () =>
+			new NativeConsultant({
+				registry: stream as unknown as NativeStream,
+				artifacts,
+				systemPrompt: () => "p",
+			}),
+		classifier: new FailureClassifier(),
+	} as never);
+	const result = await service.takeover({
+		consultId: "c-ddb111222333",
+		brief: "follow up",
+		paths,
+		requests: [],
+		kind: "resume",
+		metadata: {
+			fallbackFor: ["claude"],
+			selectedProvider: "one",
+			selectedModel: "fast",
+			provider: "one",
+			model: "fast",
+			verification: { kind: "native-read", paths: ["a.ts"] },
+		},
+		messages: [
+			{ role: "user", content: [{ type: "text", text: "first brief" }], timestamp: 1 },
+			{ role: "assistant", content: [{ type: "text", text: "first answer" }], timestamp: 2 },
+		],
+		results: [],
+		signal: new AbortController().signal,
+		environment: {
+			modelRegistry: { getAvailable: () => [{ provider: "one", id: "fast", name: "Fast" }] },
+			scopedModels: [],
+			defaults: { defaultProvider: "one", defaultModel: "fast" },
+		},
+		cwd,
+		timeoutMs: 5000,
+	} as never);
+	assertEq(result?.status, "unavailable", "an unanswered resume reads nothing, so it yields no verdict");
+	assertEq(result?.fallback?.verification?.paths.length ?? 0, 0, "the earlier run's reads are not this run's");
 });

@@ -28,16 +28,21 @@ export class ConsultPathsValidator {
 		return undefined;
 	}
 
+	/** The canonical root a native read is confined to, resolved once by the
+	 *  caller so the permitted tree cannot move between its calls. */
+	async canonicalRoot(cwd: string): Promise<string> {
+		return realpath(cwd);
+	}
+
 	/**
-	 * The canonical absolute path a native read may open. It throws
-	 * `ConsultPathRefusal` when the target escapes the canonical working
-	 * directory, including through a symlink; a filesystem error is passed
-	 * through as it came, so a caller can name it.
+	 * The canonical absolute path a native read may open, inside a root that
+	 * was already canonicalized. It throws `ConsultPathRefusal` when the
+	 * target escapes that root, including through a symlink; a filesystem
+	 * error is passed through as it came, so a caller can name it.
 	 */
-	async resolve(cwd: string, file: string): Promise<string> {
+	async resolve(root: string, file: string): Promise<string> {
 		const refused = this.relativeError(file);
 		if (refused) throw new ConsultPathRefusal(refused);
-		const root = await realpath(cwd);
 		const target = join(root, file);
 		let absolute: string;
 		try {

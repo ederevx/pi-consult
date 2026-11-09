@@ -86,8 +86,14 @@ export class FallbackEvidence {
 
 	/** A receipt's runs and its `ok` flag, normalized together: an unusable
 	 *  fallback answer never keeps a receipt marked successful. */
-	static normalizeDetails<T extends { runs: ConsultRun[]; ok: boolean }>(details: T): T {
-		const runs = details.runs.map((run) => FallbackEvidence.normalizeRun(run));
+	static normalizeDetails<T extends { runs: ConsultRun[]; ok: boolean; schema?: number }>(details: T): T {
+		// A receipt older than the verification rule cannot carry evidence: the
+		// field did not exist then, so a record that shows one was not written by
+		// this plugin and its claim is dropped rather than believed.
+		const runs = (details.schema !== undefined && details.schema < 3
+			? details.runs.map(FallbackEvidence.withoutVerification)
+			: details.runs
+		).map((run) => FallbackEvidence.normalizeRun(run));
 		const changed = runs.some((run, index) => run !== details.runs[index]);
 		if (!changed) return details;
 		return {
@@ -100,6 +106,12 @@ export class FallbackEvidence {
 	private static usableRun(run: ConsultRun): boolean {
 		if (run.consultant === "fallback") return FallbackEvidence.usable(run);
 		return run.status === "ok";
+	}
+
+	/** The same run with no evidence claimed for it. */
+	private static withoutVerification(run: ConsultRun): ConsultRun {
+		if (!run.fallback || run.fallback.verification === undefined) return run;
+		return { ...run, fallback: { ...run.fallback, verification: undefined } };
 	}
 
 	private static unavailableRun(run: ConsultRun): ConsultRun {

@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.24.1
+
+### Fixed
+
+- A read of a file whose last line has no newline no longer loses that line:
+  the page ends where the bound falls, and the unterminated line is the next
+  page's first line instead of being dropped. A line exactly at the byte cap
+  reads; one byte longer is refused, never cut.
+- Reading past the end of a file, or the end of a directory listing, is an
+  error that names the end rather than an empty, successful page; an empty
+  file still reads as an empty file, and an empty directory says so.
+- A directory listing keeps its continuation marker when the page fills the
+  line bound, so a page of exactly the cap's worth of entries can be followed.
+- A symlink chain is resolved to its final target before the root check, so an
+  inward link reads and a link that leaves the root - directly, through a
+  chain, or dangling - never does. The root is resolved once, when the tools
+  are built, so a working directory retargeted mid-consultation cannot widen
+  the tree.
+- A native toolkit failure can no longer escape the conversation loop: every
+  call the model made is answered with a failure result before the run ends, so
+  the transcript stays replayable and a continuation is not refused as
+  malformed.
+- A resumed fallback conversation receives only what its own invocation read:
+  a resume that read nothing is `unavailable`, the refusal it writes carries no
+  verification, and the continuation is told in plain words that the earlier
+  run's reads are history and do not license the new answer.
+- A receipt older than the verification rule (schema 2) never reads back as
+  verified: a record that shows evidence the schema did not have has the claim
+  dropped, and a receipt with no evidence cannot be `ok`.
+- The fallback disclosure still names a run's reads when the run read files but
+  did not succeed, instead of reporting that it read none, and it lists the
+  paths rather than a count.
+
 ## 0.24.0
 
 ### Added

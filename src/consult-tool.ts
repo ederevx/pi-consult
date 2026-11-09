@@ -451,7 +451,8 @@ export class ConsultTool {
 					: this.deps.config.consultant(nativeResume.targets[0] ?? "claude").timeoutMs,
 				fallback: async (context) =>
 					(await this.deps.fallback?.({
-						...context,						kind: "resume" as const,
+						...context,
+						kind: "resume" as const,
 						metadata: nativeResume.metadata,
 						messages: nativeResume.messages,
 					})) ?? {
@@ -465,6 +466,7 @@ export class ConsultTool {
 							provider: "",
 							model: "",
 							servedBy: [],
+							verification: undefined,
 							conversationPath: undefined,
 						},
 						status: "unavailable" as const,

@@ -112,9 +112,16 @@ test("native fallback: a forced continuation resumes the persisted transcript", 
 	assertEq(
 		resumed.some((message: { role: string; content?: Array<{ text?: string }> }) =>
 			message.role === "user" &&
-			message.content?.some((part) => part.text === "follow up")),
+			message.content?.some((part) => part.text?.includes("follow up"))),
 		true,
 		"the follow-up brief rides on the resumed transcript",
+	);
+	assertEq(
+		resumed.some((message: { role: string; content?: Array<{ text?: string }> }) =>
+			message.role === "user" &&
+			message.content?.some((part) => part.text?.includes("belongs to the tree as it was then"))),
+		true,
+		"the continuation names what the earlier run verified as history",
 	);
 });
 

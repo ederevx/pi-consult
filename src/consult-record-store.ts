@@ -9,6 +9,7 @@
 
 import { basename } from "node:path";
 
+
 import type { ArtifactStore, ConsultPaths } from "./artifact-store.ts";
 import type { ConsultInvocation } from "./consult-invocation.ts";
 import { FallbackEvidence } from "./fallback-evidence.ts";
@@ -23,6 +24,11 @@ import type {
 } from "./contracts.ts";
 
 export class ConsultRecordStore {
+	/** The stop reasons pi writes on an assistant message, as pi-ai names them. */
+	private static readonly STOP_REASONS = [
+		"pending", "stop", "length", "toolUse", "error", "aborted", "deferred",
+	];
+
 	private readonly artifacts: ArtifactStore;
 
 	constructor(artifacts: ArtifactStore) {
@@ -119,7 +125,11 @@ export class ConsultRecordStore {
 				return Array.isArray(record.content) && record.content.every(ConsultRecordStore.isText);
 			}
 			if (record.role === "assistant") {
-				return Array.isArray(record.content) && record.content.every(ConsultRecordStore.isAssistantBlock);
+				return (
+					Array.isArray(record.content) &&
+					record.content.every(ConsultRecordStore.isAssistantBlock) &&
+					ConsultRecordStore.isAssistantMetadata(record)
+				);
 			}
 			if (record.role === "toolResult") {
 				return (
@@ -127,7 +137,8 @@ export class ConsultRecordStore {
 					typeof record.toolName === "string" &&
 					typeof record.isError === "boolean" &&
 					Array.isArray(record.content) &&
-					record.content.every(ConsultRecordStore.isText)
+					record.content.every(ConsultRecordStore.isText) &&
+					ConsultRecordStore.isOptional(record.timestamp, (value) => typeof value === "number")
 				);
 			}
 			return false;
@@ -272,8 +283,37 @@ export class ConsultRecordStore {
 		return part.type === "text" && typeof part.text === "string";
 	}
 
+	/**
+	 * An assistant record's own fields: replaying a message the provider
+	 * cannot read is worse than refusing the continuation, so a field this
+	 * version writes is checked when it is present, and a reading it would
+	 * never write is refused. Older records without the fields still resume.
+	 */
+	private static isAssistantMetadata(record: Record<string, unknown>): boolean {
+		return (
+			ConsultRecordStore.isOptional(record.api, (value) => typeof value === "string") &&
+			ConsultRecordStore.isOptional(record.provider, (value) => typeof value === "string") &&
+			ConsultRecordStore.isOptional(record.model, (value) => typeof value === "string") &&
+			ConsultRecordStore.isOptional(record.timestamp, (value) => typeof value === "number") &&
+			ConsultRecordStore.isOptional(
+				record.stopReason,
+				(value) => typeof value === "string" && ConsultRecordStore.STOP_REASONS.includes(value as never),
+			) &&
+			ConsultRecordStore.isOptional(
+				record.usage,
+				(value) => typeof value === "object" && value !== null,
+			)
+		);
+	}
+
+	/** A field that may be absent, but is checked whenever it is present. */
+	private static isOptional(value: unknown, is: (value: unknown) => boolean): boolean {
+		return value === undefined || is(value);
+	}
+
 	/** An assistant content block: text, thinking with its text, or a
-	 *  tool call with string id, string name, and object arguments. */	private static isAssistantBlock(block: unknown): boolean {
+	 *  tool call with string id, string name, and object arguments. */
+	private static isAssistantBlock(block: unknown): boolean {
 		if (typeof block !== "object" || block === null) return false;
 		const part = block as { type?: unknown; text?: unknown; thinking?: unknown; id?: unknown; name?: unknown; arguments?: unknown };
 		if (part.type === "text") return typeof part.text === "string";

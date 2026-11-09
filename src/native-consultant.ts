@@ -22,7 +22,7 @@ import type {
 } from "./contracts.ts";
 import { REASONING_LEVELS } from "./contracts.ts";
 import { FallbackEvidence } from "./fallback-evidence.ts";
-import { NativeReadTools } from "./native-read-tools.ts";
+import { NativeReadTools, type NativeReadResult } from "./native-read-tools.ts";
 
 /** The registry seam the conversation streams through. */
 export interface NativeStream {
@@ -44,6 +44,9 @@ export interface NativeConfig {
 	maxRounds: number;
 	/** The consultation's working directory: the root every read stays under. */
 	cwd: string;
+	/** The read executor; a test substitutes one to prove a failure still
+	 *  answers every call it was given. */
+	tools?: (cwd: string) => NativeReadTools;
 }
 
 /** What one native conversation produced. */
@@ -97,13 +100,18 @@ export class NativeConsultant {
 		conversation?: Message[],
 	): Promise<NativeOutcome> {
 		const startedAt = Date.now();
-		const messages: Message[] = conversation
-			? [...conversation, { role: "user", content: [{ type: "text", text: brief }] }]
-			: [{ role: "user", content: [{ type: "text", text: brief }] }];
+		// A message carries its own timestamp: a transcript that loses them
+		// cannot be replayed as pi messages on a later continuation.
+		const opening = {
+			role: "user" as const,
+			content: [{ type: "text" as const, text: brief }],
+			timestamp: Date.now(),
+		};
+		const messages: Message[] = conversation ? [...conversation, opening] : [opening];
 		const usage = { inputTokens: 0, outputTokens: 0, costUsd: 0 };
 		const sawUsage = { any: false };
 		const serving = new Map<string, { provider: string; model: string }>();
-		const tools = new NativeReadTools(config.cwd);
+		const tools = config.tools ? config.tools(config.cwd) : new NativeReadTools(config.cwd);
 		const definitions = tools.definitions();
 		// Every successful content read in this invocation, and only those:
 		// a listing or a failed read never becomes evidence.
@@ -200,7 +208,22 @@ export class NativeConsultant {
 					stopped = true;
 					break;
 				}
-				const result = await tools.execute(call, deadline);
+				let result: NativeReadResult;
+				try {
+					result = await tools.execute(call, deadline);
+				} catch (thrown) {
+					// An execution that throws must still answer every call it
+					// was given, or the next round is malformed: cancel this
+					// one and the rest, and end the run.
+					const reason = `the native fallback tool failed: ${
+						thrown instanceof Error ? thrown.message : String(thrown)
+					}`;
+					NativeConsultant.cancel(messages, calls.slice(index), reason);
+					status = "error";
+					error = reason;
+					stopped = true;
+					break;
+				}
 				messages.push(result.message);
 				if (result.readPath !== undefined && !result.message.isError) {
 					reads.add(result.readPath);

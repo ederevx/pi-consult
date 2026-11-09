@@ -101,18 +101,30 @@ export class AnswerFormatter {
 		return `${provenance} ${AnswerFormatter.verification(run)}`;
 	}
 
-	/** What this run's evidence does and does not license. */
+	/**
+	 * What this run's evidence is, and what it licenses - named apart, because
+	 * a run that read files and still failed must not be reported as having
+	 * read none, and a reader deciding on an approval needs the paths, not a
+	 * count.
+	 */
 	private static verification(run: ConsultDetails["runs"][number]): string {
-		if (FallbackEvidence.usable(run)) {
-			const count = FallbackEvidence.valid(run.fallback?.verification)?.paths.length ?? 0;
+		const evidence = FallbackEvidence.valid(run.fallback?.verification);
+		if (!evidence) {
 			return (
-				`Native fallback verification: ${count} distinct file(s) read in this ` +
-				"invocation; this is a native fallback answer, not a primary consultant's verdict."
+				"Native fallback verification: no successful file read in this invocation; " +
+				"its answer is unavailable and cannot close a consultation."
+			);
+		}
+		const paths = JSON.stringify(evidence.paths);
+		if (!FallbackEvidence.usable(run)) {
+			return (
+				`Native fallback verification: read ${paths} in this invocation, but the ` +
+				"run did not succeed; its answer cannot close a consultation."
 			);
 		}
 		return (
-			"Native fallback verification: no successful file read in this invocation; " +
-			"its answer is unavailable and cannot close a consultation."
+			`Native fallback verification: read ${paths} in this invocation; this is a ` +
+			"native fallback answer, not a primary consultant's verdict."
 		);
 	}
 

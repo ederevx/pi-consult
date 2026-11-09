@@ -34,10 +34,17 @@ const CHUNK = 64 * 1024;
 /** One line longer than a whole page cannot be a page: it is refused. */
 const OVERSIZED = "oversized";
 const BINARY = "binary";
+const ABORTED = "aborted";
 
 export class NativeReadTools {
 	private readonly cwd: string;
 	private readonly paths = new ConsultPathsValidator();
+	/**
+	 * The canonical root, resolved once: the permitted tree must not move
+	 * under a consultation, so a retargeted working-directory symlink cannot
+	 * switch which files a later call may read.
+	 */
+	private root?: Promise<string>;
 
 	constructor(cwd: string) {
 		this.cwd = cwd;
@@ -61,13 +68,14 @@ export class NativeReadTools {
 			return { message: NativeReadTools.failure(call, `aborted before ${call.name} ran`) };
 		}
 		return call.name === READ
-			? this.read(call, args as { path: string; offset?: number; limit?: number })
-			: this.list(call, args as { path: string; offset?: number });
+			? this.read(call, args as { path: string; offset?: number; limit?: number }, signal)
+			: this.list(call, args as { path: string; offset?: number }, signal);
 	}
 
 	private async read(
 		call: ToolCall,
 		args: { path: string; offset?: number; limit?: number },
+		signal: AbortSignal,
 	): Promise<NativeReadResult> {
 		const file = args.path;
 		const offset = args.offset ?? 1;
@@ -76,7 +84,7 @@ export class NativeReadTools {
 			return { message: NativeReadTools.failure(call, `invalid arguments for ${call.name}`) };
 		}
 		try {
-			const absolute = await this.paths.resolve(this.cwd, file);
+			const absolute = await this.paths.resolve(await this.canonicalRoot(), file);
 			const info = await stat(absolute);
 			if (info.isDirectory()) {
 				return { message: NativeReadTools.failure(call, `cannot read a directory: ${file}`) };
@@ -87,9 +95,18 @@ export class NativeReadTools {
 				};
 			}
 			if (info.size === 0) {
-				return NativeReadTools.answer(call, `${file} (from line 1)\n(empty file)`, file);
+				// An empty file has exactly one page, at line 1: a later offset
+				// reads nothing, and must not look like a successful read.
+				return offset === 1
+					? NativeReadTools.answer(call, `${file} (from line 1)\n(empty file)`, file)
+					: {
+						message: NativeReadTools.failure(
+							call,
+							`line ${offset} is beyond the end of file: ${file}`,
+						),
+					};
 			}
-			const page = await NativeReadTools.page(absolute, offset, limit);
+			const page = await NativeReadTools.page(absolute, offset, limit, signal);
 			if (page.next === undefined && page.lines === 0) {
 				return {
 					message: NativeReadTools.failure(
@@ -110,24 +127,29 @@ export class NativeReadTools {
 		}
 	}
 
-	private async list(call: ToolCall, args: { path: string; offset?: number }): Promise<NativeReadResult> {
+	private async list(
+		call: ToolCall,
+		args: { path: string; offset?: number },
+		signal: AbortSignal,
+	): Promise<NativeReadResult> {
 		const dir = args.path;
 		const offset = args.offset ?? 1;
 		if (!Number.isInteger(offset) || offset < 1) {
 			return { message: NativeReadTools.failure(call, `invalid arguments for ${call.name}`) };
 		}
 		try {
-			const absolute = await this.paths.resolve(this.cwd, dir);
+			const absolute = await this.paths.resolve(await this.canonicalRoot(), dir);
 			const info = await stat(absolute);
 			if (!info.isDirectory()) {
 				return { message: NativeReadTools.failure(call, `not a directory: ${dir}`) };
 			}
 			const entries: Array<{ name: string; type: string }> = [];
 			for (const entry of await readdir(absolute, { withFileTypes: true })) {
+				NativeReadTools.check(signal);
 				entries.push({ name: entry.name, type: NativeReadTools.type(entry) });
 			}
 			entries.sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
-			if (offset > entries.length) {
+			if (offset > Math.max(entries.length, 1)) {
 				return {
 					message: NativeReadTools.failure(
 						call,
@@ -135,22 +157,24 @@ export class NativeReadTools {
 					),
 				};
 			}
-			const page = entries.slice(offset - 1, offset - 1 + DEFAULT_MAX_LINES);
-			const next = offset - 1 + page.length < entries.length ? offset + page.length : undefined;
-			const lines = page.map((entry) => `- ${JSON.stringify(entry.name)} (${entry.type})`);
-			if (lines.length === 0) lines.push("(empty directory)");
-			if (next !== undefined) {
-				lines.push(
-					`[truncated: continue with list_dir ${JSON.stringify({ path: dir, offset: next })}]`,
-				);
+			if (entries.length === 0) {
+				return NativeReadTools.answer(call, `${dir}\n(empty directory)`);
 			}
-			return NativeReadTools.answer(
-				call,
-				`${dir}\n${truncateHead(lines.join("\n"), {
-					maxBytes: DEFAULT_MAX_BYTES,
-					maxLines: DEFAULT_MAX_LINES,
-				}).content}`,
+			// The cap applies to entries, and the continuation marker sits
+			// outside it: truncating the assembled text would eat the marker
+			// and silently drop entries the model was told to expect.
+			const page = entries.slice(offset - 1, offset - 1 + DEFAULT_MAX_LINES);
+			const bounded = truncateHead(
+				page.map((entry) => `- ${JSON.stringify(entry.name)} (${entry.type})`).join("\n"),
+				{ maxBytes: DEFAULT_MAX_BYTES, maxLines: DEFAULT_MAX_LINES },
 			);
+			const next = offset + bounded.outputLines <= entries.length
+				? offset + bounded.outputLines
+				: undefined;
+			const marker = next === undefined
+				? ""
+				: `\n[truncated: continue with list_dir ${JSON.stringify({ path: dir, offset: next })}]`;
+			return NativeReadTools.answer(call, `${dir}\n${bounded.content}${marker}`);
 		} catch (error) {
 			return { message: NativeReadTools.failure(call, NativeReadTools.listError(error, dir)) };
 		}
@@ -161,6 +185,7 @@ export class NativeReadTools {
 		absolute: string,
 		offset: number,
 		limit: number,
+		signal: AbortSignal,
 	): Promise<{ text: string; next?: number; lines: number }> {
 		const handle = await open(absolute, "r");
 		try {
@@ -172,6 +197,7 @@ export class NativeReadTools {
 			let next: number | undefined;
 			const chunk = Buffer.allocUnsafe(CHUNK);
 			reading: while (next === undefined) {
+				NativeReadTools.check(signal);
 				const { bytesRead } = await handle.read(chunk, 0, chunk.length, position);
 				if (bytesRead === 0) break;
 				position += bytesRead;
@@ -197,9 +223,13 @@ export class NativeReadTools {
 				}
 			}
 			if (next === undefined && buffered.length > 0) {
+				// The last line of a file need not end in a newline, and the
+				// page bound can end right before it: it is the next line, so
+				// the marker must name it rather than letting it vanish.
 				const taken = NativeReadTools.take(buffered, line, offset, limit, kept.length, keptBytes);
 				if (taken === OVERSIZED) throw new Error(`${OVERSIZED}:${line}`);
-				if (taken === "kept") {
+				if (taken === "stop") next = line;
+				else if (taken === "kept") {
 					kept.push(NativeReadTools.line(buffered));
 					keptBytes += buffered.length + 1;
 				}
@@ -209,6 +239,17 @@ export class NativeReadTools {
 		} finally {
 			await handle.close();
 		}
+	}
+
+	/** The canonical working directory, resolved once for this instance. */
+	private canonicalRoot(): Promise<string> {
+		this.root ??= this.paths.canonicalRoot(this.cwd);
+		return this.root;
+	}
+
+	/** A read that outlived its whole-run deadline stops at the next chunk. */
+	private static check(signal: AbortSignal): void {
+		if (signal.aborted) throw new Error(ABORTED);
 	}
 
 	/** Whether one line is before the page, in it, ends it, or is too big. */
@@ -244,6 +285,7 @@ export class NativeReadTools {
 	private static readError(error: unknown, file: string): string {
 		if (error instanceof ConsultPathRefusal) return error.message;
 		if (error instanceof Error) {
+			if (error.message === ABORTED) return `aborted before the read finished: ${file}`;
 			if (error.message.startsWith(OVERSIZED)) {
 				const line = error.message.slice(OVERSIZED.length + 1);
 				return `line ${line} exceeds the ${DEFAULT_MAX_BYTES}-byte read limit: ${file}`;
@@ -260,6 +302,9 @@ export class NativeReadTools {
 
 	private static listError(error: unknown, dir: string): string {
 		if (error instanceof ConsultPathRefusal) return error.message;
+		if (error instanceof Error && error.message === ABORTED) {
+			return `aborted before the listing finished: ${dir}`;
+		}
 		const code = NativeReadTools.code(error);
 		if (code === "ENOENT") return `directory not found: ${dir}`;
 		return `cannot list directory: ${dir}`;

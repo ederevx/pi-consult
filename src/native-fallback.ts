@@ -10,6 +10,7 @@
 
 import type { ConsultRequest, ConsultantResult, FallbackMetadata, RunParticipant } from "./contracts.ts";
 import type { ConsultPaths } from "./artifact-store.ts";
+import { FallbackEvidence } from "./fallback-evidence.ts";
 import { FallbackModels } from "./fallback-models.ts";
 import type { FallbackSettings } from "./consult-config.ts";
 import type { FailureClassifier } from "./failure-classifier.ts";
@@ -103,7 +104,9 @@ export class NativeFallbackService {
 
 		const outcome = await native.consult(
 			choice.model,
-			context.brief,
+			context.kind === "resume"
+				? NativeFallbackService.continuation(context.metadata.verification, context.brief)
+				: context.brief,
 			context.paths,
 			context.signal,
 			{
@@ -139,6 +142,25 @@ export class NativeFallbackService {
 			error: outcome.error,
 			warnings,
 		};
+	}
+
+	/**
+	 * The message a continuation opens with: what the earlier run verified is
+	 * history, and this invocation must verify the tree it is asked about. The
+	 * transcript alone would let a remembered read pass for a fresh one.
+	 */
+	private static continuation(verification: unknown, brief: string): string {
+		const earlier = FallbackEvidence.valid(verification)?.paths ?? [];
+		const history = earlier.length === 0
+			? "The earlier run of this conversation verified no files."
+			: `The earlier run of this conversation verified: ${JSON.stringify(earlier)}.`;
+		return [
+			history,
+			"That verification belongs to the tree as it was then, and does not license this answer.",
+			"Read the files this brief is about, in this invocation, before you answer.",
+			"",
+			brief,
+		].join("\n");
 	}
 
 	/** Whether one failed primary result may hand its work to the fallback. */
