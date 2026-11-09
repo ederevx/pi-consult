@@ -10,7 +10,8 @@
  * what this branch actually recorded.
  */
 
-import { RESULT_MESSAGE, type ConsultDetails } from "./contracts.ts";
+import { RESULT_MESSAGE, type ConsultDetails, type ConsultRun } from "./contracts.ts";
+import { FallbackEvidence } from "./fallback-evidence.ts";
 
 /** The structural subset of a session entry this module reads. */
 export interface BranchEntry {
@@ -101,7 +102,13 @@ export class ReceiptLedger {
 		if (typeof details.consultId !== "string" || details.consultId === "-") return undefined;
 		if (!Array.isArray(details.runs) || details.runs.length === 0) return undefined;
 		if ((details.schema === 2 || details.schema === 3) && details.phase !== "complete") return undefined;
-		return details as unknown as ConsultDetails;
+		// History reads the same rule the disk does: a fallback answer without
+		// evidence cannot stay a successful run just because a session entry
+		// carried it.
+		const normalized = FallbackEvidence.normalizeDetails(
+			details as unknown as { runs: ConsultRun[]; ok: boolean },
+		);
+		return normalized as unknown as ConsultDetails;
 	}
 
 	/** The structured details of a finished-receipt entry: a delivered

@@ -70,6 +70,10 @@ export interface FallbackSettings {
 	model?: string;
 	/** The reasoning effort the fallback stream runs at; absent follows pi-ai's default. */
 	reasoning?: ReasoningLevel;
+	/** The most model requests one fallback conversation may make, its final
+	 *  answer included. The read loop bills a request per step, and the run's
+	 *  timeout bounds time, not requests. */
+	maxRounds: number;
 }
 
 export class ConsultConfig {
@@ -78,6 +82,7 @@ export class ConsultConfig {
 	static readonly DEFAULT_ANSWER_BYTES = 12_000;
 	static readonly DEFAULT_MAX_LINES = 800;
 	static readonly DEFAULT_SILENCE_NOTICE_MS = 300_000;
+	static readonly DEFAULT_FALLBACK_MAX_ROUNDS = 16;
 	private static readonly DEFAULT_ARTIFACT_DIR_NAME = "pi-consult";
 	private static readonly DEFAULT_GATE_ALLOW = [
 		"pre_memory",
@@ -130,6 +135,10 @@ export class ConsultConfig {
 			enabled: ConsultConfig.bool(fallback.enabled, true),
 			model: fallbackModel || undefined,
 			reasoning: ConsultConfig.reasoning(fallback.reasoning),
+			maxRounds: ConsultConfig.positiveNumber(
+				fallback.maxRounds,
+				ConsultConfig.DEFAULT_FALLBACK_MAX_ROUNDS,
+			),
 		};
 
 		this.claude = ConsultConfig.consultantSettings(

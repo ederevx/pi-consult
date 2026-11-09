@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.24.0
+
+### Added
+
+- The native fallback consultant is offered two read-only tools, `read_file`
+  and `list_dir`, rooted in the invocation's working directory, so a fallback
+  answer that evaluates a change is an answer that saw it. Paths must be
+  relative and stay inside the root - `..`, absolute paths, and symlinks that
+  leave it are refused - and only text is read: pi's own line and byte caps
+  impose pagination, and an oversized or unreadable line is reported instead
+  of being truncated.
+- A native fallback run is verified only by a file it actually read. An
+  unverified run is `unavailable`: it is not a verdict, its approval closes
+  nothing, and the receipt records the paths the run read. A continued
+  conversation is told what the earlier run verified and must verify again in
+  its own run, so a continuation after an edit is never an approval of code
+  the consultant never saw.
+
+### Changed
+
+- The fallback disclosure names the files the serving run read, and the
+  fallback role tells it listings and failed reads confer no evidence.
+
 ## 0.23.4
 
 ### Fixed

@@ -5,7 +5,8 @@
  * text that is written to a consultant's stdin. Claude receives its role
  * through `--append-system-prompt`; Codex, which has no system-prompt flag,
  * receives it inline at the top of the same text. The native fallback runs
- * under its own context-only role, because it has no tools at all.
+ * under its own preamble: it reads files through pi-consult's in-process
+ * tools, and its answer is usable only with evidence of that.
  */
 
 export class BriefComposer {
@@ -18,10 +19,24 @@ export class BriefComposer {
 	].join("\n");
 
 	private static readonly CONTEXT_ONLY = [
-		"You are an external implementation consultant working from the supplied",
-		"context only. You have no file-reading or execution tools and cannot ask pi",
-		"to execute actions. Return your findings and proposed changes as prose, with",
-		"code or patches where useful. State what you could not verify.",
+		"You are a native fallback implementation consultant. Use read_file and",
+		"list_dir to inspect the consultation working directory. Paths must be",
+		"relative and remain inside it. You cannot modify files, execute commands,",
+		"or ask pi to execute actions.",
+	].join("\n");
+
+	private static readonly FRESH_READS = [
+		"Before answering, successfully read the files needed for this invocation.",
+		"Earlier conversation reads do not verify the current tree. Directory",
+		"listings and failed reads do not count. Follow truncation markers when",
+		"omitted content matters.",
+	].join("\n");
+
+	private static readonly DISCLOSURE = [
+		"State which files you read and what you could not verify. A successful",
+		"read establishes access, not review completeness. If you cannot read the",
+		"necessary files, do not issue an approval. Your answer is a native",
+		"fallback answer, not a primary consultant's verdict.",
 	].join("\n");
 
 	private static readonly GUIDANCE = [
@@ -54,9 +69,15 @@ export class BriefComposer {
 		return [BriefComposer.NATIVE_READS, BriefComposer.GUIDANCE, BriefComposer.VERIFICATION].join("\n\n");
 	}
 
-	/** The role the native fallback runs under: supplied context only. */
+	/** The role the native fallback runs under: its own read-only tools. */
 	contextPrompt(): string {
-		return [BriefComposer.CONTEXT_ONLY, BriefComposer.GUIDANCE, BriefComposer.VERIFICATION].join("\n\n");
+		return [
+			BriefComposer.CONTEXT_ONLY,
+			BriefComposer.FRESH_READS,
+			BriefComposer.DISCLOSURE,
+			BriefComposer.GUIDANCE,
+			BriefComposer.VERIFICATION,
+		].join("\n\n");
 	}
 
 	/** Compose the text sent to a consultant. */

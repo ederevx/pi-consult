@@ -11,6 +11,7 @@ import { basename } from "node:path";
 
 import type { ArtifactStore, ConsultPaths } from "./artifact-store.ts";
 import type { ConsultInvocation } from "./consult-invocation.ts";
+import { FallbackEvidence } from "./fallback-evidence.ts";
 import type {
 	ConsultDetails,
 	ConsultReceipt,
@@ -52,7 +53,10 @@ export class ConsultRecordStore {
 	): Promise<ConsultReceipt> {
 		const runs: ConsultRun[] = [];
 		const answers = new Map<RunParticipant, string>();
-		for (const result of results) {
+		for (const raw of results) {
+			// An answer that did not read a file is stored as the refusal it is,
+			// so a record never claims more than the invocation earned.
+			const result = FallbackEvidence.normalizeResult(raw);
 			const answerPath = invocation.paths.answer(result.consultant);
 			const warnings = [...result.warnings];
 			let stored = false;
@@ -82,6 +86,7 @@ export class ConsultRecordStore {
 				durationMs: result.durationMs,
 				exitCode: result.exitCode,
 				error: result.error,
+				errorCode: result.errorCode,
 				usage: result.usage,
 				warnings,
 			});
@@ -96,7 +101,8 @@ export class ConsultRecordStore {
 	}
 
 	/** Load and validate one persisted fallback transcript: an array of
-	 *  message records, or undefined when it is missing or malformed. */
+	 *  message records whose tool results answer the calls before them, or
+	 *  undefined when it is missing or malformed. */
 	async conversation(path: string | undefined): Promise<unknown[] | undefined> {
 		if (!path) return undefined;
 		let parsed: unknown;
@@ -108,7 +114,7 @@ export class ConsultRecordStore {
 		if (!Array.isArray(parsed)) return undefined;
 		const wellFormed = parsed.every((message) => {
 			if (typeof message !== "object" || message === null) return false;
-			const record = message as { role?: unknown; content?: unknown; toolCallId?: unknown; toolName?: unknown };
+			const record = message as { role?: unknown; content?: unknown; toolCallId?: unknown; toolName?: unknown; isError?: unknown };
 			if (record.role === "user") {
 				return Array.isArray(record.content) && record.content.every(ConsultRecordStore.isText);
 			}
@@ -119,13 +125,15 @@ export class ConsultRecordStore {
 				return (
 					typeof record.toolCallId === "string" &&
 					typeof record.toolName === "string" &&
+					typeof record.isError === "boolean" &&
 					Array.isArray(record.content) &&
 					record.content.every(ConsultRecordStore.isText)
 				);
 			}
 			return false;
 		});
-		return wellFormed ? parsed : undefined;
+		if (!wellFormed) return undefined;
+		return ConsultRecordStore.paired(parsed as Array<Record<string, unknown>>) ? parsed : undefined;
 	}
 
 	/** Read a finished consult's receipt back from disk. */
@@ -201,6 +209,9 @@ export class ConsultRecordStore {
 		if (!details || (details.schema !== 2 && details.schema !== 3) || !Array.isArray(details.runs)) {
 			return undefined;
 		}
+		// A record written before the evidence rule reads the same way this
+		// version would have written it: an unverified fallback is unusable.
+		details = FallbackEvidence.normalizeDetails(details);
 		const answers = new Map<RunParticipant, string>();
 		for (const run of details.runs) {
 			if (!run.answerPath) continue;
@@ -262,8 +273,7 @@ export class ConsultRecordStore {
 	}
 
 	/** An assistant content block: text, thinking with its text, or a
-	 *  tool call with string id, string name, and object arguments. */
-	private static isAssistantBlock(block: unknown): boolean {
+	 *  tool call with string id, string name, and object arguments. */	private static isAssistantBlock(block: unknown): boolean {
 		if (typeof block !== "object" || block === null) return false;
 		const part = block as { type?: unknown; text?: unknown; thinking?: unknown; id?: unknown; name?: unknown; arguments?: unknown };
 		if (part.type === "text") return typeof part.text === "string";
@@ -278,6 +288,29 @@ export class ConsultRecordStore {
 			);
 		}
 		return false;
+	}
+
+	/** Whether every tool result answers the call before it, with the same
+	 *  id and name, so a resumed conversation holds no dangling call. */
+	private static paired(messages: Array<Record<string, unknown>>): boolean {
+		let open: Array<{ id: string; name: string }> = [];
+		for (const message of messages) {
+			if (message.role === "assistant") {
+				if (open.length > 0) return false;
+				open = (message.content as Array<Record<string, unknown>>)
+					.filter((part) => part.type === "toolCall")
+					.map((part) => ({ id: part.id as string, name: part.name as string }));
+				continue;
+			}
+			if (message.role === "toolResult") {
+				const index = open.findIndex((call) => call.id === message.toolCallId);
+				if (index === -1 || open[index].name !== message.toolName) return false;
+				open.splice(index, 1);
+				continue;
+			}
+			if (open.length > 0) return false;
+		}
+		return open.length === 0;
 	}
 
 	private static unfinished(state: string): boolean {

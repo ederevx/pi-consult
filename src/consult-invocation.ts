@@ -146,6 +146,7 @@ export class ConsultInvocation {
 								consultId: this.consultId,
 								brief: this.spec.brief,
 								paths: this.paths,
+								cwd: this.spec.cwd,
 								requests: this.spec.requests,
 								results,
 								signal: this.controller.signal,

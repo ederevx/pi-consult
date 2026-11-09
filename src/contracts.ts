@@ -20,8 +20,21 @@ export type ReasoningLevel = "minimal" | "low" | "medium" | "high" | "xhigh" | "
 export const REASONING_LEVELS: readonly ReasoningLevel[] =
 	["minimal", "low", "medium", "high", "xhigh", "max"];
 
+/** What a native fallback did in the invocation that produced its answer. */
+export interface FallbackVerification {
+	kind: "native-read";
+	/** The distinct files the invocation read successfully, in read order. */
+	paths: string[];
+}
+
+/** A typed reason a native fallback answer is not usable as it stands. */
+export type FallbackErrorCode = "fallback_unverified";
+
 /** Provenance of a native fallback run: what it replaced and who served it. */
 export interface FallbackMetadata {
+	/** Evidence from the invocation that answered; absent on legacy records,
+	 *  which reads as unverified. */
+	verification?: FallbackVerification;
 	/** The consultant CLIs whose eligible failures triggered the takeover. */
 	fallbackFor: ConsultantName[];
 	/** The configured model to resume, provider and id as selected. */
@@ -93,6 +106,8 @@ export interface ConsultRun {
 	durationMs: number;
 	exitCode: number | null;
 	error?: string;
+	/** A typed reason the run is unusable, when its status alone is too coarse. */
+	errorCode?: FallbackErrorCode;
 	usage?: ConsultantUsage;
 	warnings: string[];
 }
@@ -195,6 +210,8 @@ export interface ConsultantResult {
 	durationMs: number;
 	exitCode: number | null;
 	error?: string;
+	/** A typed reason the result is unusable, when its status alone is too coarse. */
+	errorCode?: FallbackErrorCode;
 	warnings: string[];
 }
 

@@ -23,7 +23,7 @@ export interface ConsultantTarget {
 
 export class ConsultContract {
 	/** Bump when the acknowledgement terms change; old receipts stop counting. */
-	static readonly VERSION = 18;
+	static readonly VERSION = 19;
 
 	/** The acknowledgement text the agent accepts by calling `pre_consult`. */
 	contractText(targets: readonly ConsultantTarget[]): string {
@@ -42,8 +42,10 @@ export class ConsultContract {
 			"- Consultants are read-only advisors: they must not modify the working",
 			"  tree, and pi executes every change itself.",
 			"- A consultant CLI inspects files with its own native read-only tools;",
-			"  the native fallback works from the supplied brief alone. pi mediates",
-			"  no individual read, so the files a CLI opens leave this machine too.",
+			"  the native fallback reads files through pi-consult's in-process",
+			"  read-only tools, and the file contents they return leave this machine",
+			"  for the selected model's provider too. pi mediates no individual read,",
+			"  so the files a CLI opens leave this machine as well.",
 			"- Interrupting a consult (Escape, or a queued user message) does not cancel",
 			"  it: the call returns with its consult id and the consultation keeps",
 			"  running in the background. When it finishes, its full result arrives in",
@@ -57,6 +59,13 @@ export class ConsultContract {
 			"  disclosed in the answer with its model and cost. A continuation of",
 			"  a fallback-served consult resumes that private transcript; its",
 			"  answer is one perspective, never two.",
+			"- A native fallback answer is usable only after a successful file read",
+			"  in the current invocation. An unverified fallback is unavailable and",
+			"  cannot supply an approval or close a consultation; the answer arrives",
+			"  as its refusal, with no verdict.",
+			"- A read-verified native fallback remains a disclosed fallback",
+			"  perspective: it must satisfy the same convention-audit and verdict",
+			"  requirements as any consultant answer before it can close a cycle.",
 			"- Each brief is persisted under the pi-consult artifact directory before it",
 			"  is sent, as the audit record of what left the machine.",
 			"- By calling pre_consult you acknowledge the terms above and the workflow",
@@ -250,6 +259,11 @@ export class ConsultContract {
 			"  consultation, which still goes to the independent agent above. Say so",
 			"  and why on a line of its own, in this form:",
 			"    Consultant fallback: no consultant available - <one-line reason>.",
+			"  When a native fallback is unverified, state that same line and give",
+			"  no approval: it does not satisfy a closing consultation, so continue",
+			"  the existing consultant and independent-auditor ladder.",
+			"  One requested consultant's failure never implies that every enabled",
+			"  consultant has expired; only the record of every enabled one does.",
 			"  pi-consult restores your thinking level when you state that line, but",
 			"  only if its own records agree that every enabled consultant has expired",
 			"  and nothing is owed.",

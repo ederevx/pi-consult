@@ -77,6 +77,7 @@ export class ConsultSettings {
 		{ key: "fallback.enabled", label: "Native fallback", path: ["fallback", "enabled"], kind: "boolean", values: ["off", "on"], description: "Let an available pi model serve a consultation whose consultant failed" },
 		{ key: "fallback.model", label: "Fallback model", path: ["fallback", "model"], kind: "model", description: "The pi model that serves a failed consultation; unset follows pi's default" },
 		{ key: "fallback.reasoning", label: "Fallback reasoning", path: ["fallback", "reasoning"], kind: "enum", valuesFromModel: true, description: "Reasoning effort for the fallback model; offered levels come from the model, unset follows its default" },
+		{ key: "fallback.maxRounds", label: "Fallback rounds", path: ["fallback", "maxRounds"], kind: "number", description: "Maximum model requests in one native fallback invocation, including its final answer" },
 	];
 
 	private readonly store: ConsultSettingsStore;

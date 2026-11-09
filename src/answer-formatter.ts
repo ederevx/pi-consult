@@ -8,6 +8,7 @@
 
 import type { ConsultDetails, RunParticipant } from "./contracts.ts";
 import type { OutputSettings } from "./consult-config.ts";
+import { FallbackEvidence } from "./fallback-evidence.ts";
 
 /** Truncation metadata for one answer. */
 export interface TruncatedText {
@@ -17,6 +18,14 @@ export interface TruncatedText {
 }
 
 export class AnswerFormatter {
+	/** The refused answer's own block: no text, no verdict, one reason. */
+	static readonly UNAVAILABLE =
+		"Consultant fallback: no consultant available - the native fallback " +
+		"produced an answer without a successful file read in this invocation.";
+	static readonly VERIFIED_ANSWER =
+		"Native fallback answer; current-invocation file reads are recorded. " +
+		"Review completeness still depends on the evidence and stated limitations.";
+
 	private readonly output: OutputSettings;
 
 	constructor(output: OutputSettings) {
@@ -40,7 +49,9 @@ export class AnswerFormatter {
 		];
 		const sections: string[] = [];
 		for (const run of details.runs) {
-			const answer = answers.get(run.consultant) ?? "";
+			const verified = FallbackEvidence.usable(run);
+			const blocked = run.consultant === "fallback" && !verified && run.fallback !== undefined;
+			const answer = blocked ? "" : answers.get(run.consultant) ?? "";
 			sections.push(
 				this.section(
 					run.consultant,
@@ -51,6 +62,9 @@ export class AnswerFormatter {
 					run.answerPath,
 					perRun,
 					run.warnings,
+					blocked
+						? AnswerFormatter.UNAVAILABLE
+						: verified ? AnswerFormatter.VERIFIED_ANSWER : undefined,
 				),
 			);
 		}
@@ -81,9 +95,24 @@ export class AnswerFormatter {
 			? `${fallback.provider}/${fallback.model}`
 			: "actual responder unavailable";
 		const reasoning = fallback.reasoning ? ` at ${fallback.reasoning} reasoning` : "";
-		return (
+		const provenance =
 			`Native fallback ${served} this consultation: ${responder}${routed}${reasoning}; ` +
-			`cost ${amount}; replaced ${fallback.fallbackFor.join(", ")}.`
+			`cost ${amount}; replaced ${fallback.fallbackFor.join(", ")}.`;
+		return `${provenance} ${AnswerFormatter.verification(run)}`;
+	}
+
+	/** What this run's evidence does and does not license. */
+	private static verification(run: ConsultDetails["runs"][number]): string {
+		if (FallbackEvidence.usable(run)) {
+			const count = FallbackEvidence.valid(run.fallback?.verification)?.paths.length ?? 0;
+			return (
+				`Native fallback verification: ${count} distinct file(s) read in this ` +
+				"invocation; this is a native fallback answer, not a primary consultant's verdict."
+			);
+		}
+		return (
+			"Native fallback verification: no successful file read in this invocation; " +
+			"its answer is unavailable and cannot close a consultation."
 		);
 	}
 
@@ -102,6 +131,7 @@ export class AnswerFormatter {
 		answerPath: string | undefined,
 		budget: number,
 		warnings: readonly string[],
+		note?: string,
 	): string {
 		const lines = [`=== ${name} ===`];
 		if (status !== "ok") {
@@ -111,6 +141,14 @@ export class AnswerFormatter {
 		for (const warning of warnings) {
 			lines.push(`WARNING: ${this.cutBytes(warning, 500)}`);
 		}
+		if (note && note === AnswerFormatter.UNAVAILABLE) {
+			// A refused fallback answer is never printed: the refusal is the
+			// answer, and its verdict suffix went with it.
+			lines.push(note);
+			lines.push(`[${Math.round(durationMs / 1000)}s]`);
+			return lines.join("\n");
+		}
+		if (note) lines.push(note);
 		if (answer) {
 			const clipped = this.truncate(answer, budget, this.output.maxLines);
 			lines.push(clipped.text);

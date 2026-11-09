@@ -10,7 +10,7 @@ execution, at low thinking effort, and consults again at any roadblock.
 ## Install
 
 ```bash
-pi install git:github.com/ederevx/pi-consult@v0.23.1
+pi install git:github.com/ederevx/pi-consult@v0.24.0
 ```
 
 The package has no runtime dependencies; it uses the host-provided
@@ -291,12 +291,21 @@ non-eligible error blocks the takeover. The fallback model is chosen in
 `fallback.reasoning`: the row offers only the levels the selected model's
 thinking map supports, unset follows the model's default, and a level the
 resolved model does not support is dropped with a warning, never guessed down.
-The conversation receives no tools at all, so it works from the supplied
-context and says so in its role, its transcript is persisted for `continue` to
-resume, and every answer opens with a disclosure naming the serving model,
-the reasoning level it ran at when one was reported, its cost, and the
-consultants it replaced. One decision per invocation; a
-native failure never cascades further.
+The fallback conversation is offered exactly two read-only tools,
+`read_file` and `list_dir`, rooted in the invocation's working directory:
+a path must be relative and stay inside it (a `..`, an absolute path, and a
+symlink that leaves the root are all refused), text only, with pi's own line
+and byte caps imposing pagination through `offset`/`limit`; a listing is
+context, never evidence. A run that read at least one file is `verified`, and
+only a verified run is a verdict: its answer can close nothing while
+unverified, and the receipt records the paths it actually read. A continued
+conversation is told what the earlier run verified and must verify again in its
+own run - a fresh read, not a remembered one - so a `continue` after an edit is
+never an approval of the code the earlier run never saw. The transcript is
+persisted for `continue` to resume, and every answer opens with a disclosure
+naming the serving model, the reasoning level it ran at when one was reported,
+its cost, the paths it read, and the consultants it replaced. One decision per
+invocation; a native failure never cascades further.
 
 The returned details carry the consult id, each consultant's status, usage, and
 the path of the full answer. Model-facing text is bounded per the `output`

@@ -5,9 +5,9 @@ import { FallbackModels } from "../src/fallback-models.ts";
 import { NativeConsultant, type NativeStream } from "../src/native-consultant.ts";
 import { NativeFallbackService } from "../src/native-fallback.ts";
 import type { ConsultantResult } from "../src/contracts.ts";
-import { assert, assertEq, scratchDir, test } from "./harness.ts";
+import { assert, assertEq, assertIncludes, scratchDir, test } from "./harness.ts";
 import { join } from "node:path";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
 /** A scripted registry: each round's assistant message in order. */
 class ScriptedStream {
@@ -55,7 +55,24 @@ function native(stream: ScriptedStream, artifacts: ArtifactStore): NativeConsult
 	});
 }
 
-const CONFIG = { timeoutMs: 5000 };
+/** A native consultant whose conversation reads a file, then answers: the
+ *  verified shape a takeover must produce to be usable. */
+function verified(
+	artifacts: ArtifactStore,
+	answer = "served",
+): { consultant: NativeConsultant; stream: ScriptedStream } {
+	mkdirSync(scratchDir(), { recursive: true });
+	writeFileSync(join(scratchDir(), "a.ts"), "a\n");
+	const stream = new ScriptedStream([
+		assistant([{ type: "toolCall", id: "call-1", name: "read_file", arguments: { path: "a.ts" } }]),
+		assistant([textPart(answer)]),
+	]);
+	return { consultant: native(stream, artifacts), stream };
+}
+
+function config(cwd = scratchDir()): { timeoutMs: number; maxRounds: number; cwd: string } {
+	return { timeoutMs: 5000, maxRounds: 16, cwd };
+}
 
 function failure(name: "claude", status: ConsultantResult["status"], error?: string): ConsultantResult {
 	return {
@@ -70,7 +87,7 @@ function failure(name: "claude", status: ConsultantResult["status"], error?: str
 	};
 }
 
-test("native consultant: a text-only round answers and persists the transcript", async () => {
+test("native consultant: a text-only fallback is unavailable and hides its verdict", async () => {
 	const artifacts = new ArtifactStore(join(scratchDir(), `nat-${Date.now()}`));
 	const stream = new ScriptedStream([assistant([textPart("the plan")])]);
 	const paths = await artifacts.prepare("s", "c-aaa111222333");
@@ -79,23 +96,34 @@ test("native consultant: a text-only round answers and persists the transcript",
 		"the brief",
 		paths,
 		new AbortController().signal,
-		CONFIG,
+		config(),
 	);
-	assertEq(outcome.status, "ok");
-	assertEq(outcome.answer, "the plan");
-	assertEq(outcome.usage?.costUsd, 0.01, "usage is accumulated");
+	assertEq(outcome.status, "unavailable", "an answer without a read is unavailable");
+	assertEq(outcome.errorCode, "fallback_unverified", "the refusal is typed");
+	assertEq(outcome.answer, "", "the model's text is not delivered");
+	assertEq(outcome.verification.paths.length, 0, "no evidence was earned");
+	assertEq(outcome.usage?.costUsd, 0.01, "usage is still accumulated");
 	assertEq(outcome.provider, "one", "the serving model is reported");
 	const persisted = JSON.parse(readFileSync(outcome.conversationPath!, "utf8"));
 	assertEq(persisted.length, 2, "the brief and the answer are persisted");
-	assertEq(stream.calls[0].hasTools, false, "the fallback is sent no tools at all");
+	assertEq(stream.calls[0].hasTools, true, "the fallback is offered its read tools");
+	assertEq(stream.calls[0].tools.join(","), "read_file,list_dir", "only the two read tools");
 });
 
-test("native consultant: a tool call in the answer is never executed", async () => {
+test("native consultant: a successful read then answer is usable", async () => {
+	// A file the fallback may read, inside its own working directory.
+	const cwd = join(scratchDir(), `nat-read-${Date.now()}`);
+	mkdirSync(join(cwd, "src"), { recursive: true });
+	writeFileSync(join(cwd, "src", "x.ts"), "export const x = 1;\n");
 	const artifacts = new ArtifactStore(join(scratchDir(), `nat2-${Date.now()}`));
 	const stream = new ScriptedStream([
 		assistant([
-			{ type: "toolCall", id: "call-1", name: "read", arguments: { path: "src/x.ts" } },
-			textPart("from what I was given"),
+			{ type: "toolCall", id: "call-1", name: "read_file", arguments: { path: "src/x.ts" } },
+			{ type: "text", text: "reading first" },
+		]),
+		assistant([
+			textPart("the plan"),
+			textPart("Convention audit: compliant - checked.\nConsultant verdict: approved - sound."),
 		]),
 	]);
 	const paths = await artifacts.prepare("s", "c-bbb111222333");
@@ -104,11 +132,98 @@ test("native consultant: a tool call in the answer is never executed", async () 
 		"the brief",
 		paths,
 		new AbortController().signal,
-		CONFIG,
+		config(cwd),
+	);
+	assertEq(outcome.status, "ok", "the answer follows a successful read");
+	assertEq(outcome.verification.paths.join(","), "src/x.ts", "the read file is the evidence");
+	assertIncludes(outcome.answer, "the plan", "the final text is the answer");
+	assert(!outcome.answer.includes("reading first"), "text beside a tool call is not the answer");
+	assertEq(stream.calls.length, 2, "one round per step");
+	const transcript = JSON.parse(readFileSync(outcome.conversationPath!, "utf8"));
+	const result = transcript.find((message: { role: string }) => message.role === "toolResult");
+	assertEq(result.toolCallId, "call-1", "the result answers the call");
+	assert(result.content[0].text.includes("export const x = 1;"), "the file text reached the model");
+});
+
+test("native consultant: failed reads never verify", async () => {
+	const cwd = join(scratchDir(), `nat-fail-${Date.now()}`);
+	mkdirSync(cwd, { recursive: true });
+	const artifacts = new ArtifactStore(join(scratchDir(), `nat3-${Date.now()}`));
+	const stream = new ScriptedStream([
+		assistant([{ type: "toolCall", id: "call-1", name: "read_file", arguments: { path: "gone.ts" } }]),
+		assistant([
+			{ type: "toolCall", id: "call-2", name: "list_dir", arguments: { path: "." } },
+			{ type: "toolCall", id: "call-3", name: "read_file", arguments: { path: "../escape.ts" } },
+		]),
+		assistant([textPart("the plan")]),
+	]);
+	const paths = await artifacts.prepare("s", "c-ddd111222333");
+	const outcome = await native(stream, artifacts).consult(
+		{ provider: "one", id: "fast" },
+		"the brief",
+		paths,
+		new AbortController().signal,
+		config(cwd),
+	);
+	assertEq(outcome.status, "unavailable", "no failed read or listing verifies");
+	assertEq(outcome.verification.paths.length, 0, "no evidence was earned");
+	const transcript = JSON.parse(readFileSync(outcome.conversationPath!, "utf8"));
+	const results = transcript.filter((message: { role: string }) => message.role === "toolResult");
+	assertEq(results.length, 3, "every call received a matching result");
+	assert(results.every((message: { isError: boolean }) => message.isError), "all three failed");
+});
+
+test("native consultant: all calls receive matching tool results", async () => {
+	const cwd = join(scratchDir(), `nat-pair-${Date.now()}`);
+	mkdirSync(cwd, { recursive: true });
+	writeFileSync(join(cwd, "a.ts"), "a\n");
+	const artifacts = new ArtifactStore(join(scratchDir(), `nat4-${Date.now()}`));
+	const stream = new ScriptedStream([
+		assistant([
+			{ type: "toolCall", id: "call-1", name: "read_file", arguments: { path: "a.ts" } },
+			{ type: "toolCall", id: "call-2", name: "nonsense", arguments: {} },
+			{ type: "toolCall", id: "call-3", name: "read_file", arguments: { path: "a.ts" } },
+		]),
+		assistant([textPart("done")]),
+	]);
+	const paths = await artifacts.prepare("s", "c-eee111222333");
+	const outcome = await native(stream, artifacts).consult(
+		{ provider: "one", id: "fast" },
+		"the brief",
+		paths,
+		new AbortController().signal,
+		config(cwd),
 	);
 	assertEq(outcome.status, "ok");
-	assertEq(outcome.answer, "from what I was given");
-	assertEq(stream.calls.length, 1, "there is no tool round to run");
+	const transcript = JSON.parse(readFileSync(outcome.conversationPath!, "utf8"));
+	const ids = transcript
+		.filter((message: { role: string }) => message.role === "toolResult")
+		.map((message: { toolCallId: string }) => message.toolCallId);
+	assertEq(ids.join(","), "call-1,call-2,call-3", "results follow their calls in order");
+	assertEq(outcome.verification.paths.join(","), "a.ts", "a repeated read is one file");
+});
+
+test("native consultant: the round bound counts every request", async () => {
+	const cwd = join(scratchDir(), `nat-rounds-${Date.now()}`);
+	mkdirSync(cwd, { recursive: true });
+	writeFileSync(join(cwd, "a.ts"), "a\n");
+	const artifacts = new ArtifactStore(join(scratchDir(), `nat5-${Date.now()}`));
+	const rounds = Array.from({ length: 4 }, (_, index) =>
+		assistant([{ type: "toolCall", id: `call-${index}`, name: "read_file", arguments: { path: "a.ts" } }]),
+	);
+	const stream = new ScriptedStream(rounds);
+	const paths = await artifacts.prepare("s", "c-fff111222333");
+	const outcome = await native(stream, artifacts).consult(
+		{ provider: "one", id: "fast" },
+		"the brief",
+		paths,
+		new AbortController().signal,
+		{ ...config(cwd), maxRounds: 3 },
+	);
+	assertEq(outcome.status, "error", "a read loop cannot run past its bound");
+	assertIncludes(String(outcome.error), "exceeded its 3-round bound", "the bound is named");
+	assertEq(stream.calls.length, 3, "exactly the bound's requests were made");
+	assertEq(outcome.verification.paths.join(","), "a.ts", "earlier reads still count as evidence");
 });
 
 test("native fallback service: takeover follows the decision table", async () => {
@@ -120,14 +235,12 @@ test("native fallback service: takeover follows the decision table", async () =>
 		scopedModels: [],
 		defaults,
 	};
-	const stream = new ScriptedStream([assistant([textPart("served")])]);
-	const consultant = native(stream, artifacts);
 	const make = (fallback: { enabled: boolean; model?: string }) =>
 		new NativeFallbackService({
-			settings: () => ({ ...fallback }),
+			settings: () => ({ maxRounds: 16, ...fallback }),
 			models: () => models,
 			context: () => context,
-			native: () => consultant,
+			native: () => verified(artifacts).consultant,
 			classifier: new FailureClassifier(),
 		});
 	const paths = await artifacts.prepare("s", "c-ccc111222333");
@@ -139,6 +252,7 @@ test("native fallback service: takeover follows the decision table", async () =>
 		requests: [],
 		signal,
 		environment: context,
+		cwd: scratchDir(),
 		timeoutMs: 5000,
 	};
 
@@ -214,13 +328,13 @@ test("native fallback service: reasoning forwards only when the model supports i
 	const streams: ScriptedStream[] = [];
 	const make = (reasoning?: string) =>
 		new NativeFallbackService({
-			settings: () => ({ enabled: true, reasoning: reasoning as never }),
+			settings: () => ({ enabled: true, maxRounds: 16, reasoning: reasoning as never }),
 			models: () => models,
 			context: () => context,
 			native: () => {
-				const stream = new ScriptedStream([assistant([textPart("served")])]);
-				streams.push(stream);
-				return native(stream, artifacts);
+				const pair = verified(artifacts);
+				streams.push(pair.stream);
+				return pair.consultant;
 			},
 			classifier: new FailureClassifier(),
 		});
@@ -232,6 +346,7 @@ test("native fallback service: reasoning forwards only when the model supports i
 		requests: [],
 		signal: new AbortController().signal,
 		environment: context,
+		cwd: scratchDir(),
 		timeoutMs: 5000,
 	};
 	const served = await make("low").takeover({ ...base, kind: "takeover", results: [failure("claude", "auth", "invalid api key")] });
@@ -256,10 +371,10 @@ test("native fallback service: fallback fires only when every consultant exhaust
 		defaults: { defaultProvider: "one", defaultModel: "fast" },
 	};
 	const service = new NativeFallbackService({
-		settings: () => ({ enabled: true }),
+		settings: () => ({ enabled: true, maxRounds: 16 }),
 		models: () => models,
 		context: () => context,
-		native: () => native(new ScriptedStream([assistant([textPart("served")])]), artifacts),
+		native: () => verified(artifacts).consultant,
 		classifier: new FailureClassifier(),
 	});
 	const paths = await artifacts.prepare("s", "c-fff111222333");
@@ -270,6 +385,7 @@ test("native fallback service: fallback fires only when every consultant exhaust
 		requests: [],
 		signal: new AbortController().signal,
 		environment: context,
+		cwd: scratchDir(),
 		timeoutMs: 5000,
 	};
 	assertEq(
@@ -303,7 +419,7 @@ test("native fallback service: both-target skips when either CLI succeeds", asyn
 		defaults: { defaultProvider: "one", defaultModel: "fast" },
 	};
 	const service = new NativeFallbackService({
-		settings: () => ({ enabled: true }),
+		settings: () => ({ enabled: true, maxRounds: 16 }),
 		models: () => models,
 		context: () => context,
 		native: () => native(new ScriptedStream([]), artifacts),
@@ -336,7 +452,7 @@ test("native fallback service: an aborted signal refuses the takeover", async ()
 		defaults: { defaultProvider: "one", defaultModel: "fast" },
 	};
 	const service = new NativeFallbackService({
-		settings: () => ({ enabled: true }),
+		settings: () => ({ enabled: true, maxRounds: 16 }),
 		models: () => models,
 		context: () => context,
 		native: () => native(new ScriptedStream([]), artifacts),

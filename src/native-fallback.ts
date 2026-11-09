@@ -20,6 +20,8 @@ export interface FallbackContext {
 	consultId: string;
 	brief: string;
 	paths: ConsultPaths;
+	/** The consultation's working directory: the root every native read stays under. */
+	cwd: string;
 	requests: readonly ConsultRequest[];
 	results: readonly ConsultantResult[];
 	signal: AbortSignal;
@@ -107,6 +109,8 @@ export class NativeFallbackService {
 			{
 				timeoutMs: context.timeoutMs,
 				reasoning,
+				maxRounds: settings.maxRounds,
+				cwd: context.cwd,
 			},
 			context.kind === "resume" ? (context.messages as never) : undefined,
 		);
@@ -119,9 +123,12 @@ export class NativeFallbackService {
 					? "aborted"
 					: outcome.status === "timeout"
 						? "timeout"
-						: "error",
+						: outcome.status === "unavailable"
+							? "unavailable"
+							: "error",
+			errorCode: outcome.errorCode,
 			answer: outcome.answer,
-			partial: outcome.status !== "ok",
+			partial: outcome.status !== "ok" && outcome.status !== "unavailable",
 			durationMs: outcome.durationMs,
 			exitCode: null,
 			usage: {

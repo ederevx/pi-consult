@@ -2,24 +2,33 @@
  * pi-consult — the native fallback conversation.
  *
  * Owns the private model conversation that serves a consultation when its
- * consultant CLIs failed eligibility: one isolated request through the model
+ * consultant CLIs failed eligibility: one isolated loop through the model
  * registry's streaming API — never pi's own transcript, never setModel — with
- * no tools at all, so the answer is drawn from the supplied context. The
- * request is bounded by the request's timeout and the invocation's abort
- * signal, its usage is reported, and its transcript is persisted for a
- * continuation to resume.
+ * two read-only tools (`read_file`, `list_dir`) that stay inside the
+ * consultation's working directory. The loop is bounded by the request's
+ * timeout, the invocation's abort signal, and a configured request count; its
+ * usage is reported, and its transcript is persisted for a continuation to
+ * resume. An answer is usable only when this invocation read a file: evidence
+ * is what makes a fallback answer count, never the model's own claim.
  */
 
-import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
+import type { AssistantMessage, Message, Tool, ToolCall, ToolResultMessage } from "@earendil-works/pi-ai";
 import type { ArtifactStore, ConsultPaths } from "./artifact-store.ts";
-import type { FallbackMetadata, ReasoningLevel } from "./contracts.ts";
+import type {
+	FallbackErrorCode,
+	FallbackMetadata,
+	FallbackVerification,
+	ReasoningLevel,
+} from "./contracts.ts";
 import { REASONING_LEVELS } from "./contracts.ts";
+import { FallbackEvidence } from "./fallback-evidence.ts";
+import { NativeReadTools } from "./native-read-tools.ts";
 
 /** The registry seam the conversation streams through. */
 export interface NativeStream {
 	streamSimple(
 		model: object,
-		context: { systemPrompt?: string; messages: Message[] },
+		context: { systemPrompt?: string; messages: Message[]; tools?: Tool[] },
 		options?: { signal?: AbortSignal; reasoning?: ReasoningLevel },
 	): { result(): Promise<AssistantMessage> };
 }
@@ -30,13 +39,19 @@ export interface NativeConfig {
 	timeoutMs: number;
 	/** The reasoning effort the stream runs at; absent follows pi-ai's default. */
 	reasoning?: ReasoningLevel;
+	/** The most model requests one fallback conversation may make, its final
+	 *  answer included: a read loop would otherwise be unbounded in requests. */
+	maxRounds: number;
+	/** The consultation's working directory: the root every read stays under. */
+	cwd: string;
 }
 
 /** What one native conversation produced. */
 export interface NativeOutcome {
 	answer: string;
-	status: "ok" | "error" | "aborted" | "timeout";
+	status: "ok" | "unavailable" | "error" | "aborted" | "timeout";
 	error?: string;
+	errorCode?: FallbackErrorCode;
 	usage?: { inputTokens?: number; outputTokens?: number; costUsd?: number };
 	durationMs: number;
 	conversationPath?: string;
@@ -46,12 +61,14 @@ export interface NativeOutcome {
 	reasoning?: ReasoningLevel;
 	/** Every identity that answered, in first-seen order. */
 	servedBy: string[];
+	/** What this invocation read; empty evidence means the answer is unusable. */
+	verification: FallbackVerification;
 }
 
 export interface NativeConsultantDeps {
 	registry: NativeStream;
 	artifacts: ArtifactStore;
-	/** The context-only preamble the fallback conversation runs under. */
+	/** The fallback preamble the conversation runs under. */
 	systemPrompt: () => string;
 }
 
@@ -86,6 +103,11 @@ export class NativeConsultant {
 		const usage = { inputTokens: 0, outputTokens: 0, costUsd: 0 };
 		const sawUsage = { any: false };
 		const serving = new Map<string, { provider: string; model: string }>();
+		const tools = new NativeReadTools(config.cwd);
+		const definitions = tools.definitions();
+		// Every successful content read in this invocation, and only those:
+		// a listing or a failed read never becomes evidence.
+		const reads = new Set<string>();
 		let final: { provider: string; model: string } | undefined;
 		let servedReasoning: ReasoningLevel | undefined;
 		// The run is bounded by the request timeout composed with the
@@ -95,87 +117,112 @@ export class NativeConsultant {
 		const expired = (): boolean => timeout.aborted && !signal.aborted;
 		let status: NativeOutcome["status"] = "ok";
 		let error: string | undefined;
-		let answer: AssistantMessage | undefined;
-		try {
-			if (deadline.aborted) throw new Error("aborted");
-			// The deadline bounds the wait; it cannot stop a provider that
-			// ignores cancellation, but the run never outlives its bound.
-			const onDeadline = (): void => rejectDeadline(new Error("aborted by the caller"));
-			let rejectDeadline!: (error: Error) => void;
-			const expired_ = new Promise<never>((_, reject) => {
-				rejectDeadline = reject;
-				deadline.addEventListener("abort", onDeadline, { once: true });
-			});
-			if (deadline.aborted) onDeadline();
+		let errorCode: FallbackErrorCode | undefined;
+		let answer = "";
+		let rounds = 0;
+		let stopped = false;
+		while (!stopped) {
+			if (deadline.aborted) {
+				status = signal.aborted ? "aborted" : "timeout";
+				error = status === "aborted" ? "aborted by the caller" : NativeConsultant.bound(config);
+				stopped = true;
+				break;
+			}
+			if (rounds >= config.maxRounds) {
+				status = "error";
+				error = `the fallback conversation exceeded its ${config.maxRounds}-round bound`;
+				stopped = true;
+				break;
+			}
+			rounds += 1;
+			let reply: AssistantMessage;
 			try {
-				answer = await Promise.race([
-					this.registry
-						.streamSimple(model, {
-							systemPrompt: this.systemPrompt(),
-							messages,
-						}, config.reasoning
-							? { signal: deadline, reasoning: config.reasoning }
-							: { signal: deadline })
-						.result(),
-					expired_,
-				]);
-			} finally {
-				deadline.removeEventListener("abort", onDeadline);
+				reply = await this.request(model, messages, definitions, deadline, config);
+			} catch (failure) {
+				// A cancellation is aborted; a deadline expiry on its own is a
+				// timeout, so the receipt names which bound ended the run.
+				status = signal.aborted ? "aborted" : expired() ? "timeout" : "error";
+				error = status === "aborted"
+					? "aborted by the caller"
+					: status === "timeout"
+						? NativeConsultant.bound(config)
+						: failure instanceof Error ? failure.message : String(failure);
+				stopped = true;
+				break;
 			}
-			const identity = `${answer.provider}/${answer.model}`;
+			const identity = `${reply.provider}/${reply.model}`;
 			if (!serving.has(identity)) {
-				serving.set(identity, { provider: answer.provider, model: answer.model });
+				serving.set(identity, { provider: reply.provider, model: reply.model });
 			}
-			final = { provider: answer.provider, model: answer.model };
-			// The provider's own report of the level it ran at, when it gives
-			// one; validated against the known set, never trusted blind.
-			const reported = (answer as { thinkingLevel?: unknown; providerThinkingLevel?: unknown })
-				.thinkingLevel ?? (answer as { providerThinkingLevel?: unknown }).providerThinkingLevel;
-			if (
-				typeof reported === "string"
-				&& (REASONING_LEVELS as readonly string[]).includes(reported)
-			) {
+			final = { provider: reply.provider, model: reply.model };
+			const reported = (reply as { thinkingLevel?: unknown; providerThinkingLevel?: unknown })
+				.thinkingLevel ?? (reply as { providerThinkingLevel?: unknown }).providerThinkingLevel;
+			if (typeof reported === "string" && (REASONING_LEVELS as readonly string[]).includes(reported)) {
 				servedReasoning = reported as ReasoningLevel;
 			}
-			this.accumulate(usage, sawUsage, answer.usage);
-			messages.push(answer as Message);
-			if (answer.stopReason === "aborted") {
+			this.accumulate(usage, sawUsage, reply.usage);
+			messages.push(reply as Message);
+			const calls = NativeConsultant.calls(reply);
+			if (reply.stopReason === "aborted") {
 				status = signal.aborted ? "aborted" : expired() ? "timeout" : "error";
 				error = "the fallback model stopped mid-answer";
-			} else if (answer.stopReason === "error") {
+				NativeConsultant.cancel(messages, calls, "the fallback model stopped mid-answer");
+				stopped = true;
+				break;
+			}
+			if (reply.stopReason === "error") {
 				status = "error";
-				error = answer.errorMessage ?? "the fallback model reported an error";
-			} else if (answer.stopReason === "length") {
+				error = reply.errorMessage ?? "the fallback model reported an error";
+				NativeConsultant.cancel(messages, calls, error);
+				stopped = true;
+				break;
+			}
+			if (reply.stopReason === "length") {
 				status = "error";
 				error = "the fallback answer exceeded the model's output limit";
+				NativeConsultant.cancel(messages, calls, error);
+				stopped = true;
+				break;
 			}
-		} catch (failure) {
-			// A cancellation is aborted; a deadline expiry on its own is a
-			// timeout, so the receipt names which bound ended the run.
-			status = signal.aborted ? "aborted" : expired() ? "timeout" : "error";
-			error = status === "aborted"
-				? "aborted by the caller"
-				: status === "timeout"
-					? `the fallback exceeded its ${config.timeoutMs} ms bound`
-					: failure instanceof Error ? failure.message : String(failure);
+			if (calls.length === 0) {
+				// Only a response with no pending call is an answer: text sent
+				// alongside tool calls is a step, never the final word.
+				answer = NativeConsultant.text(reply);
+				stopped = true;
+				break;
+			}
+			for (let index = 0; index < calls.length; index += 1) {
+				const call = calls[index];
+				if (deadline.aborted) {
+					NativeConsultant.cancel(messages, calls.slice(index), NativeConsultant.bound(config));
+					status = signal.aborted ? "aborted" : "timeout";
+					error = status === "aborted" ? "aborted by the caller" : NativeConsultant.bound(config);
+					stopped = true;
+					break;
+				}
+				const result = await tools.execute(call, deadline);
+				messages.push(result.message);
+				if (result.readPath !== undefined && !result.message.isError) {
+					reads.add(result.readPath);
+				}
+			}
 		}
-		if (status === "ok" && answer) {
-			return this.finish({
-				answer: NativeConsultant.text(answer),
-				status: "ok",
-				usage: sawUsage.any ? usage : undefined,
-				startedAt,
-				serving,
-				final,
-				reasoning: servedReasoning,
-				messages,
-				paths,
-			});
+		const verification = FallbackEvidence.earned(reads);
+		if (status === "ok" && reads.size === 0) {
+			// The answer arrived, but nothing shows this invocation inspected
+			// the tree: it is unavailable, and its text stays in the private
+			// transcript rather than becoming a deliverable answer.
+			status = "unavailable";
+			errorCode = FallbackEvidence.UNVERIFIED;
+			error = FallbackEvidence.REASON;
+			answer = "";
 		}
 		return this.finish({
-			answer: status === "aborted" ? "" : NativeConsultant.tail(messages),
+			answer,
 			status,
 			error,
+			errorCode,
+			verification,
 			usage: sawUsage.any ? usage : undefined,
 			startedAt,
 			serving,
@@ -184,6 +231,39 @@ export class NativeConsultant {
 			messages,
 			paths,
 		});
+	}
+
+	/** One model request, bounded by the conversation's shared deadline. */
+	private async request(
+		model: object,
+		messages: Message[],
+		tools: Tool[],
+		deadline: AbortSignal,
+		config: NativeConfig,
+	): Promise<AssistantMessage> {
+		let rejectDeadline!: (error: Error) => void;
+		const onDeadline = (): void => rejectDeadline(new Error("aborted by the caller"));
+		const expired = new Promise<never>((_, reject) => {
+			rejectDeadline = reject;
+			deadline.addEventListener("abort", onDeadline, { once: true });
+		});
+		if (deadline.aborted) onDeadline();
+		try {
+			return await Promise.race([
+				this.registry
+					.streamSimple(model, {
+						systemPrompt: this.systemPrompt(),
+						messages,
+						tools,
+					}, config.reasoning
+						? { signal: deadline, reasoning: config.reasoning }
+						: { signal: deadline })
+					.result(),
+				expired,
+			]);
+		} finally {
+			deadline.removeEventListener("abort", onDeadline);
+		}
 	}
 
 	private accumulate(
@@ -202,6 +282,8 @@ export class NativeConsultant {
 		answer: string;
 		status: NativeOutcome["status"];
 		error?: string;
+		errorCode?: FallbackErrorCode;
+		verification: FallbackVerification;
 		usage: { inputTokens: number; outputTokens: number; costUsd: number } | undefined;
 		startedAt: number;
 		serving: Map<string, { provider: string; model: string }>;
@@ -210,38 +292,37 @@ export class NativeConsultant {
 		messages: Message[];
 		paths: ConsultPaths;
 	}): Promise<NativeOutcome> {
+		const served = state.final ?? [...state.serving.values()].pop();
+		const base: NativeOutcome = {
+			answer: state.answer,
+			status: state.status,
+			error: state.error,
+			errorCode: state.errorCode,
+			usage: state.usage ? { ...state.usage } : undefined,
+			durationMs: Date.now() - state.startedAt,
+			provider: served?.provider ?? "",
+			model: served?.model ?? "",
+			reasoning: state.reasoning,
+			servedBy: [...state.serving.values()].map((one) => `${one.provider}/${one.model}`),
+			verification: state.verification,
+		};
 		const conversationPath = `${state.paths.dir}/fallback-conversation.json`;
 		// The transcript is advertised only once it is durably written; a
 		// failed write is reported, never silently resumed.
 		try {
 			await this.artifacts.write(conversationPath, JSON.stringify(state.messages));
-		} catch (error) {
+		} catch (failure) {
 			return {
-				answer: state.answer,
+				...base,
+				answer: "",
 				status: "error",
 				error: `the fallback transcript could not be persisted: ${
-					error instanceof Error ? error.message : String(error)
+					failure instanceof Error ? failure.message : String(failure)
 				}`,
-				usage: state.usage,
-				durationMs: Date.now() - state.startedAt,
-				provider: state.final?.provider ?? "",
-				model: state.final?.model ?? "",
-				servedBy: [...state.serving.values()].map((one) => `${one.provider}/${one.model}`),
+				errorCode: undefined,
 			};
 		}
-		const served = state.final ?? [...state.serving.values()].pop();
-		return {
-			answer: state.answer,
-			status: state.status,
-			error: state.error,
-			usage: state.usage ? { ...state.usage } : undefined,
-			durationMs: Date.now() - state.startedAt,
-			conversationPath,
-			provider: served?.provider ?? "",
-			model: served?.model ?? "",
-			reasoning: state.reasoning,
-			servedBy: [...state.serving.values()].map((one) => `${one.provider}/${one.model}`),
-		};
+		return { ...base, conversationPath };
 	}
 
 	/** The provenance metadata this outcome carries into its run. */
@@ -259,7 +340,33 @@ export class NativeConsultant {
 			servedBy: outcome.servedBy,
 			conversationPath: outcome.conversationPath,
 			reasoning: outcome.reasoning,
+			verification: outcome.verification,
 		};
+	}
+
+	/** Every tool call in the response, in order. */
+	private static calls(reply: AssistantMessage): ToolCall[] {
+		return reply.content.filter((part): part is ToolCall => part.type === "toolCall");
+	}
+
+	/** Answer the calls a finished round never ran, so a resumed transcript
+	 *  holds no dangling call. */
+	private static cancel(messages: Message[], calls: readonly ToolCall[], reason: string): void {
+		for (const call of calls) {
+			const result: ToolResultMessage = {
+				role: "toolResult",
+				toolCallId: call.id,
+				toolName: call.name,
+				content: [{ type: "text", text: reason }],
+				isError: true,
+				timestamp: Date.now(),
+			};
+			messages.push(result);
+		}
+	}
+
+	private static bound(config: NativeConfig): string {
+		return `the fallback exceeded its ${config.timeoutMs} ms bound`;
 	}
 
 	private static text(message: AssistantMessage): string {
@@ -267,16 +374,5 @@ export class NativeConsultant {
 			.filter((part): part is { type: "text"; text: string } => part.type === "text")
 			.map((part) => part.text)
 			.join("\n");
-	}
-
-	/** The last text the conversation produced, for a bounded failure report. */
-	private static tail(messages: Message[]): string {
-		for (let index = messages.length - 1; index >= 0; index -= 1) {
-			const message = messages[index];
-			if (message.role !== "assistant") continue;
-			const text = NativeConsultant.text(message);
-			if (text) return text;
-		}
-		return "";
 	}
 }

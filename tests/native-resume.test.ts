@@ -5,20 +5,34 @@ import { NativeConsultant, type NativeStream } from "../src/native-consultant.ts
 import { NativeFallbackService } from "../src/native-fallback.ts";
 import { assert, assertEq, scratchDir, test } from "./harness.ts";
 import { join } from "node:path";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
-/** A registry whose one model answers text on every round. */
+/** A registry that first reads a file in the working directory and then
+ *  answers: the verified shape every resumed invocation needs anew. */
 class OneShotStream {
-	streamSimple(): { result: () => Promise<object> } {
+	readonly calls: Array<{ messages: unknown[] }> = [];
+	streamSimple(_model: object, context: { messages: unknown[] }): { result: () => Promise<object> } {
+		this.calls.push({ messages: [...context.messages] });
+		const first = this.calls.length === 1;
 		return {
 			result: async () => ({
 				role: "assistant",
-				content: [{ type: "text", text: "served again" }],
+				content: first
+					? [{ type: "toolCall", id: "call-1", name: "read_file", arguments: { path: "a.ts" } }]
+					: [{ type: "text", text: "served again" }],
 				usage: { input: 1, output: 1, cost: { total: 0.005 } },
 				stopReason: "stop",
 			}),
 		};
 	}
+}
+
+/** A working directory holding the file the stream reads. */
+function readable(): string {
+	const cwd = join(scratchDir(), `resume-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+	mkdirSync(cwd, { recursive: true });
+	writeFileSync(join(cwd, "a.ts"), "a\n");
+	return cwd;
 }
 
 function firstMetadata() {
@@ -46,7 +60,7 @@ function service(artifacts: ArtifactStore, fallback: { enabled: boolean; model?:
 		systemPrompt: () => "consultant preamble",
 	});
 	return new NativeFallbackService({
-		settings: () => ({ ...fallback }),
+		settings: () => ({ maxRounds: 16, ...fallback }),
 		models: () => models,
 		context: () => context,
 		native: () => consultant,
@@ -70,6 +84,7 @@ test("native fallback: a forced continuation resumes the persisted transcript", 
 		results: primary,
 		signal,
 		environment: context,
+		cwd: readable(),
 		timeoutMs: 5000,
 	});
 	assertEq(first?.status, "ok", "the first takeover serves");
@@ -87,6 +102,7 @@ test("native fallback: a forced continuation resumes the persisted transcript", 
 		results: primary,
 		signal,
 		environment: context,
+		cwd: readable(),
 		timeoutMs: 5000,
 	});
 	assertEq(second?.status, "ok", "the continuation serves");
@@ -169,12 +185,43 @@ test("record store: malformed fallback transcripts never resume", async () => {
 	}
 	assertEq(await store.conversation(join(paths.dir, "absent.json")), undefined,
 		"a missing transcript never resumes");
+	// A legacy context-only transcript stays readable: it confers no evidence,
+	// but it is a conversation a continuation may resume.
 	await artifacts.write(join(paths.dir, "good.json"), JSON.stringify([
 		{ role: "user", content: [{ type: "text", text: "hi" }] },
-		{ role: "toolResult", toolCallId: "c1", toolName: "read", content: [], isError: false },
+		{ role: "assistant", content: [{ type: "text", text: "there" }] },
 	]));
 	assert((await store.conversation(join(paths.dir, "good.json"))) !== undefined,
 		"a well-formed transcript resumes");
+	await artifacts.write(join(paths.dir, "tool.json"), JSON.stringify([
+		{ role: "user", content: [{ type: "text", text: "hi" }] },
+		{ role: "assistant", content: [{ type: "toolCall", id: "c1", name: "read_file", arguments: { path: "a" } }] },
+		{ role: "toolResult", toolCallId: "c1", toolName: "read_file", content: [{ type: "text", text: "a" }], isError: false },
+		{ role: "assistant", content: [{ type: "text", text: "done" }] },
+	]));
+	assert((await store.conversation(join(paths.dir, "tool.json"))) !== undefined,
+		"a paired tool transcript resumes");
+	const cases2: Array<[string, unknown]> = [
+		["dangling-call", [
+			{ role: "assistant", content: [{ type: "toolCall", id: "c1", name: "read_file", arguments: {} }] },
+		]],
+		["unmatched-result", [
+			{ role: "toolResult", toolCallId: "c9", toolName: "read_file", content: [], isError: false },
+		]],
+		["wrong-name", [
+			{ role: "assistant", content: [{ type: "toolCall", id: "c1", name: "read_file", arguments: {} }] },
+			{ role: "toolResult", toolCallId: "c1", toolName: "list_dir", content: [], isError: false },
+		]],
+		["missing-error-flag", [
+			{ role: "assistant", content: [{ type: "toolCall", id: "c1", name: "read_file", arguments: {} }] },
+			{ role: "toolResult", toolCallId: "c1", toolName: "read_file", content: [] },
+		]],
+	];
+	for (const [name, payload] of cases2) {
+		const file = join(paths.dir, `${name}.json`);
+		await artifacts.write(file, JSON.stringify(payload));
+		assertEq(await store.conversation(file), undefined, `${name} never resumes`);
+	}
 });
 
 test("native consultant: a deadline expiry reports timeout, a cancellation aborted", async () => {
@@ -194,7 +241,7 @@ test("native consultant: a deadline expiry reports timeout, a cancellation abort
 		"b",
 		paths,
 		new AbortController().signal,
-		{ timeoutMs: 50 },
+		{ timeoutMs: 50, maxRounds: 16, cwd: readable() },
 	);
 	assertEq(timed.status, "timeout", "a deadline expiry alone is a timeout");
 	const controller = new AbortController();
@@ -203,7 +250,7 @@ test("native consultant: a deadline expiry reports timeout, a cancellation abort
 		"b",
 		paths,
 		controller.signal,
-		{ timeoutMs: 5000 },
+		{ timeoutMs: 5000, maxRounds: 16, cwd: readable() },
 	);
 	controller.abort();
 	assertEq((await cancelled).status, "aborted", "the caller's cancellation is aborted");
@@ -237,7 +284,7 @@ test("native consultant: a failed run reports no responder it never had", async 
 		"b",
 		paths,
 		new AbortController().signal,
-		{ timeoutMs: 5000 },
+		{ timeoutMs: 5000, maxRounds: 16, cwd: readable() },
 	);
 	assertEq(outcome.status, "error");
 	assertEq(outcome.error, "quota exhausted");
@@ -281,6 +328,7 @@ test("native resume: a refused resume names no responder from the earlier run", 
 		results: [],
 		signal: new AbortController().signal,
 		environment: context,
+		cwd: readable(),
 		timeoutMs: 5000,
 	});
 	assertEq(refused, undefined, "the gates refuse; the tool's hook builds the failed run");

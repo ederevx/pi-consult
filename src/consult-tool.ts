@@ -16,7 +16,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { randomUUID } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
-import { isAbsolute, resolve } from "node:path";
+import { resolve } from "node:path";
 import { Type } from "typebox";
 
 import type {
@@ -33,6 +33,7 @@ import type { BriefComposer } from "./brief-composer.ts";
 import type { ConsultConfig } from "./consult-config.ts";
 import type { ConsultForeground, ForegroundOutcome } from "./consult-foreground.ts";
 import { ConsultCallView } from "./consult-call-view.ts";
+import { ConsultPathsValidator } from "./consult-paths.ts";
 import { ConsultStepCards, type ConsultStartInfo, type ConsultStepData } from "./consult-step-cards.ts";
 import { ConsultStepRenderer } from "./consult-step-renderer.ts";
 import type { ConsultIndex } from "./consult-index.ts";
@@ -85,6 +86,8 @@ export interface ConsultToolDeps {
 			consultId: string;
 			brief: string;
 			paths: ConsultPaths;
+			/** The consultation's working directory: the root every native read stays under. */
+			cwd: string;
 			requests: readonly ConsultRequest[];
 			results: readonly ConsultantResult[];
 			signal: AbortSignal;
@@ -107,6 +110,7 @@ export class ConsultTool {
 		/(^|[\\/])(?:\.env|id_[^\\/]*|credentials[^\\/]*)(?:$|[.\\/])|\.(?:pem|key|p12|pfx|jks)$|(^|[\\/])\.(?:ssh|aws|gnupg)(?:$|[\\/])/i;
 	private static readonly MAX_SCREEN_BYTES = 512 * 1024;
 	private readonly deps: ConsultToolDeps;
+	private readonly paths = new ConsultPathsValidator();
 	private readonly confirmedSessions = new Set<string>();
 	private readonly callView = new ConsultCallView();
 	private readonly resultView = new ConsultResultView();
@@ -447,8 +451,7 @@ export class ConsultTool {
 					: this.deps.config.consultant(nativeResume.targets[0] ?? "claude").timeoutMs,
 				fallback: async (context) =>
 					(await this.deps.fallback?.({
-						...context,
-						kind: "resume" as const,
+						...context,						kind: "resume" as const,
 						metadata: nativeResume.metadata,
 						messages: nativeResume.messages,
 					})) ?? {
@@ -549,7 +552,9 @@ export class ConsultTool {
 		return record ? this.continuationFrom(record.details) : undefined;
 	}
 
-	private async continuationFrom(details: ConsultDetails): Promise<Continuation> {
+	private async continuationFrom(
+		details: ConsultDetails,
+	): Promise<Continuation | { refused: string }> {
 		const resumeFor = new Map<ConsultantName, { sessionId: string; cwd: string }>();
 		for (const run of details.runs) {
 			if (run.sessionId) {
@@ -557,21 +562,34 @@ export class ConsultTool {
 			}
 		}
 		const continuation: Continuation = { consultId: details.consultId, resumeFor };
+		// A verified answer and an unverified one both resume: the first keeps
+		// its transcript, the second obtains the reads it never had. A saved
+		// transcript that cannot be read is refused rather than replaced by an
+		// empty conversation, which would silently drop the prior exchange.
 		const fallback = details.runs.find(
-			(run) => run.consultant === "fallback" && run.status === "ok" && run.fallback,
+			(run) =>
+				run.consultant === "fallback"
+				&& run.fallback !== undefined
+				&& (run.status === "ok" || run.status === "unavailable"),
 		);
 		if (fallback?.fallback) {
 			const messages = await this.deps.records.conversation(fallback.fallback.conversationPath);
-			continuation.fallback = { metadata: fallback.fallback, messages: messages ?? [] };
+			if (!messages) {
+				return {
+					refused:
+						"the saved native fallback transcript is missing or malformed; " +
+						"start a new consultation",
+				};
+			}
+			continuation.fallback = { metadata: fallback.fallback, messages };
 		}
 		return continuation;
 	}
 
 	private async validateFiles(files: readonly string[], cwd: string): Promise<string | undefined> {
 		for (const file of files) {
-			if (isAbsolute(file) || file.split(/[\\/]/).includes("..")) {
-				return `file paths must be relative and stay inside the working directory: ${file}`;
-			}
+			const refused = this.paths.relativeError(file);
+			if (refused) return refused;
 			if (ConsultTool.SUSPECT_FILE.test(file)) {
 				return `refusing to point a consultant at a file that may hold secrets: ${file}`;
 			}

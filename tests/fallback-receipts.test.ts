@@ -27,7 +27,7 @@ function effortSetup() {
 }
 import { ArtifactStore } from "../src/artifact-store.ts";
 
-function fallbackRun(ok: boolean, cost?: number): ConsultRun {
+function fallbackRun(ok: boolean, cost?: number, verified = true): ConsultRun {
 	return {
 		consultant: "fallback",
 		fallback: {
@@ -36,6 +36,7 @@ function fallbackRun(ok: boolean, cost?: number): ConsultRun {
 			selectedModel: "fast",
 			provider: "one",
 			model: "fast",
+			...(verified ? { verification: { kind: "native-read" as const, paths: ["src/x.ts"] } } : {}),
 		},
 		status: ok ? "ok" : "error",
 		answerBytes: 8,
@@ -66,6 +67,51 @@ test("formatter: a fallback run discloses its provenance before the answer", () 
 	assertIncludes(text, "replaced claude", "the replaced consultants are named");
 	assertIncludes(text, "the answer", "the answer still follows");
 	assertIncludes(text, "=== fallback ===", "the run keeps its own section");
+	assertIncludes(text, "Native fallback verification: 1 distinct file(s) read", "the reads are disclosed");
+	assertIncludes(text, "not a primary consultant's verdict", "the fallback is distinguished from a consultant");
+	assertIncludes(text, "Native fallback answer; current-invocation file reads are recorded", "the answer block is marked");
+});
+
+test("formatter: unverified fallback exposes provenance but no verdict", () => {
+	const details: ConsultDetails = {
+		schema: 3,
+		consultId: "c-unv",
+		phase: "complete",
+		ok: true,
+		cwd: ".",
+		briefPath: "b",
+		runs: [fallbackRun(true, undefined, false)],
+	};
+	const text = formatter.format(
+		details,
+		new Map([["fallback", "the answer\nConsultant verdict: approved - sound."]]),
+	);
+	assertIncludes(text, "Native fallback served this consultation", "the provenance is still disclosed");
+	assertIncludes(
+		text,
+		"Native fallback verification: no successful file read in this invocation",
+		"the missing evidence is disclosed",
+	);
+	assertIncludes(text, "Consultant fallback: no consultant available", "the run is reported unavailable");
+	assert(!text.includes("Consultant verdict: approved"), "the verdict never reaches the model");
+	assert(!text.includes("the answer"), "the unverified text is withheld");
+});
+
+test("effort policy: an unverified fallback approval cannot close", () => {
+	const setup = effortSetup();
+	setup.policy.engage(setup.ctx as never, "c-unv");
+	setup.policy.settle(
+		"c-unv",
+		{
+			...consultDetails("c-unv", [fallbackRun(true, undefined, false)], true),
+			schema: 3,
+		},
+		new Map([
+			["fallback", "The reasoning.\n\nConvention audit: compliant - checked.\nConsultant verdict: approved - sound."],
+		]),
+	);
+	const approved = (setup.policy as unknown as { approved: Set<string> }).approved;
+	assert(!approved.has("c-unv"), "an unproven fallback answer never approves");
 });
 
 test("formatter: an unsuccessful fallback attempt says attempt failed", () => {
@@ -196,4 +242,49 @@ test("effort policy: a fallback approval satisfies the closing consultation", ()
 	);
 	const approved = (setup.policy as unknown as { approved: Set<string> }).approved;
 	assert(approved.has("c-ok"), "a real approved verdict from the native answer settles the cycle");
+});
+
+test("record store: a legacy fallback receipt has no evidence and cannot approve", async () => {
+	const artifacts = new ArtifactStore(join(scratchDir(), `fb3-${Date.now()}`));
+	const store = new ConsultRecordStore(artifacts);
+	const consultId = "c-fbd1e2f3a4b5";
+	const paths = await artifacts.prepare("s", consultId);
+	// A record written before the verification rule: the run says it served,
+	// the answer says it approved, and nothing proves the answer read a file.
+	await artifacts.write(paths.answer("fallback"), "Convention audit: compliant - checked.\nConsultant verdict: approved - sound.");
+	await artifacts.write(paths.result, JSON.stringify({
+		schema: 3,
+		consultId,
+		phase: "complete",
+		ok: true,
+		cwd: ".",
+		briefPath: paths.brief,
+		runs: [{
+			consultant: "fallback",
+			fallback: {
+				fallbackFor: ["claude"],
+				selectedProvider: "one",
+				selectedModel: "fast",
+				provider: "one",
+				model: "fast",
+				servedBy: ["one/fast"],
+			},
+			status: "ok",
+			answerPath: paths.answer("fallback"),
+			answerBytes: 60,
+			truncated: false,
+			partial: false,
+			durationMs: 1,
+			exitCode: null,
+			warnings: [],
+		}],
+	}));
+	const loaded = await store.load(consultId);
+	assertEq(loaded?.details.runs[0].status, "unavailable", "an unverified legacy run reads as unavailable");
+	assertEq(loaded?.details.ok, false, "the receipt no longer counts as a success");
+	const setup = effortSetup();
+	setup.policy.engage(setup.ctx as never, consultId);
+	setup.policy.settle(consultId, loaded!.details, loaded!.answers);
+	const approved = (setup.policy as unknown as { approved: Set<string> }).approved;
+	assert(!approved.has(consultId), "a legacy approval never closes the cycle");
 });

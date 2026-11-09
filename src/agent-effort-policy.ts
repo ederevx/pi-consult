@@ -23,6 +23,7 @@ import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@e
 import type { ConsultConfig } from "./consult-config.ts";
 import type { ConsultDetails, ConsultRun, ConsultantAvailability, ConsultantName, RunParticipant } from "./contracts.ts";
 import { FailureClassifier } from "./failure-classifier.ts";
+import { FallbackEvidence } from "./fallback-evidence.ts";
 
 type Level = ReturnType<ExtensionAPI["getThinkingLevel"]>;
 
@@ -188,9 +189,18 @@ export class AgentEffortPolicy {
 			if (
 				details.ok &&
 				answered.length > 0 &&
-				answered.every((run) => AgentEffortPolicy.approves(answers?.get(run.consultant)))
+				answered.every(
+					(run) =>
+						AgentEffortPolicy.approves(answers?.get(run.consultant)) &&
+						(run.consultant !== "fallback" || FallbackEvidence.usable(run)),
+				)
 			) {
 				this.approved.add(consultId);
+				// A fallback approval is recorded with its proof, so a reload can
+				// tell a read-verified one from an answer that merely read well.
+				if (answered.some((run) => run.consultant === "fallback")) {
+					this.verifiedFallbackApprovals.add(consultId);
+				}
 			}
 			// A native fallback run is not a consultant CLI: it must never
 			// count toward a CLI's expiry, while its approval still counts.
@@ -264,6 +274,7 @@ export class AgentEffortPolicy {
 		this.due = false;
 		this.fresh.clear();
 		this.approved.clear();
+		this.verifiedFallbackApprovals.clear();
 		this.failures.clear();
 		this.expired.clear();
 		this.auditors.clear();
@@ -629,14 +640,19 @@ export class AgentEffortPolicy {
 		this.previous = this.holding ? data?.previous : undefined;
 		this.owed = new Set(data?.owed ?? []);
 		this.fresh = new Set(data?.fresh ?? []);
-		this.approved = new Set(data?.approved ?? []);
+		this.consulted = new Map(Object.entries(data?.consulted ?? {}));
+		this.verifiedFallbackApprovals = new Set(data?.verifiedFallbackApprovals ?? []);
+		this.approved = AgentEffortPolicy.approvals(
+			data?.approved,
+			this.verifiedFallbackApprovals,
+			this.consulted,
+		);
 		this.failures = new Map(Object.entries(data?.failures ?? {}) as Array<[ConsultantName, number]>);
 		this.expired = new Set(data?.expired ?? []);
 		this.unavailable = new Set(data?.unavailable ?? []);
 		this.auditors = new Set(data?.auditors ?? []);
 		this.independent = new Set(data?.independent ?? []);
 		this.auditFailed = data?.auditFailed === true;
-		this.consulted = new Map(Object.entries(data?.consulted ?? {}));
 		this.nudged = data?.nudged;
 		this.plan = data?.plan;
 		this.due = data?.due === true;
@@ -675,6 +691,7 @@ export class AgentEffortPolicy {
 			owed: [...this.owed],
 			fresh: [...this.fresh],
 			approved: [...this.approved],
+			verifiedFallbackApprovals: [...this.verifiedFallbackApprovals],
 			failures: Object.fromEntries(this.failures),
 			expired: [...this.expired],
 			unavailable: [...this.unavailable],
@@ -718,6 +735,7 @@ export class AgentEffortPolicy {
 				owed: strings(raw.owed),
 				fresh: strings(raw.fresh),
 				approved: strings(raw.approved),
+				verifiedFallbackApprovals: strings(raw.verifiedFallbackApprovals),
 				failures,
 				expired: names(raw.expired),
 				unavailable: names(raw.unavailable),
@@ -770,6 +788,24 @@ export class AgentEffortPolicy {
 	private static approves(answer: string | undefined): boolean {
 		if (!answer) return false;
 		return AgentEffortPolicy.VERDICT.test(AgentEffortPolicy.audited(answer) ?? "");
+	}
+
+	/** The approvals a reload may keep: a primary consultant's answer stands on
+	 *  its own, while a fallback's stands only on proof recorded beside it.
+	 *  Legacy saves carry no proof, so their fallback approvals lapse. */
+	private static approvals(
+		approved: readonly string[] | undefined,
+		verified: ReadonlySet<string>,
+		consulted: ReadonlyMap<string, readonly RunParticipant[]>,
+	): Set<string> {
+		const kept = new Set<string>();
+		for (const consultId of approved ?? []) {
+			const served = consulted.get(consultId) ?? [];
+			if (served.includes("fallback") && !verified.has(consultId)) continue;
+			kept.add(consultId);
+		}
+		for (const consultId of verified) kept.add(consultId);
+		return kept;
 	}
 
 	/** The final plain line, only when a passing convention audit plainly precedes it. */
