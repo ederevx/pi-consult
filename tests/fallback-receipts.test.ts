@@ -350,6 +350,8 @@ test("record store: a schema-2 fallback receipt is downgraded, not trusted", asy
 	assertEq(loaded?.details.schema, 2, "the legacy schema is preserved");
 	const run = loaded?.details.runs[0];
 	assertEq(run?.fallback?.verification, undefined, "no evidence is claimed on its behalf");
+	assertEq(run?.status, "unavailable", "the unverified run is not a verdict");
+	assertEq(loaded?.details.ok, false, "the receipt cannot claim success");
 });
 
 test("record store: a stale success flag on an unverified receipt is cleared", async () => {

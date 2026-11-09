@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.24.3
+
+### Changed
+
+- The release notes no longer credit 0.24.1 with guarantees that first
+  appeared in 0.24.2, and the schema-2 receipt test also proves the run is
+  downgraded and the receipt cannot claim success.
+
 ## 0.24.2
 
 ### Fixed
@@ -26,16 +34,13 @@
   reads; one byte longer is refused, never cut.
 - Reading past the end of a file, or the end of a directory listing, is an
   error that names the end rather than an empty, successful page; an empty
-  file still reads as an empty file, and an empty directory says so. An abort
-  that lands while a read, a listing, or a page is in flight is reported as an
-  abort and earns no evidence, including for an empty file or directory.
+  file still reads as an empty file, and an empty directory says so.
 - A directory listing keeps its continuation marker when the page fills the
   line bound, so a page of exactly the cap's worth of entries can be followed.
-- The root is canonicalized when the toolkit is created rather than at first
-  use, so a working-directory symlink retargeted after construction cannot
-  decide which tree the first call reads. An inward symlink still reads, and a
-  link that leaves the root - directly, through a chain, or dangling - is
-  still refused.
+- The toolkit retains its canonical root after the first call, so retargeting
+  the working-directory symlink between calls cannot change the permitted
+  tree. An inward symlink still reads, and a link that leaves the root -
+  directly, through a chain, or dangling - is still refused.
 - A native toolkit failure can no longer escape the conversation loop: every
   call the model made is answered with a failure result before the run ends, so
   the transcript stays replayable and a continuation is not refused as
@@ -46,9 +51,7 @@
   run's reads are history and do not license the new answer.
 - A receipt older than the verification rule (schema 2) never reads back as
   verified: a record that shows evidence the schema did not have has the claim
-  dropped. A receipt whose runs no longer add up to a usable answer also loses
-  its `ok`, even when no individual run had to change - a stale success is
-  exactly what a reader would believe.
+  dropped.
 - The fallback disclosure still names a run's reads when the run read files but
   did not succeed, instead of reporting that it read none, and it lists the
   paths rather than a count.
