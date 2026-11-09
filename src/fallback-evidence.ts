@@ -94,13 +94,13 @@ export class FallbackEvidence {
 			? details.runs.map(FallbackEvidence.withoutVerification)
 			: details.runs
 		).map((run) => FallbackEvidence.normalizeRun(run));
+		// The flag is recomputed even when no run changed: a receipt can carry
+		// `ok` whose only successful run no longer counts, and a stale success
+		// is exactly what a reader would believe.
+		const ok = runs.some((run) => FallbackEvidence.usableRun(run));
 		const changed = runs.some((run, index) => run !== details.runs[index]);
-		if (!changed) return details;
-		return {
-			...details,
-			runs,
-			ok: runs.some((run) => FallbackEvidence.usableRun(run)),
-		};
+		if (!changed && details.ok === ok) return details;
+		return { ...details, runs, ok };
 	}
 
 	private static usableRun(run: ConsultRun): boolean {

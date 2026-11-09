@@ -356,3 +356,56 @@ test("fallback models: a bound environment's defaults drive the resolution", asy
 	assertEq(models.resolve(environment as never)?.value, "one/fast",
 		"the snapshot's qualified default wins, even ambiguous unqualified");
 });
+
+test("native resume: the tool's refusal drops the earlier run's evidence", async () => {
+	const { ConsultTool } = await import("../src/consult-tool.ts");
+	const refused = ConsultTool.refusedResume({
+		fallbackFor: ["claude"],
+		selectedProvider: "one",
+		selectedModel: "fast",
+		provider: "one",
+		model: "fast",
+		servedBy: ["one/fast"],
+		verification: { kind: "native-read", paths: ["src/x.ts"] },
+		conversationPath: "/tmp/transcript.json",
+	});
+	assertEq(refused.status, "unavailable", "a refused resume is not a verdict");
+	assertEq(refused.fallback?.verification, undefined, "no evidence is carried over");
+	assertEq(refused.fallback?.conversationPath, undefined, "no transcript is claimed");
+	assertEq(refused.fallback?.servedBy.length, 0, "no responder is named");
+	assertEq(refused.fallback?.selectedModel, "fast", "the saved selection is kept for diagnosis");
+	assertEq(refused.answer, "", "there is no answer to approve anything with");
+});
+
+test("native resume: the opening message carries a timestamp", async () => {
+	const { NativeConsultant } = await import("../src/native-consultant.ts");
+	const { ArtifactStore } = await import("../src/artifact-store.ts");
+	const artifacts = new ArtifactStore(join(scratchDir(), `stamp-${Date.now()}`));
+	const paths = await artifacts.prepare("s", "c-ajb111222333");
+	const stream = {
+		streamSimple: () => ({
+			result: async () => ({
+				role: "assistant",
+				content: [{ type: "text", text: "answer" }],
+				stopReason: "stop",
+				provider: "one",
+				model: "fast",
+				usage: { input: 1, output: 1, cost: { total: 0 } },
+			}),
+		}),
+	};
+	const outcome = await new NativeConsultant({
+		registry: stream as never,
+		artifacts,
+		systemPrompt: () => "p",
+	}).consult(
+		{ provider: "one", id: "fast" },
+		"brief",
+		paths,
+		new AbortController().signal,
+		{ timeoutMs: 5000, maxRounds: 16, cwd: readable() },
+	);
+	const transcript = JSON.parse(readFileSync(outcome.conversationPath!, "utf8"));
+	const user = transcript.find((message: { role: string }) => message.role === "user");
+	assert(typeof user.timestamp === "number" && Number.isFinite(user.timestamp), "the brief is stamped");
+});

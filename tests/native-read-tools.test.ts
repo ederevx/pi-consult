@@ -27,7 +27,7 @@ const signal = new AbortController().signal;
 test("native read tools: relative paths reuse consult validation", async () => {
 	const root = cwd("rel");
 	writeFileSync(join(root, "a.ts"), "export const a = 1;\n");
-	const tools = new NativeReadTools(root);
+	const tools = await NativeReadTools.create(root);
 	const result = await tools.execute(call("read_file", { path: "a.ts" }), signal);
 	assertEq(result.message.isError, false);
 	assertEq(result.readPath, "a.ts", "the read path is the evidence");
@@ -36,7 +36,7 @@ test("native read tools: relative paths reuse consult validation", async () => {
 
 test("native read tools: absolute and parent paths are rejected", async () => {
 	const root = cwd("abs");
-	const tools = new NativeReadTools(root);
+	const tools = await NativeReadTools.create(root);
 	for (const path of ["/etc/passwd", "../outside.ts", "src/../../outside.ts"]) {
 		const result = await tools.execute(call("read_file", { path }), signal);
 		assertEq(result.message.isError, true, `${path} is refused`);
@@ -56,7 +56,7 @@ test("native read tools: file and parent symlink escapes are rejected", async ()
 	symlinkSync(join(outside, "secret.ts"), join(root, "file-link.ts"));
 	symlinkSync(outside, join(root, "dir-link"));
 	writeFileSync(join(root, "plain.ts"), "inside\n");
-	const tools = new NativeReadTools(root);
+	const tools = await NativeReadTools.create(root);
 	for (const path of ["file-link.ts", "dir-link/secret.ts"]) {
 		const result = await tools.execute(call("read_file", { path }), signal);
 		assertEq(result.readPath, undefined, `${path} is no evidence`);
@@ -76,7 +76,7 @@ test("native read tools: missing, directory, binary, and unreadable files have s
 	mkdirSync(join(root, "sub"));
 	writeFileSync(join(root, "binary.bin"), Buffer.from([0x00, 0x01, 0x02]));
 	writeFileSync(join(root, "latin1.ts"), Buffer.from([0xff, 0xfe, 0x41]));
-	const tools = new NativeReadTools(root);
+	const tools = await NativeReadTools.create(root);
 	const cases: Array<[string, string]> = [
 		["gone.ts", "file not found: gone.ts"],
 		["sub", "cannot read a directory: sub"],
@@ -93,7 +93,7 @@ test("native read tools: missing, directory, binary, and unreadable files have s
 
 test("native read tools: special files are rejected", async () => {
 	const root = cwd("special");
-	const tools = new NativeReadTools(root);
+	const tools = await NativeReadTools.create(root);
 	const result = await tools.execute(call("read_file", { path: "/dev/null" }), signal);
 	assertEq(result.readPath, undefined, "an absolute special file is refused before stat");
 	assertIncludes(
@@ -106,7 +106,7 @@ test("native read tools: special files are rejected", async () => {
 test("native read tools: an empty file is inspected, not refused", async () => {
 	const root = cwd("empty");
 	writeFileSync(join(root, "empty.ts"), "");
-	const tools = new NativeReadTools(root);
+	const tools = await NativeReadTools.create(root);
 	const result = await tools.execute(call("read_file", { path: "empty.ts" }), signal);
 	assertEq(result.readPath, "empty.ts", "an empty file is a successful read");
 	assertIncludes(text(result), "(empty file)", "the emptiness is reported");
@@ -116,7 +116,7 @@ test("native read tools: line caps preserve whole text and paginate", async () =
 	const root = cwd("pages");
 	const lines = Array.from({ length: 50 }, (_, index) => `line ${index + 1}`);
 	writeFileSync(join(root, "long.txt"), `${lines.join("\n")}\n`);
-	const tools = new NativeReadTools(root);
+	const tools = await NativeReadTools.create(root);
 	const first = await tools.execute(call("read_file", { path: "long.txt", limit: 10 }), signal);
 	assertIncludes(text(first), "line 1\n", "the page starts at the first line");
 	assertIncludes(text(first), "\nline 10", "the page keeps whole lines");
@@ -131,7 +131,7 @@ test("native read tools: line caps preserve whole text and paginate", async () =
 test("native read tools: oversized lines do not count as reads", async () => {
 	const root = cwd("oversize");
 	writeFileSync(join(root, "wide.txt"), `${"x".repeat(DEFAULT_MAX_BYTES + 1)}\n`);
-	const tools = new NativeReadTools(root);
+	const tools = await NativeReadTools.create(root);
 	const result = await tools.execute(call("read_file", { path: "wide.txt" }), signal);
 	assertEq(result.readPath, undefined, "an unreadable page is no evidence");
 	assertIncludes(
@@ -145,7 +145,7 @@ test("native read tools: a page defaults to the shared line cap", async () => {
 	const root = cwd("cap");
 	const lines = Array.from({ length: DEFAULT_MAX_LINES + 5 }, (_, index) => `l${index + 1}`);
 	writeFileSync(join(root, "many.txt"), `${lines.join("\n")}\n`);
-	const tools = new NativeReadTools(root);
+	const tools = await NativeReadTools.create(root);
 	const result = await tools.execute(call("read_file", { path: "many.txt" }), signal);
 	assertIncludes(
 		text(result),
@@ -159,7 +159,7 @@ test("native read tools: directory listings do not verify", async () => {
 	writeFileSync(join(root, "a.ts"), "a\n");
 	mkdirSync(join(root, "dir"));
 	symlinkSync(join(root, "a.ts"), join(root, "link.ts"));
-	const tools = new NativeReadTools(root);
+	const tools = await NativeReadTools.create(root);
 	const result = await tools.execute(call("list_dir", { path: "." }), signal);
 	assertEq(result.readPath, undefined, "a listing is not a read");
 	assertIncludes(text(result), '- "a.ts" (file)', "files are typed and quoted");
@@ -169,7 +169,7 @@ test("native read tools: directory listings do not verify", async () => {
 
 test("native read tools: unknown tools and malformed arguments return tool errors", async () => {
 	const root = cwd("bad");
-	const tools = new NativeReadTools(root);
+	const tools = await NativeReadTools.create(root);
 	const unknown = await tools.execute(call("bash", { command: "rm -rf /" }), signal);
 	assertEq(unknown.message.isError, true);
 	assertIncludes(text(unknown), "unknown native fallback tool: bash", "an unoffered tool is refused");
@@ -190,7 +190,7 @@ test("native read tools: an unterminated last line is never silently dropped", a
 	// No final newline: the last line is the next page, not a casualty of
 	// the bound.
 	writeFileSync(join(root, "none.txt"), "one\ntwo\nthree");
-	const tools = new NativeReadTools(root);
+	const tools = await NativeReadTools.create(root);
 	const first = await tools.execute(call("read_file", { path: "none.txt", limit: 2 }), signal);
 	assertIncludes(text(first), "one\ntwo", "the page carries its first two lines");
 	assertIncludes(text(first), '"offset":3', "the marker names the unterminated third line");
@@ -203,7 +203,7 @@ test("native read tools: a line exactly at the byte cap reads, one byte over doe
 	const root = cwd("exact");
 	writeFileSync(join(root, "exact.txt"), "x".repeat(DEFAULT_MAX_BYTES));
 	writeFileSync(join(root, "over.txt"), "x".repeat(DEFAULT_MAX_BYTES + 1));
-	const tools = new NativeReadTools(root);
+	const tools = await NativeReadTools.create(root);
 	const exact = await tools.execute(call("read_file", { path: "exact.txt" }), signal);
 	assertEq(exact.readPath, "exact.txt", "a cap-sized line is a page");
 	const over = await tools.execute(call("read_file", { path: "over.txt" }), signal);
@@ -215,7 +215,7 @@ test("native read tools: past the end is an error, not an empty page", async () 
 	const root = cwd("past");
 	writeFileSync(join(root, "two.txt"), "one\ntwo\n");
 	writeFileSync(join(root, "empty.txt"), "");
-	const tools = new NativeReadTools(root);
+	const tools = await NativeReadTools.create(root);
 	const past = await tools.execute(call("read_file", { path: "two.txt", offset: 9 }), signal);
 	assertEq(past.readPath, undefined, "an empty page past the end is no evidence");
 	assertIncludes(text(past), "line 9 is beyond the end of file: two.txt", "the end is stated");
@@ -232,7 +232,7 @@ test("native read tools: a listing keeps its marker under the cap", async () => 
 		writeFileSync(join(root, `f${String(index).padStart(4, "0")}.ts`), "x\n");
 	}
 	writeFileSync(join(root, "empty-marker.ts"), "");
-	const tools = new NativeReadTools(root);
+	const tools = await NativeReadTools.create(root);
 	const first = await tools.execute(call("list_dir", { path: "." }), signal);
 	assertIncludes(text(first), "[truncated: continue with list_dir", "the page keeps its marker");
 	assertIncludes(
@@ -254,7 +254,7 @@ test("native read tools: a listing keeps its marker under the cap", async () => 
 test("native read tools: boundaries of an empty directory and an empty listing", async () => {
 	const root = cwd("empty-dir");
 	mkdirSync(join(root, "void"));
-	const tools = new NativeReadTools(root);
+	const tools = await NativeReadTools.create(root);
 	const empty = await tools.execute(call("list_dir", { path: "void" }), signal);
 	assertIncludes(text(empty), "(empty directory)", "an empty directory says so");
 	assertEq(empty.message.isError, false, "and is a successful listing");
@@ -273,7 +273,7 @@ test("native read tools: an inward symlink reads, outward ones never do", async 
 	symlinkSync(join(outside, "secret.ts"), join(root, "chain-1"));
 	symlinkSync(join(root, "chain-1"), join(root, "chain-2"));
 	symlinkSync(join(outside, "absent.ts"), join(root, "dangling"));
-	const tools = new NativeReadTools(root);
+	const tools = await NativeReadTools.create(root);
 	const inward = await tools.execute(call("read_file", { path: "inner-link/a.ts" }), signal);
 	assertEq(inward.readPath, "inner-link/a.ts", "a link that stays inside the root reads");
 	for (const path of ["chain-2", "dangling"]) {
@@ -289,7 +289,7 @@ test("native read tools: the root is fixed for the instance", async () => {
 	writeFileSync(join(first, "only.ts"), "first\n");
 	writeFileSync(join(second, "only.ts"), "second\n");
 	symlinkSync(first, join(outer, "cwd-link"));
-	const tools = new NativeReadTools(join(outer, "cwd-link"));
+	const tools = await NativeReadTools.create(join(outer, "cwd-link"));
 	const before = await tools.execute(call("read_file", { path: "only.ts" }), signal);
 	assertIncludes(text(before), "first", "the read follows the root as it was");
 	rmSync(join(outer, "cwd-link"));
@@ -301,10 +301,41 @@ test("native read tools: the root is fixed for the instance", async () => {
 test("native read tools: an aborted read reports the abort and earns nothing", async () => {
 	const root = cwd("abort");
 	writeFileSync(join(root, "a.ts"), "a\n");
-	const tools = new NativeReadTools(root);
+	const tools = await NativeReadTools.create(root);
 	const controller = new AbortController();
 	controller.abort();
 	const result = await tools.execute(call("read_file", { path: "a.ts" }), controller.signal);
 	assertEq(result.readPath, undefined, "an aborted read is no evidence");
 	assertIncludes(text(result), "aborted before read_file ran", "the abort is named");
+});
+
+test("native read tools: the root is fixed at creation, before the first call", async () => {
+	const outer = cwd("fixed-before");
+	const first = cwd("fixed-before-first");
+	const second = cwd("fixed-before-second");
+	writeFileSync(join(first, "only.ts"), "first\n");
+	writeFileSync(join(second, "only.ts"), "second\n");
+	symlinkSync(first, join(outer, "cwd-link"));
+	const tools = await NativeReadTools.create(join(outer, "cwd-link"));
+	// Retargeted after the toolkit exists but before it ever ran: the tree it
+	// was pointed at is the tree it keeps.
+	rmSync(join(outer, "cwd-link"));
+	symlinkSync(second, join(outer, "cwd-link"));
+	const read = await tools.execute(call("read_file", { path: "only.ts" }), signal);
+	assertIncludes(text(read), "first", "the first call reads the tree the toolkit was created for");
+});
+
+test("native read tools: an abort during an empty read or listing earns nothing", async () => {
+	const root = cwd("abort-mid");
+	writeFileSync(join(root, "empty.txt"), "");
+	mkdirSync(join(root, "void"));
+	const tools = await NativeReadTools.create(root);
+	for (const [name, path] of [["read_file", "empty.txt"], ["list_dir", "void"]] as const) {
+		const controller = new AbortController();
+		const pending = tools.execute(call(name, { path }), controller.signal);
+		controller.abort();
+		const result = await pending;
+		assertEq(result.message.isError, true, `${name} of an empty target is not answered after an abort`);
+		assertEq(result.readPath, undefined, `${name} earns no evidence after an abort`);
+	}
 });

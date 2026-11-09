@@ -283,12 +283,10 @@ export class ConsultRecordStore {
 		return part.type === "text" && typeof part.text === "string";
 	}
 
-	/**
-	 * An assistant record's own fields: replaying a message the provider
-	 * cannot read is worse than refusing the continuation, so a field this
-	 * version writes is checked when it is present, and a reading it would
-	 * never write is refused. Older records without the fields still resume.
-	 */
+	// An assistant record's own fields: replaying a message the provider
+	// cannot read is worse than refusing the continuation, so a field this
+	// version writes is checked when it is present, and a reading it would
+	// never write is refused. Older records without the fields still resume.
 	private static isAssistantMetadata(record: Record<string, unknown>): boolean {
 		return (
 			ConsultRecordStore.isOptional(record.api, (value) => typeof value === "string") &&

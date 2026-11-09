@@ -144,11 +144,9 @@ export class NativeFallbackService {
 		};
 	}
 
-	/**
-	 * The message a continuation opens with: what the earlier run verified is
-	 * history, and this invocation must verify the tree it is asked about. The
-	 * transcript alone would let a remembered read pass for a fresh one.
-	 */
+	// The message a continuation opens with: what the earlier run verified is
+	// history, and this invocation must verify the tree it is asked about. The
+	// transcript alone would let a remembered read pass for a fresh one.
 	private static continuation(verification: unknown, brief: string): string {
 		const earlier = FallbackEvidence.valid(verification)?.paths ?? [];
 		const history = earlier.length === 0

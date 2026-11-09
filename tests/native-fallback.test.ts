@@ -1,4 +1,5 @@
 import { ArtifactStore } from "../src/artifact-store.ts";
+import { ConsultRecordStore } from "../src/consult-record-store.ts";
 import { ConsultConfig } from "../src/consult-config.ts";
 import { FailureClassifier } from "../src/failure-classifier.ts";
 import { FallbackModels } from "../src/fallback-models.ts";
@@ -551,7 +552,7 @@ test("native consultant: an executor that throws still answers every call", asyn
 		new AbortController().signal,
 		{
 			...config(cwd),
-			tools: () => ({
+			tools: async () => ({
 				definitions: () => [],
 				execute: async () => {
 					throw new Error("the executor broke");
@@ -567,6 +568,12 @@ test("native consultant: an executor that throws still answers every call", asyn
 	assertEq(results[0].toolCallId, "call-1", "the first call is answered");
 	assertEq(results[1].toolCallId, "call-2", "the call that came after the failure is answered too");
 	assert(results.every((message: { isError: boolean }) => message.isError), "each says it failed");
+	// Replayable is the point: the store the continuation reads through must
+	// accept the transcript the failure left behind.
+	const store = new ConsultRecordStore(artifacts);
+	const replay = await store.conversation(outcome.conversationPath);
+	assert(replay !== undefined, "the failed transcript still loads for a continuation");
+	assertEq(replay?.length, transcript.length, "every message survives the loader");
 });
 
 test("native fallback: a resume never inherits the earlier run's evidence", async () => {

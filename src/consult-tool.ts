@@ -24,6 +24,7 @@ import type {
 	ConsultReceipt,
 	ConsultTarget,
 	ConsultantName,
+	ConsultantResult,
 	FallbackMetadata,
 } from "./contracts.ts";
 import type { AgentEffortPolicy } from "./agent-effort-policy.ts";
@@ -420,6 +421,31 @@ export class ConsultTool {
 		};
 	}
 
+	// The result of a resume the gates refused: the consultation still runs,
+	// and the failed run says why instead of leaving an empty receipt. It
+	// names no responder and carries no evidence - the saved provenance
+	// belongs to the earlier invocation, not to this one.
+	static refusedResume(metadata: FallbackMetadata): ConsultantResult {
+		return {
+			consultant: "fallback",
+			fallback: {
+				...metadata,
+				provider: "",
+				model: "",
+				servedBy: [],
+				verification: undefined,
+				conversationPath: undefined,
+			},
+			status: "unavailable",
+			answer: "",
+			partial: false,
+			durationMs: 0,
+			exitCode: null,
+			error: "the native fallback is disabled or its saved model is no longer available",
+			warnings: [],
+		};
+	}
+
 	private async spec(
 		consultId: string,
 		sessionId: string,
@@ -455,28 +481,7 @@ export class ConsultTool {
 						kind: "resume" as const,
 						metadata: nativeResume.metadata,
 						messages: nativeResume.messages,
-					})) ?? {
-						// The gates refused the resume: the consultation still
-						// runs, and the failed run says why instead of an
-						// empty receipt. The refusal names no responder: the
-						// saved provenance belongs to the earlier invocation.
-						consultant: "fallback" as const,
-						fallback: {
-							...nativeResume.metadata,
-							provider: "",
-							model: "",
-							servedBy: [],
-							verification: undefined,
-							conversationPath: undefined,
-						},
-						status: "unavailable" as const,
-						answer: "",
-						partial: false,
-						durationMs: 0,
-						exitCode: null,
-						error: "the native fallback is disabled or its saved model is no longer available",
-						warnings: [],
-					},
+					})) ?? ConsultTool.refusedResume(nativeResume.metadata),
 				background: params.background === true,
 			};
 		}

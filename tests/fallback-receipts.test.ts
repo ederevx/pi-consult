@@ -351,3 +351,28 @@ test("record store: a schema-2 fallback receipt is downgraded, not trusted", asy
 	const run = loaded?.details.runs[0];
 	assertEq(run?.fallback?.verification, undefined, "no evidence is claimed on its behalf");
 });
+
+test("record store: a stale success flag on an unverified receipt is cleared", async () => {
+	const artifacts = new ArtifactStore(join(scratchDir(), `fb-stale-${Date.now()}`));
+	const store = new ConsultRecordStore(artifacts);
+	const consultId = "c-fbadb33fcafe";
+	const paths = await artifacts.prepare("s", consultId);
+	// No run changes under normalization - the fallback is already unavailable
+	// and carries no evidence - yet the receipt still claims success.
+	await artifacts.write(paths.result, JSON.stringify({
+		schema: 3,
+		consultId,
+		phase: "complete",
+		ok: true,
+		cwd: ".",
+		briefPath: paths.brief,
+		runs: [{
+			...fallbackRun(true),
+			status: "unavailable",
+			partial: false,
+			fallback: { ...fallbackRun(true).fallback!, verification: undefined },
+		}],
+	}));
+	const loaded = await store.load(consultId);
+		assertEq(loaded?.details.ok, false, "a receipt with no usable run is not successful");
+});

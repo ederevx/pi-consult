@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.24.2
+
+### Fixed
+
+- The native read tools canonicalize their root when the toolkit is created,
+  not at first use, so a working-directory symlink retargeted between the two
+  can no longer choose the tree the first call reads; a run that is already
+  aborted still touches no filesystem.
+- An abort is checked after every resolve, stat, readdir and read chunk, and
+  again before a page becomes evidence, so a cancellation that lands during a
+  read of an empty file or a listing of an empty directory is reported as an
+  abort and earns nothing.
+- A receipt whose runs no longer add up to a usable answer loses `ok` even
+  when no individual run had to change, so a stale success cannot be read back
+  as approval.
+
 ## 0.24.1
 
 ### Fixed
@@ -10,14 +26,16 @@
   reads; one byte longer is refused, never cut.
 - Reading past the end of a file, or the end of a directory listing, is an
   error that names the end rather than an empty, successful page; an empty
-  file still reads as an empty file, and an empty directory says so.
+  file still reads as an empty file, and an empty directory says so. An abort
+  that lands while a read, a listing, or a page is in flight is reported as an
+  abort and earns no evidence, including for an empty file or directory.
 - A directory listing keeps its continuation marker when the page fills the
   line bound, so a page of exactly the cap's worth of entries can be followed.
-- A symlink chain is resolved to its final target before the root check, so an
-  inward link reads and a link that leaves the root - directly, through a
-  chain, or dangling - never does. The root is resolved once, when the tools
-  are built, so a working directory retargeted mid-consultation cannot widen
-  the tree.
+- The root is canonicalized when the toolkit is created rather than at first
+  use, so a working-directory symlink retargeted after construction cannot
+  decide which tree the first call reads. An inward symlink still reads, and a
+  link that leaves the root - directly, through a chain, or dangling - is
+  still refused.
 - A native toolkit failure can no longer escape the conversation loop: every
   call the model made is answered with a failure result before the run ends, so
   the transcript stays replayable and a continuation is not refused as
@@ -28,7 +46,9 @@
   run's reads are history and do not license the new answer.
 - A receipt older than the verification rule (schema 2) never reads back as
   verified: a record that shows evidence the schema did not have has the claim
-  dropped, and a receipt with no evidence cannot be `ok`.
+  dropped. A receipt whose runs no longer add up to a usable answer also loses
+  its `ok`, even when no individual run had to change - a stale success is
+  exactly what a reader would believe.
 - The fallback disclosure still names a run's reads when the run read files but
   did not succeed, instead of reporting that it read none, and it lists the
   paths rather than a count.

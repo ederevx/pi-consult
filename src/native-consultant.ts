@@ -44,9 +44,9 @@ export interface NativeConfig {
 	maxRounds: number;
 	/** The consultation's working directory: the root every read stays under. */
 	cwd: string;
-	/** The read executor; a test substitutes one to prove a failure still
-	 *  answers every call it was given. */
-	tools?: (cwd: string) => NativeReadTools;
+	// The read executor; a test substitutes one to prove an executor that
+	// fails still answers every call it was given.
+	tools?: (cwd: string) => Promise<NativeReadTools>;
 }
 
 /** What one native conversation produced. */
@@ -111,8 +111,15 @@ export class NativeConsultant {
 		const usage = { inputTokens: 0, outputTokens: 0, costUsd: 0 };
 		const sawUsage = { any: false };
 		const serving = new Map<string, { provider: string; model: string }>();
-		const tools = config.tools ? config.tools(config.cwd) : new NativeReadTools(config.cwd);
-		const definitions = tools.definitions();
+		// Built on first use, so a run that is already aborted or expired never
+		// touches the filesystem: the root is still canonicalized before the
+		// toolkit is published, and never later than the first call that uses it.
+		let built: NativeReadTools | undefined;
+		const toolkit = async (): Promise<NativeReadTools> => {
+			built ??= config.tools ? await config.tools(config.cwd) : await NativeReadTools.create(config.cwd);
+			return built;
+		};
+		const definitions = () => toolkit().then((tools) => tools.definitions());
 		// Every successful content read in this invocation, and only those:
 		// a listing or a failed read never becomes evidence.
 		const reads = new Set<string>();
@@ -145,7 +152,7 @@ export class NativeConsultant {
 			rounds += 1;
 			let reply: AssistantMessage;
 			try {
-				reply = await this.request(model, messages, definitions, deadline, config);
+				reply = await this.request(model, messages, await definitions(), deadline, config);
 			} catch (failure) {
 				// A cancellation is aborted; a deadline expiry on its own is a
 				// timeout, so the receipt names which bound ended the run.
@@ -210,7 +217,7 @@ export class NativeConsultant {
 				}
 				let result: NativeReadResult;
 				try {
-					result = await tools.execute(call, deadline);
+					result = await (await toolkit()).execute(call, deadline);
 				} catch (thrown) {
 					// An execution that throws must still answer every call it
 					// was given, or the next round is malformed: cancel this

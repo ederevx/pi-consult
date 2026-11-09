@@ -37,17 +37,15 @@ const BINARY = "binary";
 const ABORTED = "aborted";
 
 export class NativeReadTools {
-	private readonly cwd: string;
 	private readonly paths = new ConsultPathsValidator();
-	/**
-	 * The canonical root, resolved once: the permitted tree must not move
-	 * under a consultation, so a retargeted working-directory symlink cannot
-	 * switch which files a later call may read.
-	 */
-	private root?: Promise<string>;
 
-	constructor(cwd: string) {
-		this.cwd = cwd;
+	// The root is canonicalized before the toolkit exists: were it resolved on
+	// first use, a working-directory symlink retargeted after construction
+	// would decide which tree the first call may read.
+	private constructor(private readonly root: string) {}
+
+	static async create(cwd: string): Promise<NativeReadTools> {
+		return new NativeReadTools(await new ConsultPathsValidator().canonicalRoot(cwd));
 	}
 
 	definitions(): Tool[] {
@@ -84,8 +82,10 @@ export class NativeReadTools {
 			return { message: NativeReadTools.failure(call, `invalid arguments for ${call.name}`) };
 		}
 		try {
-			const absolute = await this.paths.resolve(await this.canonicalRoot(), file);
+			const absolute = await this.paths.resolve(this.root, file);
+			NativeReadTools.check(signal);
 			const info = await stat(absolute);
+			NativeReadTools.check(signal);
 			if (info.isDirectory()) {
 				return { message: NativeReadTools.failure(call, `cannot read a directory: ${file}`) };
 			}
@@ -107,6 +107,9 @@ export class NativeReadTools {
 					};
 			}
 			const page = await NativeReadTools.page(absolute, offset, limit, signal);
+			// A chunk that completes the page can land after the abort, so the
+			// page is checked before it is allowed to become evidence.
+			NativeReadTools.check(signal);
 			if (page.next === undefined && page.lines === 0) {
 				return {
 					message: NativeReadTools.failure(
@@ -138,16 +141,21 @@ export class NativeReadTools {
 			return { message: NativeReadTools.failure(call, `invalid arguments for ${call.name}`) };
 		}
 		try {
-			const absolute = await this.paths.resolve(await this.canonicalRoot(), dir);
+			const absolute = await this.paths.resolve(this.root, dir);
+			NativeReadTools.check(signal);
 			const info = await stat(absolute);
+			NativeReadTools.check(signal);
 			if (!info.isDirectory()) {
 				return { message: NativeReadTools.failure(call, `not a directory: ${dir}`) };
 			}
+			// The entries are read first so an empty directory is checked for
+			// cancellation too: an empty listing would otherwise start no loop.
 			const entries: Array<{ name: string; type: string }> = [];
 			for (const entry of await readdir(absolute, { withFileTypes: true })) {
 				NativeReadTools.check(signal);
 				entries.push({ name: entry.name, type: NativeReadTools.type(entry) });
 			}
+			NativeReadTools.check(signal);
 			entries.sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
 			if (offset > Math.max(entries.length, 1)) {
 				return {
@@ -199,6 +207,8 @@ export class NativeReadTools {
 			reading: while (next === undefined) {
 				NativeReadTools.check(signal);
 				const { bytesRead } = await handle.read(chunk, 0, chunk.length, position);
+				// A chunk that lands after the abort must not extend the page.
+				NativeReadTools.check(signal);
 				if (bytesRead === 0) break;
 				position += bytesRead;
 				buffered = Buffer.concat([buffered, chunk.subarray(0, bytesRead)]);
@@ -239,12 +249,6 @@ export class NativeReadTools {
 		} finally {
 			await handle.close();
 		}
-	}
-
-	/** The canonical working directory, resolved once for this instance. */
-	private canonicalRoot(): Promise<string> {
-		this.root ??= this.paths.canonicalRoot(this.cwd);
-		return this.root;
 	}
 
 	/** A read that outlived its whole-run deadline stops at the next chunk. */

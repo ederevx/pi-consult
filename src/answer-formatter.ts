@@ -101,12 +101,10 @@ export class AnswerFormatter {
 		return `${provenance} ${AnswerFormatter.verification(run)}`;
 	}
 
-	/**
-	 * What this run's evidence is, and what it licenses - named apart, because
-	 * a run that read files and still failed must not be reported as having
-	 * read none, and a reader deciding on an approval needs the paths, not a
-	 * count.
-	 */
+	// What this run's evidence is, and what it licenses - named apart, because
+	// a run that read files and still failed must not be reported as having
+	// read none, and a reader deciding on an approval needs the paths, not a
+	// count.
 	private static verification(run: ConsultDetails["runs"][number]): string {
 		const evidence = FallbackEvidence.valid(run.fallback?.verification);
 		if (!evidence) {
