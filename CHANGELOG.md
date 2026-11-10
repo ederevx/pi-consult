@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.24.7
+
+### Fixed
+
+- A consultant, its version probe and its consult run on Windows: the child
+  keeps the `Path` spelling it was given, a colon in a relative path is refused
+  before it reaches a drive-relative file or an NTFS stream, and a timeout ends
+  the live process tree rather than a POSIX process group Windows never
+  creates.
+- The suite runs on Windows. Owner-only file and directory modes and
+  file-symlink escapes are named non-passes where a host cannot exercise them,
+  directory links are junctions there, and the fake consultants are launched
+  through the node that runs the suite.
+
+### Changed
+
+- A consultant is configured as `command` plus `commandArgs`, so an interpreter
+  and its entry point can be selected shell-free; a `.cmd` or `.bat` launcher is
+  refused with that message instead of reaching a shell.
+- A descendant that leaves the leader's tree before the kill is a named
+  non-pass on both platforms: an escape-proof owner needs a Job Object or a
+  cgroup, which no backend here creates.
+
 ## 0.24.6
 
 ### Changed
