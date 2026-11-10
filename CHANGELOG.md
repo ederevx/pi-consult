@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.24.9
+
+### Fixed
+
+- A consultant process tree stays owned until it is shown to be gone: a
+  delivered signal no longer stands in for a stopped tree, a leader that
+  disappeared no longer stands in for its descendants, and a failed Windows
+  `taskkill` stays an open diagnostic instead of passing for cleanup.
+
+### Changed
+
+- `killAll` returns the trees it could not confirm stopped. Session shutdown
+  warns with that count, and a consultant result carries the reason as a
+  warning.
+
 ## 0.24.8
 
 ### Fixed
