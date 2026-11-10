@@ -34,6 +34,14 @@ export interface ProcessSpec {
 	onStdoutLine?: (line: string) => void;
 }
 
+/** How one termination attempt ended. */
+interface Termination {
+	/** The tree is stopped, or no further attempt this owner can make would stop it. */
+	settled: boolean;
+	/** Why the attempt did not reach the whole tree. */
+	failure?: string;
+}
+
 /** How the process ended, with bounded output. */
 export interface ProcessOutcome {
 	exitCode: number | null;
@@ -51,6 +59,8 @@ export interface ProcessOutcome {
 
 export class ProcessRunner {
 	private readonly children = new Set<ChildProcess>();
+	/** Trees whose termination attempt settled, so no cleanup path repeats it. */
+	private readonly stopped = new WeakSet<ChildProcess>();
 
 	/** Run one process to completion. Never rejects. */
 	run(spec: ProcessSpec): Promise<ProcessOutcome> {
@@ -141,12 +151,16 @@ export class ProcessRunner {
 
 			const terminate = (child: ChildProcess): void => {
 				if (child.pid === undefined || killTimer) return;
-				if (this.signalTree(child, "SIGTERM") === undefined) stopConfirmed = true;
+				const first = this.signalTree(child, "SIGTERM");
+				stopConfirmed = first.settled;
+				terminationError = first.failure;
 				killTimer = setTimeout(() => {
 					if (child.pid === undefined) return;
-					const failure = this.signalTree(child, "SIGKILL");
-					stopConfirmed = failure === undefined;
-					terminationError = failure;
+					if (!stopConfirmed) {
+						const final = this.signalTree(child, "SIGKILL");
+						stopConfirmed = final.settled;
+						terminationError = final.failure;
+					}
 					// A descendant holding the pipes can hold `close`
 					// open past the kill: the streams close now and the
 					// outcome settles once. Ownership holds until the
@@ -236,8 +250,8 @@ export class ProcessRunner {
 			child.on("close", (code: number | null, signal: NodeJS.Signals | null) => {
 				// The armed escalation stays: a leader's exit does not
 				// establish that its descendants have stopped. Ownership
-				// holds until the tree is confirmed stopped or the
-				// escalation fires, so killAll stays able to reach it.
+				// holds until the tree is confirmed stopped, so killAll stays
+				// able to reach a survivor after the escalation gives up.
 				closed = true;
 				clearTimeout(timer);
 				if (!killTimer || stopConfirmed) this.children.delete(child);
@@ -253,73 +267,59 @@ export class ProcessRunner {
 	}
 
 	/**
-	 * Terminate every owned process tree, retaining one whose tree could not be
-	 * confirmed stopped so a later call retries it. Idempotent.
+	 * Terminate every owned process tree and return how many stayed owned,
+	 * so a caller can report cleanup it could not confirm. Idempotent.
 	 */
-	killAll(): void {
+	killAll(): number {
 		for (const child of [...this.children]) {
-			if (child.pid === undefined || this.signalTree(child, "SIGKILL") === undefined) {
-				this.children.delete(child);
-			}
+			if (this.signalTree(child, "SIGKILL").settled) this.children.delete(child);
 		}
+		return this.children.size;
 	}
 
 	/**
 	 * The one termination owner. POSIX signals the child's own process group;
 	 * Windows has no process group, so `taskkill /T` walks the live tree from
-	 * the leader. Returns why the tree could not be confirmed stopped, or
-	 * undefined once it is.
+	 * the leader.
 	 */
-	private signalTree(child: ChildProcess, signal: NodeJS.Signals): string | undefined {
-		if (child.pid === undefined) return undefined;
-		const failure = process.platform === "win32"
+	private signalTree(child: ChildProcess, signal: NodeJS.Signals): Termination {
+		if (child.pid === undefined || this.stopped.has(child)) return { settled: true };
+		const result = process.platform === "win32"
 			? ProcessRunner.taskkillTree(child.pid)
 			: ProcessRunner.signalGroup(child, signal);
-		if (failure === undefined || !ProcessRunner.running(child.pid)) return undefined;
-		return failure;
+		if (result.settled) this.stopped.add(child);
+		return result;
 	}
 
-	/** Windows: stop the live tree rooted at a leader. */
-	private static taskkillTree(pid: number): string | undefined {
+	private static taskkillTree(pid: number): Termination {
 		const result = spawnSync(ProcessRunner.taskkill(), ["/PID", String(pid), "/T", "/F"], {
 			stdio: "ignore",
 			windowsHide: true,
 		});
-		if (result.error) return result.error.message;
-		return result.status === 0 ? undefined : `taskkill exited with ${String(result.status)}`;
+		if (result.error) return { settled: false, failure: result.error.message };
+		return result.status === 0
+			? { settled: true }
+			: { settled: false, failure: `taskkill exited with ${String(result.status)}` };
 	}
 
-	/**
-	 * `taskkill` is resolved from the Windows directory, not `Path`: a
-	 * consultant's own search path must not decide whether a tree can be
-	 * stopped.
-	 */
+	/** The Windows directory owns this command, not the child's search path. */
 	private static taskkill(): string {
 		const root = process.env.SystemRoot ?? process.env.WINDIR;
 		return root === undefined ? "taskkill" : join(root, "System32", "taskkill.exe");
 	}
 
-	/** POSIX: signal the child's process group, then the leader alone. */
-	private static signalGroup(child: ChildProcess, signal: NodeJS.Signals): string | undefined {
+	/** POSIX: signal the group; only `SIGKILL` delivery ends the attempt. */
+	private static signalGroup(child: ChildProcess, signal: NodeJS.Signals): Termination {
+		const pid = child.pid!;
 		try {
-			process.kill(-child.pid!, signal);
-			return undefined;
-		} catch {
-			try {
-				child.kill(signal);
-				return undefined;
-			} catch (error) {
-				return error instanceof Error ? error.message : String(error);
-			}
-		}
-	}
-
-	private static running(pid: number): boolean {
-		try {
-			process.kill(pid, 0);
-			return true;
-		} catch {
-			return false;
+			process.kill(-pid, signal);
+			return { settled: signal === "SIGKILL" };
+		} catch (error) {
+			const code = (error as NodeJS.ErrnoException).code;
+			if (code === "ESRCH") return { settled: true };
+			return child.kill(signal)
+				? { settled: false, failure: `only ${String(pid)} was signalled: the group failed with ${code}` }
+				: { settled: false, failure: `neither the group nor ${String(pid)} could be signalled: ${code}` };
 		}
 	}
 }

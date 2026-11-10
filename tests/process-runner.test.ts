@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { ProcessRunner } from "../src/process-runner.ts";
@@ -178,6 +178,36 @@ test("process runner: a timeout stops a descendant the leader left running", asy
 	assertEq(await gone(grandchild), true, "the descendant is stopped with its leader");
 });
 
+test("process runner: a tree stopped by an abort is not addressed again", async () => {
+	const runner = new ProcessRunner();
+	const marker = join(scratchDir(), `stopped-${Date.now()}.pid`);
+	const controller = new AbortController();
+	const running = runner.run({
+		command: NODE,
+		args: [
+			"-e",
+			`require("node:fs").writeFileSync(${JSON.stringify(marker)}, String(process.pid));` +
+				"setInterval(()=>{},1000);",
+		],
+		cwd: CWD,
+		stdin: "",
+		timeoutMs: 60_000,
+		signal: controller.signal,
+	});
+	try {
+		for (let i = 0; i < 100 && !existsSync(marker); i += 1) await delay(20);
+		assert(existsSync(marker), "the child runs before the abort");
+		controller.abort();
+		assertEq(runner.killAll(), 0, "a stopped tree is not counted as unconfirmed");
+		const outcome = await running;
+		assertEq(outcome.aborted, true, "the abort is still the reported outcome");
+	} finally {
+		controller.abort();
+		runner.killAll();
+		await running;
+	}
+});
+
 const FAILED_KILL = "process runner: a failed kill keeps its tree owned and says so";
 
 if (process.platform === "win32") {
@@ -186,41 +216,41 @@ if (process.platform === "win32") {
 		const pidFile = join(scratchDir(), `unowned-${Date.now()}.pid`);
 		const systemRoot = process.env.SystemRoot;
 		const childEnv = { ...process.env };
-		// A Windows directory with no taskkill in it: the child keeps the real
-		// runtime through its own environment, and only the runner's resolution
-		// of taskkill is broken.
-		const run = async () => {
-			process.env.SystemRoot = join(scratchDir(), `no-system-root-${Date.now()}`);
-			try {
-				return await runner.run({
-					command: NODE,
-					args: [
-						"-e",
-						`require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));` +
-							"setInterval(()=>{},1000);",
-					],
-					cwd: CWD,
-					env: childEnv,
-					stdin: "",
-					timeoutMs: 300,
-				});
-			} finally {
-				if (systemRoot === undefined) delete process.env.SystemRoot;
-				else process.env.SystemRoot = systemRoot;
-			}
-		};
-		const outcome = await run();
-		assertEq(outcome.timedOut, true, "the leader is timed out");
-		assert(
-			outcome.terminationError !== undefined,
-			"the failed kill is reported instead of passing for cleanup",
-		);
-		const leader = Number(readFileSync(pidFile, "utf8"));
-		assertEq(alive(leader), true, "the leader survived the failed kill");
-		// Ownership was kept, so the same runner retries once taskkill is
-		// reachable again.
-		runner.killAll();
-		assertEq(await gone(leader), true, "the retained tree is stopped on the retry");
+		// Only the runner's taskkill resolution is broken; the child keeps its
+		// own environment.
+		try {
+			const outcome = await (async () => {
+				process.env.SystemRoot = join(scratchDir(), `no-system-root-${Date.now()}`);
+				try {
+					return await runner.run({
+						command: NODE,
+						args: [
+							"-e",
+							`require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));` +
+								"setInterval(()=>{},1000);",
+						],
+						cwd: CWD,
+						env: childEnv,
+						stdin: "",
+						timeoutMs: 300,
+					});
+				} finally {
+					if (systemRoot === undefined) delete process.env.SystemRoot;
+					else process.env.SystemRoot = systemRoot;
+				}
+			})();
+			assertEq(outcome.timedOut, true, "the leader is timed out");
+			assert(
+				outcome.terminationError !== undefined,
+				"the failed kill is reported instead of passing for cleanup",
+			);
+			const leader = Number(readFileSync(pidFile, "utf8"));
+			assertEq(alive(leader), true, "the leader survived the failed kill");
+			runner.killAll();
+			assertEq(await gone(leader), true, "the retained tree is stopped on the retry");
+		} finally {
+			runner.killAll();
+		}
 	});
 } else {
 	testUnsupported(FAILED_KILL, "the failure path is the Windows taskkill resolution; POSIX signals a process group");
