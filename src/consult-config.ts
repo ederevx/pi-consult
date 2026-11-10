@@ -32,7 +32,12 @@ export type Effort = "low" | "medium" | "high" | "xhigh";
 /** Per-consultant settings. */
 export interface ConsultantSettings {
 	enabled: boolean;
+	/** The native executable to launch, shell-free. */
 	command: string;
+	/** Arguments that precede the CLI's own argv: the entry point when
+	 *  `command` is an interpreter, or a fixed launcher argument. Never
+	 *  contains a quote, since no shell ever reads it. */
+	commandArgs: string[];
 	model?: string;
 	effort?: Effort;
 	timeoutMs: number;
@@ -197,6 +202,7 @@ export class ConsultConfig {
 		return {
 			enabled: ConsultConfig.bool(raw.enabled, true),
 			command: ConsultConfig.str(raw.command) ?? name,
+			commandArgs: ConsultConfig.stringList(raw.commandArgs),
 			model: model || undefined,
 			effort: effort || undefined,
 			timeoutMs: ConsultConfig.positiveNumber(raw.timeoutMs, ConsultConfig.DEFAULT_TIMEOUT_MS),

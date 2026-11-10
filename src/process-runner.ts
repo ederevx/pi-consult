@@ -4,15 +4,18 @@
  * Spawns a command in its own process group, writes the whole brief to
  * stdin (never an argument), decodes stdout as UTF-8 across chunk
  * boundaries, enforces timeouts and output caps, and terminates the whole
- * group on timeout or abort.
+ * tree on timeout or abort. Native executables only: a batch launcher needs a
+ * shell, which would reinterpret argv, so it is refused with the
+ * executable-plus-prefix-arguments contract it should use instead.
  */
 
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 
 const DEFAULT_MAX_STDOUT_BYTES = 16 * 1024 * 1024;
 const DEFAULT_MAX_STDERR_BYTES = 256 * 1024;
 const KILL_GRACE_MS = 2_000;
+const BATCH_LAUNCHER = /\.(?:cmd|bat)$/i;
 
 /** One process to run. */
 export interface ProcessSpec {
@@ -56,6 +59,21 @@ export class ProcessRunner {
 				stderr: "",
 				timedOut: false,
 				aborted: true,
+				stdoutOverflow: false,
+				durationMs: 0,
+			});
+		}
+		if (process.platform === "win32" && BATCH_LAUNCHER.test(spec.command)) {
+			return Promise.resolve({
+				exitCode: null,
+				killSignal: null,
+				stdout: "",
+				stderr: "",
+				timedOut: false,
+				aborted: false,
+				spawnError:
+					`a batch launcher cannot run without a shell: ${spec.command} — ` +
+					"configure the executable in \"command\" and its prefix arguments in \"commandArgs\"",
 				stdoutOverflow: false,
 				durationMs: 0,
 			});
@@ -118,26 +136,10 @@ export class ProcessRunner {
 
 			const terminate = (child: ChildProcess): void => {
 				if (child.pid === undefined || killTimer) return;
-				try {
-					process.kill(-child.pid, "SIGTERM");
-				} catch {
-					try {
-						child.kill("SIGTERM");
-					} catch {
-						// already gone
-					}
-				}
+				this.signalTree(child, "SIGTERM");
 				killTimer = setTimeout(() => {
 					if (child.pid === undefined) return;
-					try {
-						process.kill(-child.pid, "SIGKILL");
-					} catch {
-						try {
-							child.kill("SIGKILL");
-						} catch {
-							// already gone
-						}
-					}
+					this.signalTree(child, "SIGKILL");
 					// A descendant holding the pipes can hold `close`
 					// open past the kill: the streams close now and the
 					// outcome settles once. Ownership holds until the
@@ -167,7 +169,10 @@ export class ProcessRunner {
 					env: spec.env,
 					stdio: ["pipe", "pipe", "pipe"],
 					shell: false,
-					detached: true,
+					windowsHide: true,
+					// A process group is a POSIX ownership handle; Windows spawns
+					// no console group, and the tree is walked by pid instead.
+					detached: process.platform !== "win32",
 				});
 			} catch (error) {
 				spawnError = error instanceof Error ? error.message : String(error);
@@ -241,20 +246,38 @@ export class ProcessRunner {
 		});
 	}
 
-	/** Terminate every owned process group. Idempotent. */
+	/** Terminate every owned process tree. Idempotent. */
 	killAll(): void {
 		for (const child of [...this.children]) {
 			if (child.pid === undefined) continue;
-			try {
-				process.kill(-child.pid, "SIGKILL");
-			} catch {
-				try {
-					child.kill("SIGKILL");
-				} catch {
-					// already gone
-				}
-			}
+			this.signalTree(child, "SIGKILL");
 		}
 		this.children.clear();
+	}
+
+	/**
+	 * The one termination owner. POSIX signals the child's own process group;
+	 * Windows has none, so `taskkill /T` walks the live tree from the leader.
+	 * A descendant that leaves that tree before the kill keeps running: an
+	 * escape-proof owner needs a Job Object, which is not implemented.
+	 */
+	private signalTree(child: ChildProcess, signal: NodeJS.Signals): void {
+		if (child.pid === undefined) return;
+		if (process.platform === "win32") {
+			spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
+				stdio: "ignore",
+				windowsHide: true,
+			});
+			return;
+		}
+		try {
+			process.kill(-child.pid, signal);
+		} catch {
+			try {
+				child.kill(signal);
+			} catch {
+				// already gone
+			}
+		}
 	}
 }

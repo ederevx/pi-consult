@@ -14,8 +14,7 @@ import { AnswerFormatter } from "../src/answer-formatter.ts";
 import { SessionIdentity } from "../src/session-identity.ts";
 import { ClaudeConsultant } from "../src/consultants/claude-consultant.ts";
 import { CodexConsultant } from "../src/consultants/codex-consultant.ts";
-import { ProcessRunner } from "../src/process-runner.ts";
-import { buildConsultFixture, configFile, fakeClaude, fakeCodex } from "./consult-fixture.ts";
+import { FakeConsultantRunner, buildConsultFixture, configFile, fakeClaude, fakeCodex } from "./consult-fixture.ts";
 import { FakeContext, FakePi, assert, assertEq, scratchDir, test } from "./harness.ts";
 
 function delay(ms: number): Promise<void> {
@@ -102,13 +101,13 @@ test("runner: a throwing adapter still ends its own clock", async () => {
 });
 
 test("adapters: an unreadable line is still activity", async () => {
-	const processes = new ProcessRunner();
+	const processes = new FakeConsultantRunner();
 	const claude = new ClaudeConsultant(
-		{ enabled: true, command: fakeClaude(0, false, false, true), timeoutMs: 2000, isolation: "clean" },
+		{ enabled: true, command: fakeClaude(0, false, false, true), timeoutMs: 2000, isolation: "clean", commandArgs: [] },
 		processes,
 	);
 	const codex = new CodexConsultant(
-		{ enabled: true, command: fakeCodex(0, false, true), timeoutMs: 2000, isolation: "clean" },
+		{ enabled: true, command: fakeCodex(0, false, true), timeoutMs: 2000, isolation: "clean", commandArgs: [] },
 		processes,
 	);
 	let claudeLines = 0;

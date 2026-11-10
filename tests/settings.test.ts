@@ -6,7 +6,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { ConsultConfig } from "../src/consult-config.ts";
 import { ConsultSettings } from "../src/consult-settings.ts";
 import { ConsultSettingsStore } from "../src/consult-settings-store.ts";
-import { assert, assertEq, assertIncludes, scratchDir, test } from "./harness.ts";
+import { assert, assertEq, assertIncludes, scratchDir, test, testUnsupported } from "./harness.ts";
 
 /** A unique scratch directory for a settings-document test. */
 function scratch(name: string): string {
@@ -77,13 +77,29 @@ test("settings: refuses to overwrite a malformed file", () => {
 	assertEq(readFileSync(file, "utf8"), "{ not json", "file left untouched");
 });
 
-test("settings: writes valid JSON with mode 0600", () => {
+test("settings: writes valid JSON with the edit inside the namespace", () => {
 	const { store, file } = make("settings-four");
 	assertEq(store.apply("maxConcurrent", "3"), undefined);
 	const raw = JSON.parse(readFileSync(file, "utf8"));
 	assertEq(raw.piConsult.maxConcurrent, 3, "the value lands inside the namespace");
-	assertEq(statSync(file).mode & 0o777, 0o600);
 });
+
+const OWNER_MODE = "settings: a written settings.json is readable only by its owner (0600)";
+
+if (process.platform === "win32") {
+	// Windows Node implements no owner/group/other bits: a chmod neither sets
+	// nor reports 0600, and only an explicit DACL could carry the guarantee.
+	testUnsupported(
+		OWNER_MODE,
+		"Windows Node implements no owner-only mode bits; the file is created and read back, but 0600 is unverified",
+	);
+} else {
+	test(OWNER_MODE, () => {
+		const { store, file } = make("settings-mode");
+		assertEq(store.apply("maxConcurrent", "3"), undefined);
+		assertEq(statSync(file).mode & 0o777, 0o600, "the document is created owner-only");
+	});
+}
 
 test("settings: accepts a JSON gate list", () => {
 	const { store, file } = make("settings-five");

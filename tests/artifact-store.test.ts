@@ -1,8 +1,8 @@
-import { existsSync, mkdirSync, statSync, utimesSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, utimesSync } from "node:fs";
 import { join } from "node:path";
 
 import { ArtifactStore } from "../src/artifact-store.ts";
-import { assert, assertEq, scratchDir, test } from "./harness.ts";
+import { assert, assertEq, scratchDir, test, testUnsupported } from "./harness.ts";
 
 test("artifact store: hostile ids cannot escape the root", async () => {
 	const root = join(scratchDir(), `art-escape-${Date.now()}`);
@@ -24,14 +24,35 @@ test("artifact store: a write outside the root is refused", async () => {
 	assert(threw, "outside write refused");
 });
 
-test("artifact store: files are 0600 and directories 0700", async () => {
+test("artifact store: a prepared consult holds its brief verbatim", async () => {
 	const root = join(scratchDir(), `art-mode-${Date.now()}`);
 	const store = new ArtifactStore(root);
 	const paths = await store.prepare("sess", "c-abcdef123456");
 	await store.write(paths.brief, "hello");
-	assertEq(statSync(paths.dir).mode & 0o777, 0o700, "directory mode");
-	assertEq(statSync(paths.brief).mode & 0o777, 0o600, "file mode");
+	assertEq(statSync(paths.dir).isDirectory(), true, "the consult directory is a directory");
+	assertEq(statSync(paths.brief).isFile(), true, "the brief is a file");
+	assertEq(readFileSync(paths.brief, "utf8"), "hello", "the brief is stored as written");
 });
+
+const POSIX_MODES = "artifact store: consult directories are 0700 and their files 0600";
+
+if (process.platform === "win32") {
+	// Windows Node implements no owner/group/other bits: 0666 is not a privacy
+	// verdict and 0600 is not an enforced DACL, so neither is asserted.
+	testUnsupported(
+		POSIX_MODES,
+		"Windows Node implements no owner-only mode bits; the files are written and read back, but 0600/0700 are unverified",
+	);
+} else {
+	test(POSIX_MODES, async () => {
+		const root = join(scratchDir(), `art-posix-mode-${Date.now()}`);
+		const store = new ArtifactStore(root);
+		const paths = await store.prepare("sess", "c-abcdef123456");
+		await store.write(paths.brief, "hello");
+		assertEq(statSync(paths.dir).mode & 0o777, 0o700, "directory mode");
+		assertEq(statSync(paths.brief).mode & 0o777, 0o600, "file mode");
+	});
+}
 
 test("artifact store: gc removes only old consult directories", async () => {
 	const root = join(scratchDir(), `art-gc-${Date.now()}`);

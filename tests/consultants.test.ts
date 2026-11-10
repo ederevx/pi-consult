@@ -1,12 +1,14 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import { ClaudeConsultant } from "../src/consultants/claude-consultant.ts";
 import { CodexConsultant } from "../src/consultants/codex-consultant.ts";
 import { ConsultantEnv } from "../src/consultant-env.ts";
 import type { ConsultRequest } from "../src/contracts.ts";
-import { ProcessRunner } from "../src/process-runner.ts";
-import { fakeCodex } from "./consult-fixture.ts";
-import { assert, assertEq, scratchDir, test } from "./harness.ts";
+import { FakeConsultantRunner, fakeClaude, fakeCodex } from "./consult-fixture.ts";
+import { assert, assertEq, scratchDir, test, testUnsupported } from "./harness.ts";
 
-const runner = new ProcessRunner();
+const runner = new FakeConsultantRunner();
 
 function request(resumeSessionId?: string): ConsultRequest {
 	return {
@@ -31,9 +33,36 @@ test("consultant env: a codex child keeps the Windows runtime it needs", () => {
 	assert(!("AWS_SECRET_ACCESS_KEY" in env), "an unrelated secret stays out");
 });
 
+const PATH_SPELLING = "consultant env: a Windows Path spelling reaches the child once";
+
+if (process.platform === "win32") {
+	test(PATH_SPELLING, () => {
+		const source = {
+			Path: "C:\\bin;C:\\Windows",
+			SYSTEMROOT: "C:\\Windows",
+			AWS_SECRET_ACCESS_KEY: "secret",
+		};
+		const env = ConsultantEnv.codex(source);
+		assertEq(env.Path, source.Path, "the child keeps the spelling it was given");
+		assertEq(env.SYSTEMROOT, source.SYSTEMROOT, "a Windows runtime variable still reaches it");
+		assert(!("AWS_SECRET_ACCESS_KEY" in env), "an unrelated secret stays out");
+		const twice = ConsultantEnv.codex({ Path: "first", PATH: "second" });
+		assertEq(
+			Object.keys(twice).filter((key) => key.toUpperCase() === "PATH").length,
+			1,
+			"one spelling of the search path arrives",
+		);
+	});
+} else {
+	testUnsupported(
+		PATH_SPELLING,
+		"only Windows spells PATH as Path; a POSIX allowlist is case-sensitive by design",
+	);
+}
+
 test("claude adapter: first call isolates, restricts tools, and names a session", () => {
 	const consultant = new ClaudeConsultant(
-		{ enabled: true, command: "claude", timeoutMs: 1000, isolation: "clean" },
+		{ enabled: true, command: "claude", timeoutMs: 1000, isolation: "clean", commandArgs: [] },
 		runner,
 	);
 	const args = consultant.buildArgs(request(), "11111111-2222-3333-4444-555555555555");
@@ -49,7 +78,7 @@ test("claude adapter: first call isolates, restricts tools, and names a session"
 
 test("claude adapter: a continuation resumes the named session and keeps the flags", () => {
 	const consultant = new ClaudeConsultant(
-		{ enabled: true, command: "claude", timeoutMs: 1000, isolation: "clean" },
+		{ enabled: true, command: "claude", timeoutMs: 1000, isolation: "clean", commandArgs: [] },
 		runner,
 	);
 	const args = consultant.buildArgs(request("sid-abc"), "11111111-2222-3333-4444-555555555555");
@@ -60,7 +89,7 @@ test("claude adapter: a continuation resumes the named session and keeps the fla
 
 test("codex adapter: first call is read-only and reads the brief from stdin", () => {
 	const consultant = new CodexConsultant(
-		{ enabled: true, command: "codex", timeoutMs: 1000, isolation: "clean" },
+		{ enabled: true, command: "codex", timeoutMs: 1000, isolation: "clean", commandArgs: [] },
 		runner,
 	);
 	const args = consultant.buildArgs({ ...request(), consultant: "codex" });
@@ -74,7 +103,7 @@ test("codex adapter: first call is read-only and reads the brief from stdin", ()
 
 test("codex adapter: a continuation uses resume with the sandbox config, not -s/-C", () => {
 	const consultant = new CodexConsultant(
-		{ enabled: true, command: "codex", timeoutMs: 1000, isolation: "clean" },
+		{ enabled: true, command: "codex", timeoutMs: 1000, isolation: "clean", commandArgs: [] },
 		runner,
 	);
 	const args = consultant.buildArgs({
@@ -93,7 +122,7 @@ test("codex adapter: a continuation uses resume with the sandbox config, not -s/
 
 test("claude adapter: a request model overrides the configured model", () => {
 	const consultant = new ClaudeConsultant(
-		{ enabled: true, command: "claude", model: "configured", timeoutMs: 1000, isolation: "clean" },
+		{ enabled: true, command: "claude", model: "configured", timeoutMs: 1000, isolation: "clean", commandArgs: [] },
 		runner,
 	);
 	const args = consultant.buildArgs({ ...request(), model: "requested" }, "11111111-2222-3333-4444-555555555555");
@@ -109,6 +138,7 @@ test("codex adapter: an isolated run names the sandbox backend Windows needs", (
 			command: "codex",
 			timeoutMs: 1000,
 			isolation: "clean",
+			commandArgs: [],
 			windowsSandbox: "mxc",
 		},
 		runner,
@@ -124,7 +154,7 @@ test("codex adapter: an isolated run names the sandbox backend Windows needs", (
 
 test("codex adapter: isolation inherit keeps the user's own configuration", () => {
 	const consultant = new CodexConsultant(
-		{ enabled: true, command: "codex", timeoutMs: 1000, isolation: "inherit" },
+		{ enabled: true, command: "codex", timeoutMs: 1000, isolation: "inherit", commandArgs: [] },
 		runner,
 	);
 	const args = consultant.buildArgs({ ...request(), consultant: "codex" });
@@ -134,7 +164,7 @@ test("codex adapter: isolation inherit keeps the user's own configuration", () =
 
 test("claude adapter: a clean run reads with its own tools and generates no MCP setup", () => {
 	const consultant = new ClaudeConsultant(
-		{ enabled: true, command: "claude", timeoutMs: 1000, isolation: "clean" },
+		{ enabled: true, command: "claude", timeoutMs: 1000, isolation: "clean", commandArgs: [] },
 		runner,
 	);
 	for (const args of [
@@ -150,7 +180,7 @@ test("claude adapter: a clean run reads with its own tools and generates no MCP 
 
 test("codex adapter: a clean run generates no MCP server configuration", () => {
 	const consultant = new CodexConsultant(
-		{ enabled: true, command: "codex", timeoutMs: 1000, isolation: "clean" },
+		{ enabled: true, command: "codex", timeoutMs: 1000, isolation: "clean", commandArgs: [] },
 		runner,
 	);
 	for (const args of [
@@ -162,9 +192,30 @@ test("codex adapter: a clean run generates no MCP server configuration", () => {
 	}
 });
 
+test("claude adapter: configured precedent arguments lead the CLI argv", async () => {
+	const record = join(scratchDir(), `argv-prefix-${Date.now()}.json`);
+	const consultant = new ClaudeConsultant(
+		{ enabled: true, command: fakeClaude(), timeoutMs: 5000, isolation: "clean", commandArgs: ["--from-config"] },
+		runner,
+	);
+	process.env.CLAUDE_FAKE_RECORD = record;
+	try {
+		await consultant.probe();
+		const probed: string[] = JSON.parse(readFileSync(record, "utf8")).argv;
+		assertEq(probed[0], "--from-config", "the probe carries the configured prefix");
+		assertEq(probed[1], "--version", "and then its own flag");
+		await consultant.consult({ ...request(), cwd: scratchDir() });
+		const consulted: string[] = JSON.parse(readFileSync(record, "utf8")).argv;
+		assertEq(consulted[0], "--from-config", "the consult carries the configured prefix");
+		assert(consulted.includes("--output-format"), "and the adapter's own argv follows it");
+	} finally {
+		delete process.env.CLAUDE_FAKE_RECORD;
+	}
+});
+
 test("codex adapter: an agent message is prose, not progress", async () => {
 	const consultant = new CodexConsultant(
-		{ enabled: true, command: fakeCodex(0, true), timeoutMs: 5000, isolation: "clean" },
+		{ enabled: true, command: fakeCodex(0, true), timeoutMs: 5000, isolation: "clean", commandArgs: [] },
 		runner,
 	);
 	const progress: string[] = [];

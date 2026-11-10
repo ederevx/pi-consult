@@ -1,17 +1,44 @@
-import { mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, rmdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "@earendil-works/pi-coding-agent";
 import type { ToolCall } from "@earendil-works/pi-ai";
 
 import { NativeReadTools } from "../src/native-read-tools.ts";
-import { assert, assertEq, assertIncludes, scratchDir, test } from "./harness.ts";
+import { assert, assertEq, assertIncludes, scratchDir, test, testUnsupported, unsupported } from "./harness.ts";
+
+const WINDOWS = process.platform === "win32";
 
 /** A fresh working directory per case: the tools resolve inside one root. */
 function cwd(tag: string): string {
 	const dir = join(scratchDir(), `read-${tag}-${Date.now()}-${Math.random().toString(16).slice(2)}`);
 	mkdirSync(dir, { recursive: true });
 	return dir;
+}
+
+/** Link a directory: a junction on Windows, a directory symlink elsewhere. */
+function linkDir(target: string, link: string): void {
+	symlinkSync(target, link, WINDOWS ? "junction" : "dir");
+}
+
+/** Remove a directory link, never what it points at. */
+function removeLink(link: string): void {
+	if (WINDOWS) rmdirSync(link);
+	else rmSync(link);
+}
+
+/** Link a file, or return why this host cannot create a file symlink. */
+function linkFile(target: string, link: string): string | undefined {
+	try {
+		symlinkSync(target, link);
+		return undefined;
+	} catch (error) {
+		const code = (error as NodeJS.ErrnoException).code;
+		if (code === "EPERM" || code === "EACCES") {
+			return `the host denies file symlink creation (${code}): the privilege or Developer Mode is absent`;
+		}
+		throw error;
+	}
 }
 
 function call(name: string, args: Record<string, unknown>): ToolCall {
@@ -49,26 +76,40 @@ test("native read tools: absolute and parent paths are rejected", async () => {
 	}
 });
 
-test("native read tools: file and parent symlink escapes are rejected", async () => {
+test("native read tools: a directory link outside the root is refused", async () => {
 	const root = cwd("link");
 	const outside = cwd("outside");
 	writeFileSync(join(outside, "secret.ts"), "leak\n");
-	symlinkSync(join(outside, "secret.ts"), join(root, "file-link.ts"));
-	symlinkSync(outside, join(root, "dir-link"));
+	linkDir(outside, join(root, "dir-link"));
 	writeFileSync(join(root, "plain.ts"), "inside\n");
 	const tools = await NativeReadTools.create(root);
-	for (const path of ["file-link.ts", "dir-link/secret.ts"]) {
-		const result = await tools.execute(call("read_file", { path }), signal);
-		assertEq(result.readPath, undefined, `${path} is no evidence`);
-		assertIncludes(
-			text(result),
-			"file paths must be relative and stay inside the working directory",
-			`${path} is refused as an escape`,
-		);
-	}
+	const result = await tools.execute(call("read_file", { path: "dir-link/secret.ts" }), signal);
+	assertEq(result.readPath, undefined, "dir-link/secret.ts is no evidence");
+	assertIncludes(
+		text(result),
+		"file paths must be relative and stay inside the working directory",
+		"the escape is refused",
+	);
 	const listing = await tools.execute(call("list_dir", { path: "." }), signal);
-	assertIncludes(text(listing), "file-link.ts", "a listing names the link without following it");
+	assertIncludes(text(listing), "plain.ts", "a listing names what the root holds");
+	assertIncludes(text(listing), '- "dir-link" (symlink)', "a link is named, not followed");
 	assertEq(listing.readPath, undefined, "a listing never verifies");
+});
+
+test("native read tools: a file symlink outside the root is refused", async () => {
+	const root = cwd("file-link");
+	const outside = cwd("file-link-outside");
+	writeFileSync(join(outside, "secret.ts"), "leak\n");
+	const denied = linkFile(join(outside, "secret.ts"), join(root, "file-link.ts"));
+	if (denied) unsupported(denied);
+	const tools = await NativeReadTools.create(root);
+	const result = await tools.execute(call("read_file", { path: "file-link.ts" }), signal);
+	assertEq(result.readPath, undefined, "file-link.ts is no evidence");
+	assertIncludes(
+		text(result),
+		"file paths must be relative and stay inside the working directory",
+		"the escape is refused",
+	);
 });
 
 test("native read tools: missing, directory, binary, and unreadable files have stable errors", async () => {
@@ -90,6 +131,27 @@ test("native read tools: missing, directory, binary, and unreadable files have s
 	assertIncludes(text(await tools.execute(call("list_dir", { path: "nope" }), signal)), "directory not found: nope");
 	assertIncludes(text(await tools.execute(call("list_dir", { path: "latin1.ts" }), signal)), "not a directory: latin1.ts");
 });
+
+const COLON = "native read tools: a drive-relative path and an NTFS stream are refused";
+
+if (WINDOWS) {
+	test(COLON, async () => {
+		const root = cwd("colon");
+		writeFileSync(join(root, "file.txt"), "inside\n");
+		const tools = await NativeReadTools.create(root);
+		for (const path of ["C:relative.txt", "file.txt:stream"]) {
+			const result = await tools.execute(call("read_file", { path }), signal);
+			assertEq(result.readPath, undefined, `${path} is no evidence`);
+			assertIncludes(
+				text(result),
+				"file paths must be relative and stay inside the working directory",
+				`${path} is refused`,
+			);
+		}
+	});
+} else {
+	testUnsupported(COLON, "a colon is an ordinary path character on POSIX; the refusal is Windows path syntax");
+}
 
 test("native read tools: special files are rejected", async () => {
 	const root = cwd("special");
@@ -158,13 +220,23 @@ test("native read tools: directory listings do not verify", async () => {
 	const root = cwd("listing");
 	writeFileSync(join(root, "a.ts"), "a\n");
 	mkdirSync(join(root, "dir"));
-	symlinkSync(join(root, "a.ts"), join(root, "link.ts"));
 	const tools = await NativeReadTools.create(root);
 	const result = await tools.execute(call("list_dir", { path: "." }), signal);
 	assertEq(result.readPath, undefined, "a listing is not a read");
 	assertIncludes(text(result), '- "a.ts" (file)', "files are typed and quoted");
 	assertIncludes(text(result), '- "dir" (dir)', "directories are typed");
+	assertEq(result.message.isError, false, "and the listing succeeds");
+});
+
+test("native read tools: a listing types a symlink without following it", async () => {
+	const root = cwd("listing-link");
+	writeFileSync(join(root, "a.ts"), "a\n");
+	const denied = linkFile(join(root, "a.ts"), join(root, "link.ts"));
+	if (denied) unsupported(denied);
+	const tools = await NativeReadTools.create(root);
+	const result = await tools.execute(call("list_dir", { path: "." }), signal);
 	assertIncludes(text(result), '- "link.ts" (symlink)', "links are named, not followed");
+	assertEq(result.readPath, undefined, "a listing is not a read");
 });
 
 test("native read tools: unknown tools and malformed arguments return tool errors", async () => {
@@ -262,20 +334,31 @@ test("native read tools: boundaries of an empty directory and an empty listing",
 	assertIncludes(text(past), "directory entry 2 is beyond the end of void", "a later offset is an error");
 });
 
-test("native read tools: an inward symlink reads, outward ones never do", async () => {
+test("native read tools: an inward directory link reads, an outward one never does", async () => {
 	const root = cwd("inward");
 	const inner = join(root, "inner");
 	const outside = cwd("inward-outside");
 	mkdirSync(inner);
 	writeFileSync(join(inner, "a.ts"), "inside\n");
 	writeFileSync(join(outside, "secret.ts"), "leak\n");
-	symlinkSync(join(root, "inner"), join(root, "inner-link"));
-	symlinkSync(join(outside, "secret.ts"), join(root, "chain-1"));
-	symlinkSync(join(root, "chain-1"), join(root, "chain-2"));
-	symlinkSync(join(outside, "absent.ts"), join(root, "dangling"));
+	linkDir(inner, join(root, "inner-link"));
+	linkDir(outside, join(root, "outward-link"));
 	const tools = await NativeReadTools.create(root);
 	const inward = await tools.execute(call("read_file", { path: "inner-link/a.ts" }), signal);
 	assertEq(inward.readPath, "inner-link/a.ts", "a link that stays inside the root reads");
+	const outward = await tools.execute(call("read_file", { path: "outward-link/secret.ts" }), signal);
+	assertEq(outward.readPath, undefined, "outward-link/secret.ts is no evidence");
+});
+
+test("native read tools: a file-link chain and a dangling link never read", async () => {
+	const root = cwd("chain");
+	const outside = cwd("chain-outside");
+	writeFileSync(join(outside, "secret.ts"), "leak\n");
+	const denied = linkFile(join(outside, "secret.ts"), join(root, "chain-1"));
+	if (denied) unsupported(denied);
+	linkFile(join(root, "chain-1"), join(root, "chain-2"));
+	linkFile(join(outside, "absent.ts"), join(root, "dangling"));
+	const tools = await NativeReadTools.create(root);
 	for (const path of ["chain-2", "dangling"]) {
 		const result = await tools.execute(call("read_file", { path }), signal);
 		assertEq(result.readPath, undefined, `${path} is no evidence`);
@@ -288,12 +371,13 @@ test("native read tools: the root is fixed for the instance", async () => {
 	const second = cwd("fixed-second");
 	writeFileSync(join(first, "only.ts"), "first\n");
 	writeFileSync(join(second, "only.ts"), "second\n");
-	symlinkSync(first, join(outer, "cwd-link"));
+	linkDir(first, join(outer, "cwd-link"));
 	const tools = await NativeReadTools.create(join(outer, "cwd-link"));
 	const before = await tools.execute(call("read_file", { path: "only.ts" }), signal);
 	assertIncludes(text(before), "first", "the read follows the root as it was");
-	rmSync(join(outer, "cwd-link"));
-	symlinkSync(second, join(outer, "cwd-link"));
+	removeLink(join(outer, "cwd-link"));
+	assertEq(existsSync(join(first, "only.ts")), true, "removing the link leaves its target alone");
+	linkDir(second, join(outer, "cwd-link"));
 	const after = await tools.execute(call("read_file", { path: "only.ts" }), signal);
 	assertIncludes(text(after), "first", "a retargeted root does not widen the tree mid-consultation");
 });
@@ -315,12 +399,13 @@ test("native read tools: the root is fixed at creation, before the first call", 
 	const second = cwd("fixed-before-second");
 	writeFileSync(join(first, "only.ts"), "first\n");
 	writeFileSync(join(second, "only.ts"), "second\n");
-	symlinkSync(first, join(outer, "cwd-link"));
+	linkDir(first, join(outer, "cwd-link"));
 	const tools = await NativeReadTools.create(join(outer, "cwd-link"));
 	// Retargeted after the toolkit exists but before it ever ran: the tree it
 	// was pointed at is the tree it keeps.
-	rmSync(join(outer, "cwd-link"));
-	symlinkSync(second, join(outer, "cwd-link"));
+	removeLink(join(outer, "cwd-link"));
+	assertEq(existsSync(join(first, "only.ts")), true, "removing the link leaves its target alone");
+	linkDir(second, join(outer, "cwd-link"));
 	const read = await tools.execute(call("read_file", { path: "only.ts" }), signal);
 	assertIncludes(text(read), "first", "the first call reads the tree the toolkit was created for");
 });

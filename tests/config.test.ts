@@ -32,6 +32,7 @@ test("config: defaults when the settings file is missing", () => {
 	assertEq(config.maxConcurrent, 2, "maxConcurrent");
 	assertEq(config.claude.command, "claude", "claude command");
 	assertEq(config.codex.command, "codex", "codex command");
+	assertEq(config.claude.commandArgs.length, 0, "no precedent argument unless configured");
 	assertEq(config.claude.isolation, "clean", "claude isolation");
 	assertEq(config.gate.trustReadOnlyHint, false, "read-only hints untrusted by default");
 	assert(config.gate.allow.includes("pre_memory"), "onboarding tools allowed");
@@ -48,7 +49,7 @@ test("config: reads the piConsult namespace and clamps bad values", () => {
 			maxConcurrent: 4,
 			gate: { allowBashBeforeConsult: true, consultEffort: "always", allow: ["foo", "bar"], block: ["baz"] },
 			output: { totalBytes: 5000, answerBytes: "nope" },
-			claude: { command: "my-claude", model: "sonnet", timeoutMs: 1000, isolation: "inherit" },
+			claude: { command: "my-claude", model: "sonnet", timeoutMs: 1000, isolation: "inherit", commandArgs: ["cli.js", "--verbose", 4] },
 			codex: { timeoutMs: -1 },
 		},
 	});
@@ -65,6 +66,7 @@ test("config: reads the piConsult namespace and clamps bad values", () => {
 	assertEq(config.output.totalBytes, 5000, "total override");
 	assertEq(config.output.answerBytes, ConsultConfig.DEFAULT_ANSWER_BYTES, "bad value clamped");
 	assertEq(config.claude.command, "my-claude", "claude command override");
+	assertEq(config.claude.commandArgs.join(","), "cli.js,--verbose", "string precedent arguments survive, others are dropped");
 	assertEq(config.claude.model, "sonnet", "claude model");
 	assertEq(config.claude.isolation, "inherit", "claude isolation override");
 	assertEq(config.codex.timeoutMs, ConsultConfig.DEFAULT_TIMEOUT_MS, "bad timeout clamped");

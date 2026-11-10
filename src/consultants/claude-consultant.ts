@@ -47,7 +47,7 @@ export class ClaudeConsultant implements Consultant {
 	async probe(): Promise<ConsultantAvailability> {
 		const outcome = await this.runner.run({
 			command: this.settings.command,
-			args: ["--version"],
+			args: [...this.settings.commandArgs, "--version"],
 			cwd: process.cwd(),
 			stdin: "",
 			timeoutMs: ClaudeConsultant.PROBE_TIMEOUT_MS,
@@ -99,7 +99,7 @@ export class ClaudeConsultant implements Consultant {
 		);
 		const outcome = await this.runner.run({
 			command: this.settings.command,
-			args: this.buildArgs(request, sessionId),
+			args: [...this.settings.commandArgs, ...this.buildArgs(request, sessionId)],
 			cwd: request.cwd,
 			env: ConsultantEnv.claude(),
 			stdin: request.brief,

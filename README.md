@@ -22,6 +22,13 @@ or vendor is assumed anywhere: each consultant CLI decides the model and the
 account it is signed in to, and the acknowledgement terms name that configured
 `command` rather than a vendor name.
 
+`command` is launched directly, with no shell, so it must be a native
+executable; `commandArgs` are placed before the CLI's own arguments, which is
+how an interpreter plus its entry point is selected. A `.cmd` or `.bat`
+launcher is refused with that message instead of being run through a shell,
+which would reinterpret arguments. On Windows, use the executable (or
+`node.exe` plus the installed CLI's entry script) rather than an npm shim.
+
 ## Configuration
 
 pi-consult stores its settings in the `piConsult` object of pi's own
@@ -40,8 +47,8 @@ Missing or malformed values fall back to the defaults.
     "maxConcurrent": 2,
     "output": { "totalBytes": 24000, "answerBytes": 12000, "maxLines": 800 },
     "gate": { "allow": ["pre_memory", "pre_daemon", "pre_cache", "pre_teams", "transcript_read"], "block": [], "trustReadOnlyHint": false },
-    "claude": { "enabled": true, "command": "claude", "isolation": "clean", "timeoutMs": 1200000, "silenceNoticeMs": 300000 },
-    "codex": { "enabled": true, "command": "codex", "isolation": "clean", "timeoutMs": 1200000, "silenceNoticeMs": 300000 }
+    "claude": { "enabled": true, "command": "claude", "commandArgs": [], "isolation": "clean", "timeoutMs": 1200000, "silenceNoticeMs": 300000 },
+    "codex": { "enabled": true, "command": "codex", "commandArgs": [], "isolation": "clean", "timeoutMs": 1200000, "silenceNoticeMs": 300000 }
   }
 }
 ```

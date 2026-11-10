@@ -6,7 +6,7 @@
  * without a provider.
  */
 
-import { chmodSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { AnswerFormatter } from "../src/answer-formatter.ts";
@@ -25,11 +25,38 @@ import { ConsultTool } from "../src/consult-tool.ts";
 import { ConsultContract } from "../src/consult-contract.ts";
 import { ClaudeConsultant } from "../src/consultants/claude-consultant.ts";
 import { CodexConsultant } from "../src/consultants/codex-consultant.ts";
-import { ProcessRunner } from "../src/process-runner.ts";
+import { ProcessRunner, type ProcessOutcome, type ProcessSpec } from "../src/process-runner.ts";
 import { ReceiptLedger } from "../src/receipt-ledger.ts";
 import { SecretScreen } from "../src/secret-screen.ts";
 import { SessionIdentity } from "../src/session-identity.ts";
 import { FakePi, scratchDir } from "./harness.ts";
+
+/**
+ * The runner the fake consultants launch through.
+ *
+ * A fake is plain JavaScript, not an executable: Windows does not execute a
+ * script's shebang, so a registered fake is launched as
+ * `<node> <script> <args>`. Only a script this class wrote itself is launched
+ * that way; every other command reaches the real runner unchanged.
+ */
+export class FakeConsultantRunner extends ProcessRunner {
+	private static readonly scripts = new Set<string>();
+
+	static write(path: string, body: string): string {
+		writeFileSync(path, `${body}\n`);
+		FakeConsultantRunner.scripts.add(path);
+		return path;
+	}
+
+	override run(spec: ProcessSpec): Promise<ProcessOutcome> {
+		if (!FakeConsultantRunner.scripts.has(spec.command)) return super.run(spec);
+		return super.run({
+			...spec,
+			command: process.execPath,
+			args: [spec.command, ...spec.args],
+		});
+	}
+}
 
 /** Write an executable fake Claude that answers after `delayMs`,
  *  optionally reporting one tool use before the delay, a second after it,
@@ -54,9 +81,7 @@ export function fakeClaude(delayMs = 0, toolUse = false, lateToolUse = false, no
 		'process.stdout.write(JSON.stringify({ type: "system", subtype: "init", session_id: sessionId }) + "\\n");',
 		'process.stdout.write(JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "FAKE ANSWER " + brief.length, session_id: sessionId, usage: { input_tokens: 1, output_tokens: 2 } }) + "\\n");',
 	].join("\n");
-	writeFileSync(path, `#!${process.execPath}\n${body}\n`);
-	chmodSync(path, 0o755);
-	return path;
+	return FakeConsultantRunner.write(path, body);
 }
 
 /** Write an executable fake Codex that answers after `delayMs`, optionally
@@ -81,9 +106,7 @@ export function fakeCodex(delayMs = 0, activity = false, noise = false): string 
 		'process.stdout.write(JSON.stringify({ item: { type: "agent_message", text: "FAKE CODEX" }, type: "item.completed" }) + "\\n");',
 		'process.stdout.write(JSON.stringify({ type: "turn.completed", usage: { input_tokens: 1, output_tokens: 2 } }) + "\\n");',
 	].join("\n");
-	writeFileSync(path, `#!${process.execPath}\n${body}\n`);
-	chmodSync(path, 0o755);
-	return path;
+	return FakeConsultantRunner.write(path, body);
 }
 
 /** A config document over a scratch artifact directory. */
@@ -132,7 +155,7 @@ export function buildConsultFixture(
 	sessionId = "sess-int",
 	effort?: unknown,
 ): ConsultFixture {
-	const processes = new ProcessRunner();
+	const processes = new FakeConsultantRunner();
 	const runner = new ConsultRunner(
 		[
 			new ClaudeConsultant(config.claude, processes),

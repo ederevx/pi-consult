@@ -63,28 +63,42 @@ export class ConsultantEnv {
 	];
 
 	/** The environment for a Claude Code child. */
-	static claude(): NodeJS.ProcessEnv {
-		const env = ConsultantEnv.build(ConsultantEnv.CLAUDE_PREFIX);
+	static claude(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+		const env = ConsultantEnv.build(ConsultantEnv.CLAUDE_PREFIX, source);
 		delete env.CLAUDECODE;
 		delete env.CLAUDE_CODE_ENTRYPOINT;
 		return env;
 	}
 
 	/** The environment for a Codex child. */
-	static codex(): NodeJS.ProcessEnv {
-		return ConsultantEnv.build(ConsultantEnv.CODEX_PREFIX);
+	static codex(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+		return ConsultantEnv.build(ConsultantEnv.CODEX_PREFIX, source);
 	}
 
-	private static build(providerPrefixes: readonly string[]): NodeJS.ProcessEnv {
+	private static build(
+		providerPrefixes: readonly string[],
+		source: NodeJS.ProcessEnv,
+	): NodeJS.ProcessEnv {
 		const env: NodeJS.ProcessEnv = { NO_COLOR: "1" };
-		for (const [key, value] of Object.entries(process.env)) {
+		const windows = process.platform === "win32";
+		// Windows spells the same variable in either case (`Path` for `PATH`),
+		// so the allowlist is matched on the folded name while the child keeps
+		// the spelling it was given. The folded name also keeps one variable
+		// from arriving twice under two spellings.
+		const emitted = new Set<string>();
+		for (const [key, value] of Object.entries(source)) {
 			if (value === undefined) continue;
+			const name = windows ? key.toUpperCase() : key;
 			if (
-				ConsultantEnv.COMMON.includes(key) ||
-				ConsultantEnv.matches(key, ConsultantEnv.COMMON_PREFIX) ||
-				ConsultantEnv.matches(key, providerPrefixes) ||
-				(process.platform === "win32" && ConsultantEnv.WINDOWS.includes(key.toUpperCase()))
+				ConsultantEnv.COMMON.includes(name) ||
+				ConsultantEnv.matches(name, ConsultantEnv.COMMON_PREFIX) ||
+				ConsultantEnv.matches(name, providerPrefixes) ||
+				(windows && ConsultantEnv.WINDOWS.includes(name))
 			) {
+				if (windows) {
+					if (emitted.has(name)) continue;
+					emitted.add(name);
+				}
 				env[key] = value;
 			}
 		}

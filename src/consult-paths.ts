@@ -62,6 +62,12 @@ export class ConsultPathsValidator {
 	}
 
 	private static relative(file: string): boolean {
-		return !(isAbsolute(file) || file.split(/[\\/]/).includes(".."));
+		return !(
+			isAbsolute(file) ||
+			file.split(/[\\/]/).includes("..") ||
+			// A colon on Windows reaches a drive-relative path or an NTFS
+			// alternate data stream, neither of which is a file inside the root.
+			(process.platform === "win32" && file.includes(":"))
+		);
 	}
 }

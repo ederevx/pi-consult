@@ -38,7 +38,7 @@ export class CodexConsultant implements Consultant {
 	async probe(): Promise<ConsultantAvailability> {
 		const outcome = await this.runner.run({
 			command: this.settings.command,
-			args: ["--version"],
+			args: [...this.settings.commandArgs, "--version"],
 			cwd: process.cwd(),
 			stdin: "",
 			timeoutMs: CodexConsultant.PROBE_TIMEOUT_MS,
@@ -124,7 +124,7 @@ export class CodexConsultant implements Consultant {
 		);
 		const outcome = await this.runner.run({
 			command: this.settings.command,
-			args: this.buildArgs(request),
+			args: [...this.settings.commandArgs, ...this.buildArgs(request)],
 			cwd: request.cwd,
 			env: ConsultantEnv.codex(),
 			stdin: request.brief,
