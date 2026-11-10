@@ -170,11 +170,18 @@ The catalogue instructs the agent, and the tool's prompt guidelines repeat it:
      `Independent audit verdict: approved|changes needed - <reason>.` The
      parent collects it with `comms_wait` or `comms_replay`, acknowledges the
      received ids with `comms_ack`, and settles it on the address the envelope
-     carries.
+     carries. It then ends the session `comms_spawn` answered with
+     `session_stop` and closes the cycle only once that answer reads `ended:
+     true`: the launch leaves a session running behind its report. Every way a
+     cycle can close on its own waits for that stop, a confirmed stop stays
+     confirmed, and only the user's explicit release ends a cycle with a
+     session still running - naming the session it leaves. Without
+     `session_stop` the rung is not offered.
   3. **pi itself**, only on the user's explicit request
      (`Audit by pi at the user's request - <request>.`).
 
-  Without agent-comms, or after a failed spawn or verdict-less report, pi stops
+  Without agent-comms or `session_stop`, or after a failed spawn or
+  verdict-less report, pi stops
   with `Independent audit unavailable - <reason>.` and leaves the work
   unaudited. `Consultant fallback: no consultant available - <reason>.` covers
   roadblocks only, never an audit or a closing consultation.

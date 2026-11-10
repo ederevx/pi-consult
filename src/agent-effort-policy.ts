@@ -41,14 +41,22 @@ interface EffortEntry {
 	unavailable: ConsultantName[];
 	auditors: string[];
 	independent: string[];
+	/** Each auditor's session and whether its run is confirmed ended. */
+	auditorSessions: Record<string, AuditorSession>;
 	auditFailed: boolean;
 	consulted: Record<string, RunParticipant[]>;
 	nudged?: string;
 }
 
+/** One spawned auditor's session, and whether its run is confirmed ended. */
+interface AuditorSession {
+	name: string;
+	ended: boolean;
+}
+
 /** Why a completion marker does not close the cycle, and the agent's next step. */
 interface Refusal {
-	kind: "owed" | "auditor" | "unverified";
+	kind: "owed" | "auditor" | "unverified" | "session";
 	reason: string;
 	action: string;
 }
@@ -72,6 +80,7 @@ export class AgentEffortPolicy {
 	private static readonly USER_AUDIT = /^Audit by pi at the user's request - \S.*$/;
 	private static readonly COMMS_LOG = "pi-agent-comms-log";
 	private static readonly NUDGE = "pi-consult-cycle";
+	private static readonly LEFTOVER = "pi-consult-session-left-running";
 	private static readonly MUTATIONS = new Set(["edit", "write", "bash", "powershell"]);
 	private static readonly RETRYABLE = new Set(["error", "timeout"]);
 	private static readonly EXPIRING = new Set(["unavailable", "auth"]);
@@ -94,10 +103,12 @@ export class AgentEffortPolicy {
 	private unavailable = new Set<ConsultantName>();
 	private auditors = new Set<string>();
 	private independent = new Set<string>();
+	private auditorSessions = new Map<string, AuditorSession>();
 	private auditFailed = false;
 	private consulted = new Map<string, RunParticipant[]>();
 	private nudged: string | undefined;
 	private readonly spawns = new Set<string>();
+	private readonly stops = new Map<string, string>();
 	private unsupported = false;
 	private lastMessage: unknown;
 	private live: ExtensionContext | undefined;
@@ -227,7 +238,7 @@ export class AgentEffortPolicy {
 		}
 		if (!this.holding) return;
 		this.persist();
-		if (!this.fallbackRefusal()) this.restore(ctx, "no consultant available");
+		if (!this.fallbackRefusal()) this.close(ctx, "no consultant available");
 	}
 
 	/** A one-line state for `/consult-status` and `/consult-effort`. */
@@ -258,6 +269,7 @@ export class AgentEffortPolicy {
 		if (!pi || !this.holding) return;
 		const context = ctx ?? this.live;
 		const previous = this.previous;
+		const left = [...this.auditorSessions.values()].filter((item) => !item.ended);
 		this.holding = false;
 		this.previous = undefined;
 		this.unsupported = false;
@@ -266,6 +278,18 @@ export class AgentEffortPolicy {
 		this.persist();
 		if (previous && previous !== pi.getThinkingLevel()) pi.setThinkingLevel(previous);
 		this.notify(context, `pi-consult: ${reason}; pi's thinking level restored to ${pi.getThinkingLevel()}.`, "info");
+		if (left.length > 0) {
+			const names = left.map((item) => item.name).join(", ");
+			const content =
+				`pi-consult: ${names} was left running: the cycle ended before a confirmed session_stop.`;
+			// The record outlives the session's UI, so the message carries the
+			// warning into the transcript whether or not a UI can show it.
+			this.pi?.sendMessage(
+				{ customType: AgentEffortPolicy.LEFTOVER, content, display: true },
+				{ triggerTurn: false },
+			);
+			this.notify(context, content, "warning");
+		}
 	}
 
 	private resetCycle(): void {
@@ -279,6 +303,10 @@ export class AgentEffortPolicy {
 		this.verifiedFallbackApprovals.clear();
 		this.failures.clear();
 		this.expired.clear();
+		// A cycle owns the sessions it spawned: an ended cycle stops
+		// waiting for a stop, and restore() names any left running.
+		this.auditorSessions.clear();
+		this.stops.clear();
 		this.auditors.clear();
 		this.independent.clear();
 		this.auditFailed = false;
@@ -378,7 +406,9 @@ export class AgentEffortPolicy {
 	private commsPresent(): boolean {
 		try {
 			const tools = this.pi?.getAllTools() ?? [];
-			return ["comms_spawn", "comms_send", "comms_wait"]
+			// A spawn without a way to end the session would leave an auditor
+			// running, so the rung needs the stop tool too.
+			return ["comms_spawn", "comms_send", "comms_wait", "session_stop"]
 				.every((name) => tools.some((tool) => tool.name === name));
 		} catch {
 			return false;
@@ -394,6 +424,13 @@ export class AgentEffortPolicy {
 			return;
 		}
 		const pi = this.pi;
+		if (name === "session_stop") {
+			const target = input?.name;
+			if (toolCallId && typeof target === "string" && target.trim()) {
+				this.stops.set(toolCallId, target.trim());
+			}
+			return;
+		}
 		if (name !== "comms_spawn" || !toolCallId || !pi || !this.holding) return;
 		// The tool treats an empty argv as absent, so one task means what it means
 		// for the launch itself.
@@ -406,6 +443,12 @@ export class AgentEffortPolicy {
 		event: { toolCallId?: string; result?: unknown; isError?: boolean },
 		ctx: ExtensionContext,
 	): void {
+		const stopped = this.stops.get(String(event.toolCallId ?? ""));
+		if (stopped !== undefined) {
+			this.stops.delete(String(event.toolCallId ?? ""));
+			this.confirmStop(stopped, event);
+			return;
+		}
 		if (!this.spawns.delete(String(event.toolCallId ?? ""))) return;
 		if (this.holding) {
 			const result = (event.result ?? {}) as {
@@ -413,6 +456,7 @@ export class AgentEffortPolicy {
 				details?: unknown;
 			};
 			const id = event.isError ? undefined : AgentEffortPolicy.auditorId(result);
+			const session = event.isError ? undefined : AgentEffortPolicy.auditorSession(result);
 			const serving = this.serving();
 			if (!id) {
 				this.auditFailed = true;
@@ -431,15 +475,34 @@ export class AgentEffortPolicy {
 				this.auditors.add(id);
 				this.owed.add(id);
 				this.fresh.add(id);
+				// The launch leaves a session that outlives its report, so the
+				// cycle stays open until a stop is confirmed for it. Without a
+				// session name there is nothing to stop or verify.
+				if (session) this.auditorSessions.set(id, { name: session, ended: false });
 			}
 			this.persist();
 		}
+	}
+
+	/** Record a stop only when the tool answered that the run has ended. A
+	 *  confirmed stop stays confirmed: a later stop for that session is
+	 *  refused because there is nothing left to end. */
+	private confirmStop(name: string, event: { result?: unknown; isError?: boolean }): void {
+		if (!this.holding) return;
+		const entry = [...this.auditorSessions.values()].find((item) => item.name === name);
+		if (!entry || entry.ended) return;
+		const details = ((event.result ?? {}) as { details?: unknown }).details as
+			{ ended?: unknown } | undefined;
+		if (event.isError || details?.ended !== true) return;
+		entry.ended = true;
+		this.persist();
 	}
 
 	/** Undo a spawn record whose call never reported its end. */
 	private rollback(ctx: ExtensionContext | undefined): void {
 		if (this.spawns.size === 0) return;
 		this.spawns.clear();
+		this.stops.clear();
 		if (!this.holding) return;
 		this.auditFailed = true;
 		this.persist();
@@ -473,7 +536,7 @@ export class AgentEffortPolicy {
 		if (!lines.some((line) => AgentEffortPolicy.FALLBACK.test(line))) return;
 		const refusal = this.fallbackRefusal();
 		if (refusal) this.notify(ctx, `pi-consult: consultant fallback stated, but ${refusal}; the cycle stays open.`, "warning");
-		else this.restore(ctx, "consultant fallback");
+		else this.close(ctx, "consultant fallback");
 	}
 
 	/** Settle owed auditors from the reports agent-comms logged on the branch. */
@@ -518,12 +581,12 @@ export class AgentEffortPolicy {
 		}
 		const refusal = consultId ? this.completionRefusal(consultId) : this.independentRefusal(auditor as string);
 		if (!refusal) {
-			this.restore(ctx, consultId ? "the consultant handed control back" : "the independent audit approved the work");
+			this.close(ctx, consultId ? "the consultant handed control back" : "the independent audit approved the work");
 			return;
 		}
 		const spent = consultId && refusal.kind === "unverified" ? this.outOfAgent(consultId) : undefined;
 		if (spent) {
-			this.restore(ctx, `${spent.join(" and ")} expired before verifying ${consultId}; the cycle closes unverified`);
+			this.close(ctx, `${spent.join(" and ")} expired before verifying ${consultId}; the cycle closes unverified`);
 		} else {
 			this.nudge(ctx, refusal);
 			this.release(ctx);
@@ -549,9 +612,35 @@ export class AgentEffortPolicy {
 		};
 	}
 
+	/** A spawned auditor session that has not been confirmed ended keeps the
+	 *  cycle open, whichever way it would otherwise close. */
+	private sessionRefusal(): Refusal | undefined {
+		const pending = [...this.auditorSessions].filter(([, item]) => !item.ended);
+		if (pending.length === 0) return undefined;
+		const [id, item] = pending[0];
+		return {
+			kind: "session",
+			reason: `${id} has not been confirmed ended${item.name === id ? "" : ` (session ${item.name})`}`,
+			action: `end its session with session_stop({name: "${item.name}"}), then close the cycle again once the answer reads ended: true`,
+		};
+	}
+
+	/** Close the cycle on its own terms, unless a spawned session is still
+	 *  running; only an explicit release ends a cycle over that. */
+	private close(ctx: ExtensionContext | undefined, reason: string): void {
+		const pending = this.sessionRefusal();
+		if (pending) {
+			if (ctx) this.nudge(ctx, pending);
+			return;
+		}
+		this.restore(ctx, reason);
+	}
+
 	private completionRefusal(consultId: string): Refusal | undefined {
 		const owed = this.owedRefusal();
 		if (owed) return owed;
+		const session = this.sessionRefusal();
+		if (session) return session;
 		const resend = `return the work with continue: "${consultId}", ask for its convention audit and verdict lines, and once it approves end your final reply with "Consultation cycle: complete - <its new consult id> verified."`;
 		if (!this.approved.has(consultId)) {
 			const action = this.consulted.has(consultId)
@@ -598,6 +687,8 @@ export class AgentEffortPolicy {
 				action: fresh,
 			};
 		}
+		const pending = this.sessionRefusal();
+		if (pending) return pending;
 		return undefined;
 	}
 
@@ -656,11 +747,13 @@ export class AgentEffortPolicy {
 		this.unavailable = new Set(data?.unavailable ?? []);
 		this.auditors = new Set(data?.auditors ?? []);
 		this.independent = new Set(data?.independent ?? []);
+		this.auditorSessions = new Map(Object.entries(data?.auditorSessions ?? {}));
 		this.auditFailed = data?.auditFailed === true;
 		this.nudged = data?.nudged;
 		this.plan = data?.plan;
 		this.due = data?.due === true;
 		this.spawns.clear();
+		this.stops.clear();
 		this.unsupported = false;
 		this.lastMessage = undefined;
 		if (this.previous) {
@@ -701,6 +794,7 @@ export class AgentEffortPolicy {
 			unavailable: [...this.unavailable],
 			auditors: [...this.auditors],
 			independent: [...this.independent],
+			auditorSessions: Object.fromEntries(this.auditorSessions),
 			auditFailed: this.auditFailed,
 			consulted: Object.fromEntries(this.consulted),
 			nudged: this.nudged,
@@ -745,6 +839,7 @@ export class AgentEffortPolicy {
 				unavailable: names(raw.unavailable),
 				auditors: strings(raw.auditors),
 				independent: strings(raw.independent),
+				auditorSessions: AgentEffortPolicy.auditorSessionsFrom(raw.auditorSessions),
 				auditFailed: raw.auditFailed === true,
 				consulted: AgentEffortPolicy.consulted(raw.consulted),
 				nudged: typeof raw.nudged === "string" ? raw.nudged : undefined,
@@ -790,6 +885,30 @@ export class AgentEffortPolicy {
 		return answer?.status === "spawned" && typeof id === "string" && id.trim()
 			? id.trim()
 			: undefined;
+	}
+
+	/** The spawned session's name, which is what `session_stop` takes. */
+	private static auditorSession(event: { structuredContent?: unknown; details?: unknown }): string | undefined {
+		const answer = (event.structuredContent ??
+			(event.details as { answer?: unknown } | undefined)?.answer) as
+			{ status?: unknown; session?: { name?: unknown } } | undefined;
+		const name = answer?.session?.name;
+		return answer?.status === "spawned" && typeof name === "string" && name.trim()
+			? name.trim()
+			: undefined;
+	}
+
+	/** Persisted auditor sessions, keeping only well-formed entries. */
+	private static auditorSessionsFrom(value: unknown): Record<string, AuditorSession> {
+		if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
+		const out: Record<string, AuditorSession> = {};
+		for (const [id, raw] of Object.entries(value as Record<string, unknown>)) {
+			const entry = raw as { name?: unknown; ended?: unknown } | null;
+			const name = entry?.name;
+			if (!id.trim() || typeof name !== "string" || !name.trim()) continue;
+			out[id] = { name: name.trim(), ended: entry?.ended === true };
+		}
+		return out;
 	}
 
 	private static approves(answer: string | undefined): boolean {
