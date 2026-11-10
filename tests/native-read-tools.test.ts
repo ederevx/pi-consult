@@ -27,17 +27,17 @@ function removeLink(link: string): void {
 	else rmSync(link);
 }
 
-/** Link a file, or return why this host cannot create a file symlink. */
-function linkFile(target: string, link: string): string | undefined {
+/** Link a file, or abandon the case: a host without the privilege or
+ *  Developer Mode denies it, and that denial must never read as a pass. */
+function linkFile(target: string, link: string): void {
 	try {
 		symlinkSync(target, link);
-		return undefined;
 	} catch (error) {
 		const code = (error as NodeJS.ErrnoException).code;
-		if (code === "EPERM" || code === "EACCES") {
-			return `the host denies file symlink creation (${code}): the privilege or Developer Mode is absent`;
-		}
-		throw error;
+		if (code !== "EPERM" && code !== "EACCES") throw error;
+		unsupported(
+			`the host denies file symlink creation (${code}): the privilege or Developer Mode is absent`,
+		);
 	}
 }
 
@@ -100,8 +100,7 @@ test("native read tools: a file symlink outside the root is refused", async () =
 	const root = cwd("file-link");
 	const outside = cwd("file-link-outside");
 	writeFileSync(join(outside, "secret.ts"), "leak\n");
-	const denied = linkFile(join(outside, "secret.ts"), join(root, "file-link.ts"));
-	if (denied) unsupported(denied);
+	linkFile(join(outside, "secret.ts"), join(root, "file-link.ts"));
 	const tools = await NativeReadTools.create(root);
 	const result = await tools.execute(call("read_file", { path: "file-link.ts" }), signal);
 	assertEq(result.readPath, undefined, "file-link.ts is no evidence");
@@ -231,8 +230,7 @@ test("native read tools: directory listings do not verify", async () => {
 test("native read tools: a listing types a symlink without following it", async () => {
 	const root = cwd("listing-link");
 	writeFileSync(join(root, "a.ts"), "a\n");
-	const denied = linkFile(join(root, "a.ts"), join(root, "link.ts"));
-	if (denied) unsupported(denied);
+	linkFile(join(root, "a.ts"), join(root, "link.ts"));
 	const tools = await NativeReadTools.create(root);
 	const result = await tools.execute(call("list_dir", { path: "." }), signal);
 	assertIncludes(text(result), '- "link.ts" (symlink)', "links are named, not followed");
@@ -354,8 +352,7 @@ test("native read tools: a file-link chain and a dangling link never read", asyn
 	const root = cwd("chain");
 	const outside = cwd("chain-outside");
 	writeFileSync(join(outside, "secret.ts"), "leak\n");
-	const denied = linkFile(join(outside, "secret.ts"), join(root, "chain-1"));
-	if (denied) unsupported(denied);
+	linkFile(join(outside, "secret.ts"), join(root, "chain-1"));
 	linkFile(join(root, "chain-1"), join(root, "chain-2"));
 	linkFile(join(outside, "absent.ts"), join(root, "dangling"));
 	const tools = await NativeReadTools.create(root);

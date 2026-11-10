@@ -37,8 +37,6 @@ test("artifact store: a prepared consult holds its brief verbatim", async () => 
 const POSIX_MODES = "artifact store: consult directories are 0700 and their files 0600";
 
 if (process.platform === "win32") {
-	// Windows Node implements no owner/group/other bits: 0666 is not a privacy
-	// verdict and 0600 is not an enforced DACL, so neither is asserted.
 	testUnsupported(
 		POSIX_MODES,
 		"Windows Node implements no owner-only mode bits; the files are written and read back, but 0600/0700 are unverified",

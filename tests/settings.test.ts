@@ -87,8 +87,6 @@ test("settings: writes valid JSON with the edit inside the namespace", () => {
 const OWNER_MODE = "settings: a written settings.json is readable only by its owner (0600)";
 
 if (process.platform === "win32") {
-	// Windows Node implements no owner/group/other bits: a chmod neither sets
-	// nor reports 0600, and only an explicit DACL could carry the guarantee.
 	testUnsupported(
 		OWNER_MODE,
 		"Windows Node implements no owner-only mode bits; the file is created and read back, but 0600 is unverified",
