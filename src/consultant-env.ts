@@ -65,8 +65,6 @@ export class ConsultantEnv {
 	/** The environment for a Claude Code child. */
 	static claude(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
 		const env = ConsultantEnv.build(ConsultantEnv.CLAUDE_PREFIX, source);
-		// The nesting markers would make a child believe it runs inside Claude
-		// Code, and Windows spells them in either case.
 		for (const key of Object.keys(env)) {
 			const name = ConsultantEnv.folded(key);
 			if (name === "CLAUDECODE" || name === "CLAUDE_CODE_ENTRYPOINT") delete env[key];
@@ -85,10 +83,7 @@ export class ConsultantEnv {
 	): NodeJS.ProcessEnv {
 		const env: NodeJS.ProcessEnv = { NO_COLOR: "1" };
 		const windows = process.platform === "win32";
-		// Windows spells the same variable in either case (`Path` for `PATH`),
-		// so the allowlist is matched on the folded name while the child keeps
-		// the spelling it was given. The folded names already emitted keep one
-		// variable from arriving twice under two spellings.
+		// Case-insensitive on Windows only: the child keeps its spelling.
 		const emitted = new Set<string>(windows ? ["NO_COLOR"] : []);
 		for (const [key, value] of Object.entries(source)) {
 			if (value === undefined) continue;

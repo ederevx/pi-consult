@@ -36,7 +36,7 @@ export interface ConsultantSettings {
 	command: string;
 	/** Arguments that precede the CLI's own argv: the entry point when
 	 *  `command` is an interpreter, or a fixed launcher argument. Normalized as
-	 *  trimmed non-empty strings, since no shell ever reads them. */
+	 *  trimmed non-empty strings. */
 	commandArgs: string[];
 	model?: string;
 	effort?: Effort;

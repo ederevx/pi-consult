@@ -27,8 +27,7 @@ function removeLink(link: string): void {
 	else rmSync(link);
 }
 
-/** Link a file, or abandon the case: a host without the privilege or
- *  Developer Mode denies it, and that denial must never read as a pass. */
+/** Link a file, or abandon the case when the host denies the privilege. */
 function linkFile(target: string, link: string): void {
 	try {
 		symlinkSync(target, link);
