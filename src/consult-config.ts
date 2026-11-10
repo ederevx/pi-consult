@@ -35,8 +35,8 @@ export interface ConsultantSettings {
 	/** The native executable to launch, shell-free. */
 	command: string;
 	/** Arguments that precede the CLI's own argv: the entry point when
-	 *  `command` is an interpreter, or a fixed launcher argument. Never
-	 *  contains a quote, since no shell ever reads it. */
+	 *  `command` is an interpreter, or a fixed launcher argument. Normalized as
+	 *  trimmed non-empty strings, since no shell ever reads them. */
 	commandArgs: string[];
 	model?: string;
 	effort?: Effort;
