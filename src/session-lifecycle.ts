@@ -87,9 +87,15 @@ export class SessionLifecycle {
 				}
 			}
 		});
-		pi.on("session_shutdown", async () => {
+		pi.on("session_shutdown", async (_event, ctx: ExtensionContext) => {
 			this.supervisor.cancelAll();
-			this.processes.killAll();
+			const unconfirmed = this.processes.killAll();
+			if (unconfirmed > 0) {
+				ctx?.ui?.notify?.(
+					`pi-consult: ${unconfirmed} consultant process tree(s) could not be confirmed stopped.`,
+					"warning",
+				);
+			}
 		});
 	}
 

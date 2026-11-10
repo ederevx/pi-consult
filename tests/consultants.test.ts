@@ -5,6 +5,7 @@ import { ClaudeConsultant } from "../src/consultants/claude-consultant.ts";
 import { CodexConsultant } from "../src/consultants/codex-consultant.ts";
 import { ConsultantEnv } from "../src/consultant-env.ts";
 import type { ConsultRequest } from "../src/contracts.ts";
+import type { ProcessOutcome, ProcessSpec } from "../src/process-runner.ts";
 import { FakeConsultantRunner, fakeClaude, fakeCodex } from "./consult-fixture.ts";
 import { assert, assertEq, scratchDir, test, testUnsupported } from "./harness.ts";
 
@@ -245,4 +246,28 @@ test("codex adapter: an agent message is prose, not progress", async () => {
 	assertEq(messages[0].text, "Looking at the parser.\nSecond line of commentary.");
 	assertEq(messages[0].summary, "codex: Looking at the parser.");
 	assertEq(messages.at(-1)?.text, "FAKE CODEX");
+});
+
+test("consultant result: a cleanup that could not be confirmed is a warning", async () => {
+	const unconfirmed = new (class extends FakeConsultantRunner {
+		override async run(spec: ProcessSpec): Promise<ProcessOutcome> {
+			return { ...(await super.run(spec)), terminationError: "taskkill exited with 1" };
+		}
+	})();
+	const claude = await new ClaudeConsultant(
+		{ enabled: true, command: fakeClaude(), timeoutMs: 5000, isolation: "clean", commandArgs: [] },
+		unconfirmed,
+	).consult({ ...request(), cwd: scratchDir() });
+	assert(
+		claude.warnings.includes("process cleanup unconfirmed: taskkill exited with 1"),
+		"the claude result says the cleanup was not confirmed",
+	);
+	const codex = await new CodexConsultant(
+		{ enabled: true, command: fakeCodex(0, true), timeoutMs: 5000, isolation: "clean", commandArgs: [] },
+		unconfirmed,
+	).consult({ ...request(), consultant: "codex", cwd: scratchDir() });
+	assert(
+		codex.warnings.includes("process cleanup unconfirmed: taskkill exited with 1"),
+		"the codex result says the cleanup was not confirmed",
+	);
 });

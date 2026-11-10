@@ -123,6 +123,9 @@ export class ClaudeConsultant implements Consultant {
 		const warnings = parsed.permissionDenials.map(
 			(denial) => `permission denied: ${denial}`,
 		);
+		if (outcome.terminationError) {
+			warnings.push(`process cleanup unconfirmed: ${outcome.terminationError}`);
+		}
 		let status: RunStatus = "ok";
 		let error: string | undefined;
 

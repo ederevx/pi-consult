@@ -149,6 +149,9 @@ export class CodexConsultant implements Consultant {
 		if (parsed.fileChanges.length > 0) {
 			warnings.push(`codex reported file changes: ${parsed.fileChanges.join(", ")}`);
 		}
+		if (outcome.terminationError) {
+			warnings.push(`process cleanup unconfirmed: ${outcome.terminationError}`);
+		}
 		let status: RunStatus = "ok";
 		let error: string | undefined;
 
