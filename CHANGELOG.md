@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.24.8
+
+### Fixed
+
+- A consultant tree whose kill cannot be confirmed is no longer forgotten: the
+  failed attempt is reported on the outcome, the tree stays owned, and the next
+  shutdown retries it. `taskkill` is resolved from the Windows directory rather
+  than a search path.
+- A mixed-case `claude_code_entrypoint` no longer survives the nesting-marker
+  scrub, and the forced `NO_COLOR` cannot arrive beside a parent's `no_color`.
+
+### Changed
+
+- A file-symlink case abandons itself as a named non-pass when the host denies
+  the link, instead of reading a missing target as a refusal.
+
 ## 0.24.7
 
 ### Fixed
