@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.25.1
+
+### Fixed
+
+- The launch leaves a session running behind its report: no way a cycle can
+  close on its own settles until `session_stop` answers `ended: true` for the
+  session `comms_spawn` named, a confirmed stop stays confirmed, the
+  obligation survives a reload, and the rung is not offered at all without the
+  stop tool. Only the user's explicit release ends a cycle over a running
+  session, and the notice names the session left behind.
+
 ## 0.25.0
 
 ### Changed
@@ -20,12 +31,6 @@
 
 ### Fixed
 
-- The launch leaves a session running behind its report: no way a cycle can
-  close on its own settles until `session_stop` answers `ended: true` for the
-  session `comms_spawn` named, a confirmed stop stays confirmed, the
-  obligation survives a reload, and the rung is not offered at all without the
-  stop tool. Only the user's explicit release ends a cycle over a running
-  session, and the notice names the session left behind.
 - A dedicated independent auditor can send its report with `comms_send` before
   acknowledging `pre_consult`; without that, the rung was unreachable on a
   default configuration. The exemption is the auditor session's alone, is
