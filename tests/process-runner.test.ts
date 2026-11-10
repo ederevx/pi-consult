@@ -172,23 +172,65 @@ test("process runner: a timeout stops a descendant the leader left running", asy
 		timeoutMs: 1_500,
 	});
 	assertEq(outcome.timedOut, true, "the leader is timed out");
+	assertEq(outcome.terminationError, undefined, "the tree was confirmed stopped");
 	const grandchild = Number(readFileSync(pidFile, "utf8"));
 	assert(Number.isInteger(grandchild) && grandchild > 0, "the descendant named itself");
 	assertEq(await gone(grandchild), true, "the descendant is stopped with its leader");
 });
 
+const FAILED_KILL = "process runner: a failed kill keeps its tree owned and says so";
+
+if (process.platform === "win32") {
+	test(FAILED_KILL, async () => {
+		const runner = new ProcessRunner();
+		const pidFile = join(scratchDir(), `unowned-${Date.now()}.pid`);
+		const systemRoot = process.env.SystemRoot;
+		const childEnv = { ...process.env };
+		// A Windows directory with no taskkill in it: the child keeps the real
+		// runtime through its own environment, and only the runner's resolution
+		// of taskkill is broken.
+		const run = async () => {
+			process.env.SystemRoot = join(scratchDir(), `no-system-root-${Date.now()}`);
+			try {
+				return await runner.run({
+					command: NODE,
+					args: [
+						"-e",
+						`require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));` +
+							"setInterval(()=>{},1000);",
+					],
+					cwd: CWD,
+					env: childEnv,
+					stdin: "",
+					timeoutMs: 300,
+				});
+			} finally {
+				if (systemRoot === undefined) delete process.env.SystemRoot;
+				else process.env.SystemRoot = systemRoot;
+			}
+		};
+		const outcome = await run();
+		assertEq(outcome.timedOut, true, "the leader is timed out");
+		assert(
+			outcome.terminationError !== undefined,
+			"the failed kill is reported instead of passing for cleanup",
+		);
+		const leader = Number(readFileSync(pidFile, "utf8"));
+		assertEq(alive(leader), true, "the leader survived the failed kill");
+		// Ownership was kept, so the same runner retries once taskkill is
+		// reachable again.
+		runner.killAll();
+		assertEq(await gone(leader), true, "the retained tree is stopped on the retry");
+	});
+} else {
+	testUnsupported(FAILED_KILL, "the failure path is the Windows taskkill resolution; POSIX signals a process group");
+}
+
 const ESCAPED = "process runner: a descendant that left the leader's tree is still stopped";
 
-// Neither platform's ordinary kill reaches a descendant that leaves the tree
-// before it fires: POSIX signals the process group, which setsid() escapes, and
-// Windows walks the live tree by pid. Both need an external owner (a cgroup or
-// a Job Object) that no backend here creates.
-testUnsupported(
-	ESCAPED,
-	process.platform === "win32"
-		? "Windows trees are walked by taskkill /T at kill time; an escape-proof owner needs a Job Object, which no backend here creates"
-		: "a descendant that calls setsid() leaves the process group; only a cgroup or Job Object would hold it",
-);
+testUnsupported(ESCAPED, process.platform === "win32"
+	? "Windows trees are walked by taskkill /T at kill time; an escape-proof owner needs a Job Object, which no backend here creates"
+	: "a descendant that calls setsid() leaves the process group; only a cgroup or Job Object would hold it");
 
 const BATCH = "process runner: a batch launcher is refused with the configuration it needs";
 

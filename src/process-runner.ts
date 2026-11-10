@@ -10,6 +10,7 @@
  */
 
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 
 const DEFAULT_MAX_STDOUT_BYTES = 16 * 1024 * 1024;
@@ -42,6 +43,8 @@ export interface ProcessOutcome {
 	timedOut: boolean;
 	aborted: boolean;
 	spawnError?: string;
+	/** Why the tree could not be stopped, when the kill failed. */
+	terminationError?: string;
 	stdoutOverflow: boolean;
 	durationMs: number;
 }
@@ -98,7 +101,8 @@ export class ProcessRunner {
 			let settled = false;
 			let killTimer: NodeJS.Timeout | undefined;
 			let closed = false;
-			let escalated = false;
+			let stopConfirmed = false;
+			let terminationError: string | undefined;
 
 			const emitLine = (line: string): void => {
 				if (line.length === 0) return;
@@ -129,6 +133,7 @@ export class ProcessRunner {
 					timedOut,
 					aborted,
 					spawnError,
+					terminationError,
 					stdoutOverflow,
 					durationMs: Date.now() - started,
 				});
@@ -136,21 +141,22 @@ export class ProcessRunner {
 
 			const terminate = (child: ChildProcess): void => {
 				if (child.pid === undefined || killTimer) return;
-				this.signalTree(child, "SIGTERM");
+				if (this.signalTree(child, "SIGTERM") === undefined) stopConfirmed = true;
 				killTimer = setTimeout(() => {
 					if (child.pid === undefined) return;
-					this.signalTree(child, "SIGKILL");
+					const failure = this.signalTree(child, "SIGKILL");
+					stopConfirmed = failure === undefined;
+					terminationError = failure;
 					// A descendant holding the pipes can hold `close`
 					// open past the kill: the streams close now and the
 					// outcome settles once. Ownership holds until the
 					// real `close` too, so a surviving descendant stays
 					// reachable for killAll.
-					escalated = true;
 					clearTimeout(timer);
 					child.stdout?.destroy();
 					child.stderr?.destroy();
 					child.stdin?.destroy();
-					if (closed) this.children.delete(child);
+					if (closed && stopConfirmed) this.children.delete(child);
 					finish(child, child.exitCode ?? null,
 						child.signalCode ?? null);
 				}, KILL_GRACE_MS);
@@ -230,11 +236,11 @@ export class ProcessRunner {
 			child.on("close", (code: number | null, signal: NodeJS.Signals | null) => {
 				// The armed escalation stays: a leader's exit does not
 				// establish that its descendants have stopped. Ownership
-				// holds until the group is stopped or the escalation
-				// fires, so killAll stays able to reach it.
+				// holds until the tree is confirmed stopped or the
+				// escalation fires, so killAll stays able to reach it.
 				closed = true;
 				clearTimeout(timer);
-				if (!killTimer || escalated) this.children.delete(child);
+				if (!killTimer || stopConfirmed) this.children.delete(child);
 				if (settled) return;
 				if (stderrOverflow) stderrChunks.push("\n[stderr truncated]\n");
 				finish(child, code, signal);
@@ -246,38 +252,74 @@ export class ProcessRunner {
 		});
 	}
 
-	/** Terminate every owned process tree. Idempotent. */
+	/**
+	 * Terminate every owned process tree, retaining one whose tree could not be
+	 * confirmed stopped so a later call retries it. Idempotent.
+	 */
 	killAll(): void {
 		for (const child of [...this.children]) {
-			if (child.pid === undefined) continue;
-			this.signalTree(child, "SIGKILL");
+			if (child.pid === undefined || this.signalTree(child, "SIGKILL") === undefined) {
+				this.children.delete(child);
+			}
 		}
-		this.children.clear();
 	}
 
 	/**
 	 * The one termination owner. POSIX signals the child's own process group;
-	 * Windows has none, so `taskkill /T` walks the live tree from the leader.
-	 * A descendant that leaves that tree before the kill keeps running: an
-	 * escape-proof owner needs a Job Object, which is not implemented.
+	 * Windows has no process group, so `taskkill /T` walks the live tree from
+	 * the leader. Returns why the tree could not be confirmed stopped, or
+	 * undefined once it is.
 	 */
-	private signalTree(child: ChildProcess, signal: NodeJS.Signals): void {
-		if (child.pid === undefined) return;
-		if (process.platform === "win32") {
-			spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
-				stdio: "ignore",
-				windowsHide: true,
-			});
-			return;
-		}
+	private signalTree(child: ChildProcess, signal: NodeJS.Signals): string | undefined {
+		if (child.pid === undefined) return undefined;
+		const failure = process.platform === "win32"
+			? ProcessRunner.taskkillTree(child.pid)
+			: ProcessRunner.signalGroup(child, signal);
+		if (failure === undefined || !ProcessRunner.running(child.pid)) return undefined;
+		return failure;
+	}
+
+	/** Windows: stop the live tree rooted at a leader. */
+	private static taskkillTree(pid: number): string | undefined {
+		const result = spawnSync(ProcessRunner.taskkill(), ["/PID", String(pid), "/T", "/F"], {
+			stdio: "ignore",
+			windowsHide: true,
+		});
+		if (result.error) return result.error.message;
+		return result.status === 0 ? undefined : `taskkill exited with ${String(result.status)}`;
+	}
+
+	/**
+	 * `taskkill` is resolved from the Windows directory, not `Path`: a
+	 * consultant's own search path must not decide whether a tree can be
+	 * stopped.
+	 */
+	private static taskkill(): string {
+		const root = process.env.SystemRoot ?? process.env.WINDIR;
+		return root === undefined ? "taskkill" : join(root, "System32", "taskkill.exe");
+	}
+
+	/** POSIX: signal the child's process group, then the leader alone. */
+	private static signalGroup(child: ChildProcess, signal: NodeJS.Signals): string | undefined {
 		try {
-			process.kill(-child.pid, signal);
+			process.kill(-child.pid!, signal);
+			return undefined;
 		} catch {
 			try {
 				child.kill(signal);
-			} catch {
-				// already gone
+				return undefined;
+			} catch (error) {
+				return error instanceof Error ? error.message : String(error);
 			}
+		}
+	}
+
+	private static running(pid: number): boolean {
+		try {
+			process.kill(pid, 0);
+			return true;
+		} catch {
+			return false;
 		}
 	}
 }
