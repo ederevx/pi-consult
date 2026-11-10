@@ -65,8 +65,12 @@ export class ConsultantEnv {
 	/** The environment for a Claude Code child. */
 	static claude(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
 		const env = ConsultantEnv.build(ConsultantEnv.CLAUDE_PREFIX, source);
-		delete env.CLAUDECODE;
-		delete env.CLAUDE_CODE_ENTRYPOINT;
+		// The nesting markers would make a child believe it runs inside Claude
+		// Code, and Windows spells them in either case.
+		for (const key of Object.keys(env)) {
+			const name = ConsultantEnv.folded(key);
+			if (name === "CLAUDECODE" || name === "CLAUDE_CODE_ENTRYPOINT") delete env[key];
+		}
 		return env;
 	}
 
@@ -83,12 +87,12 @@ export class ConsultantEnv {
 		const windows = process.platform === "win32";
 		// Windows spells the same variable in either case (`Path` for `PATH`),
 		// so the allowlist is matched on the folded name while the child keeps
-		// the spelling it was given. The folded name also keeps one variable
-		// from arriving twice under two spellings.
-		const emitted = new Set<string>();
+		// the spelling it was given. The folded names already emitted keep one
+		// variable from arriving twice under two spellings.
+		const emitted = new Set<string>(windows ? ["NO_COLOR"] : []);
 		for (const [key, value] of Object.entries(source)) {
 			if (value === undefined) continue;
-			const name = windows ? key.toUpperCase() : key;
+			const name = ConsultantEnv.folded(key);
 			if (
 				ConsultantEnv.COMMON.includes(name) ||
 				ConsultantEnv.matches(name, ConsultantEnv.COMMON_PREFIX) ||
@@ -103,6 +107,10 @@ export class ConsultantEnv {
 			}
 		}
 		return env;
+	}
+
+	private static folded(key: string): string {
+		return process.platform === "win32" ? key.toUpperCase() : key;
 	}
 
 	private static matches(key: string, prefixes: readonly string[]): boolean {

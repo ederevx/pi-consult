@@ -41,11 +41,23 @@ if (process.platform === "win32") {
 			Path: "C:\\bin;C:\\Windows",
 			SYSTEMROOT: "C:\\Windows",
 			AWS_SECRET_ACCESS_KEY: "secret",
+			claude_code_entrypoint: "parent",
+			no_color: "0",
 		};
-		const env = ConsultantEnv.codex(source);
+		const env = ConsultantEnv.claude(source);
 		assertEq(env.Path, source.Path, "the child keeps the spelling it was given");
 		assertEq(env.SYSTEMROOT, source.SYSTEMROOT, "a Windows runtime variable still reaches it");
 		assert(!("AWS_SECRET_ACCESS_KEY" in env), "an unrelated secret stays out");
+		assertEq(
+			Object.keys(env).filter((key) => key.toUpperCase() === "CLAUDE_CODE_ENTRYPOINT").length,
+			0,
+			"a mixed-case nesting marker is scrubbed too",
+		);
+		assertEq(
+			Object.keys(env).filter((key) => key.toUpperCase() === "NO_COLOR").length,
+			1,
+			"the forced NO_COLOR keeps the only spelling of itself",
+		);
 		const twice = ConsultantEnv.codex({ Path: "first", PATH: "second" });
 		assertEq(
 			Object.keys(twice).filter((key) => key.toUpperCase() === "PATH").length,
