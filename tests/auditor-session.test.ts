@@ -1,9 +1,9 @@
 /**
  * pi-consult — the independent-auditor session guard.
  *
- * A pi-teams teammate is an auditor only when TEAM_PARENT_ID is set and its
- * first task line is the audit header. The guard blocks edit, write and
- * powershell there; bash stays available because a teammate reports through
+ * An agent-comms child is an auditor only when PI_COMMS_PARENT_AGENT_ID is set
+ * and its first task line is the audit header. The guard blocks edit, write and
+ * powershell there; bash stays available because the auditor reports through
  * it.
  */
 
@@ -29,18 +29,18 @@ class GuardPi {
 }
 
 const AUDIT_PROMPT =
-	'You are "x", a teammate spawned by a parent pi session to do one task.\nTask:\npi-consult independent audit - check the diff.';
+	"pi-consult independent audit - check the diff.\nThe plan is the diff below.";
 
-/** Run a body with TEAM_PARENT_ID set, then restore the environment. */
+/** Run a body with PI_COMMS_PARENT_AGENT_ID set, then restore the environment. */
 function withParentId(value: string | undefined, body: () => void): void {
-	const original = process.env.TEAM_PARENT_ID;
-	if (value === undefined) delete process.env.TEAM_PARENT_ID;
-	else process.env.TEAM_PARENT_ID = value;
+	const original = process.env.PI_COMMS_PARENT_AGENT_ID;
+	if (value === undefined) delete process.env.PI_COMMS_PARENT_AGENT_ID;
+	else process.env.PI_COMMS_PARENT_AGENT_ID = value;
 	try {
 		body();
 	} finally {
-		if (original === undefined) delete process.env.TEAM_PARENT_ID;
-		else process.env.TEAM_PARENT_ID = original;
+		if (original === undefined) delete process.env.PI_COMMS_PARENT_AGENT_ID;
+		else process.env.PI_COMMS_PARENT_AGENT_ID = original;
 	}
 }
 
@@ -70,7 +70,7 @@ test("auditor session: blocks edit, write and powershell and allows bash", () =>
 	});
 });
 
-test("auditor session: without TEAM_PARENT_ID nothing is blocked", () => {
+test("auditor session: without PI_COMMS_PARENT_AGENT_ID nothing is blocked", () => {
 	withParentId(undefined, () => {
 		const pi = new GuardPi();
 		new AuditorSession().register(pi as never);
@@ -83,6 +83,13 @@ test("auditor session: a different first task line is not an audit", () => {
 	withParentId("parent-1", () => {
 		const { pi } = guardForPrompt('You are "x".\nTask:\nDo the thing.');
 		assertEq(toolCall(pi, "edit"), undefined);
+	});
+});
+
+test("auditor session: the header must be the first line, not a later one", () => {
+	withParentId("parent-1", () => {
+		const { pi } = guardForPrompt('You are "x".\nTask:\npi-consult independent audit - scope.');
+		assertEq(toolCall(pi, "edit"), undefined, "a wrapped prompt is not this launch");
 	});
 });
 

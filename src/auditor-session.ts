@@ -1,11 +1,11 @@
 /**
  * pi-consult — the independent-auditor session.
  *
- * Owns one rule: a pi-teams teammate whose task starts with the independent
+ * Owns one rule: an agent-comms child whose task starts with the independent
  * audit header is the dedicated auditor, and it may not change the working
- * tree. It blocks pi's built-in edit, write, and powershell tools there;
- * bash stays available because a teammate reports through it. Every other
- * session is untouched.
+ * tree. It blocks pi's built-in edit, write, and powershell tools there; the
+ * comms tools stay available because the auditor reports through them. Every
+ * other session is untouched.
  */
 
 import type { ExtensionAPI, ExtensionContext, ToolCallEvent } from "@earendil-works/pi-coding-agent";
@@ -17,9 +17,9 @@ export class AuditorSession {
 	private auditor = false;
 	private decided = false;
 
-	/** Register the auditor guard; a no-op outside a pi-teams teammate. */
+	/** Register the auditor guard; a no-op outside an agent-comms child. */
 	register(pi: ExtensionAPI): void {
-		if (!process.env.TEAM_PARENT_ID) return;
+		if (!process.env.PI_COMMS_PARENT_AGENT_ID) return;
 		pi.on("session_start", (_event, ctx: ExtensionContext) => {
 			const first = AuditorSession.firstPrompt(ctx);
 			this.decided = first !== undefined;
@@ -42,12 +42,14 @@ export class AuditorSession {
 		});
 	}
 
-	/** The header is the first non-empty line after pi-teams' "Task:" line, or of the prompt. */
+	/** An auditor reports before it can acknowledge anything; nothing else. */
+	allowsReporting(name: string): boolean {
+		return this.auditor && name === "comms_send";
+	}
+
+	/** The header is the first non-empty line of the task, which is the prompt. */
 	private static isAuditPrompt(text: string): boolean {
-		const lines = text.split("\n");
-		const task = lines.findIndex((line) => line.trim() === "Task:");
-		const rest = task >= 0 ? lines.slice(task + 1) : lines;
-		const first = rest.find((line) => line.trim() !== "")?.trim() ?? "";
+		const first = text.split("\n").find((line) => line.trim() !== "")?.trim() ?? "";
 		return AgentEffortPolicy.AUDIT_HEADER.test(first);
 	}
 

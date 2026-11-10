@@ -23,7 +23,7 @@ export interface ConsultantTarget {
 
 export class ConsultContract {
 	/** Bump when the acknowledgement terms change; old receipts stop counting. */
-	static readonly VERSION = 19;
+	static readonly VERSION = 20;
 
 	/** The acknowledgement text the agent accepts by calling `pre_consult`. */
 	contractText(targets: readonly ConsultantTarget[]): string {
@@ -75,8 +75,9 @@ export class ConsultContract {
 			"  consultant own the design and the verification of its work while you",
 			"  own implementation and execution; send every audit of consultant work",
 			"  to a consultant, and a closing consultation to a fresh independent",
-			"  pi-teams session only when every enabled consultant has expired; brief",
-			"  the governing conventions for every closing consultation; verify",
+			"  agent spawned through agent-comms only when every enabled consultant",
+			"  has expired; brief the governing conventions for every closing",
+			"  consultation; verify",
 			"  rather than repeat a consultant's work; and carry every doubt and",
 			"  roadblock back to the consultant.",
 			"",
@@ -220,27 +221,28 @@ export class ConsultContract {
 			"  timeout in this cycle. A slow, detached, or interrupted consult has not",
 			"  expired; wait for its delivered result. While one enabled consultant has",
 			"  not expired, it is the rung.",
-			"- The independent agent is a fresh pi-teams teammate spawned with",
-			"  team_spawn for this audit alone, never team_attach, team_peer, another",
-			"  pi process, or a session that already holds the task. It may serve a",
-			"  closing consultation of either tier, but only as this fallback, never",
-			"  while an enabled consultant can serve. Start its task with this line,",
-			"  naming the tier in the scope, then hand it the plan, the changed paths",
-			"  or diff, the conventions as for any closing consultation, the commands",
-			"  you ran and their results as they came out, and what to judge (a sanity",
-			"  check: whether the work has a defect; an audit: a full review); never",
-			"  tell it what verdict to give:",
+			"- The independent agent is a fresh agent spawned with comms_spawn,",
+			"  carrying dir and task and no argv, for this audit alone: never another",
+			"  pi process, and never a session that already holds the task. It may",
+			"  serve a closing consultation of either tier, but only as this fallback,",
+			"  never while an enabled consultant can serve. Start its task with this",
+			"  line, naming the tier in the scope, then hand it the plan, the changed",
+			"  paths or diff, the conventions as for any closing consultation, the",
+			"  commands you ran and their results as they came out, and what to judge",
+			"  (a sanity check: whether the work has a defect; an audit: a full",
+			"  review); never tell it what verdict to give:",
 			"    pi-consult independent audit - <one-line scope>.",
-			"  Collect its report with team_wait and relay its verdict as it is. If",
-			"  the report ends with a passing convention audit and an approved",
-			"  verdict, nothing is owed, and you have not edited, written, or run a",
-			"  command since spawning it, end your final reply with this line, alone",
-			"  and as its last line:",
-			"    Consultation cycle: complete - <teammate id> independently verified.",
+			"  Collect its report with comms_wait, or recover a delivery with",
+			"  comms_replay, and acknowledge the received message ids with comms_ack;",
+			"  an empty wait is not a failed audit. If the report ends with a passing",
+			"  convention audit and an approved verdict, nothing is owed, and you",
+			"  have not edited, written, or run a command since spawning it, end your",
+			"  final reply with this line, alone and as its last line:",
+			"    Consultation cycle: complete - <agent id> independently verified.",
 			"  A changes-needed verdict is the plan for the fix; after the fix, spawn a",
 			"  fresh independent audit.",
-			"- If pi-teams is not installed, or the spawn or the audit fails, stop. Do",
-			"  not audit the work yourself; tell the user, on a line of its own:",
+			"- If agent-comms is unavailable, or the spawn or the audit fails, stop.",
+			"  Do not audit the work yourself; tell the user, on a line of its own:",
 			"    Independent audit unavailable - <one-line reason>.",
 			"  and leave the work unaudited until a consultant returns or the user",
 			"  decides; the task then ends without its closing consultation, and you",
@@ -249,9 +251,12 @@ export class ConsultContract {
 			"  are that independent agent and the audit is your task: do it yourself,",
 			"  read-only (no edits, no writes, no state-changing commands; edit, write,",
 			"  and powershell are blocked for you), do not delegate it or consult on",
-			"  it (your report is its closing consultation), audit it against the",
-			"  conventions it was given, and end the report you send your parent with",
-			"  a convention audit line as above, then one of these lines, plain and last:",
+			"  it (your report is its closing consultation), and audit it against the",
+			"  conventions it was given. Send that report to your parent with",
+			"  comms_send, kind \"result\", as one string payload rather than an object,",
+			"  the only message of that kind you send; the parent is the agent the task",
+			"  names or PI_COMMS_PARENT_AGENT_ID carries. End the report with a",
+			"  convention audit line as above, then one of these lines, plain and last:",
 			"    Independent audit verdict: approved - <one-line reason>.",
 			"    Independent audit verdict: changes needed - <one-line reason>.",
 			"- Only when every enabled consultant has expired may you carry a",
@@ -312,7 +317,10 @@ export class ConsultContract {
 				"this session, pi blocks implementation tools: edit, write, bash, " +
 				"powershell, and any tool outside the operator's allow list (a tool's own " +
 				"read-only annotation is not trusted by default). Reads (read, grep, " +
-				"find, ls) and the pi-consult tools stay available.",
+				"find, ls) and the pi-consult tools stay available. A dedicated " +
+				"independent auditor is the one exception: it may send its report with " +
+				"comms_send before acknowledging, unless the operator explicitly " +
+				"blocks that tool.",
 		);
 		lines.push(
 			"- After that acknowledgement nothing is blocked: no consult receipt, no " +
@@ -369,7 +377,7 @@ export class ConsultContract {
 			"A consultant owns the design and verification of its work: every " +
 			"roadblock goes back to it, and audits of its work go to a consultant, " +
 			"never to you: when every enabled consultant has expired, to a fresh " +
-			"pi-teams independent auditor, and to you only on the user's explicit " +
+			"agent-comms independent auditor, and to you only on the user's explicit " +
 			"request, and you say so. Write the Consultation cycle: complete line, " +
 			"as your final line, only after an approved consultant or independent " +
 			"verdict and with no consult or audit running or undelivered."

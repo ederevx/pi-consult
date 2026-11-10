@@ -9,7 +9,7 @@
  * and a result the user stopped with Escape reinstates it at the next run. The
  * cycle closes on a passing convention audit and an approved
  * verdict, or, once every enabled consultant has expired, on an approved
- * report from a dedicated independent auditor spawned through pi-teams. A
+ * report from a dedicated independent auditor spawned through agent-comms. A
  * fallback the records support, an explicit user audit, or
  * `/consult-effort release` also ends it. Every change is persisted on the
  * session branch. Consultant `effort` settings are
@@ -70,9 +70,8 @@ export class AgentEffortPolicy {
 	private static readonly AUDIT_UNAVAILABLE = /^Independent audit unavailable - \S.*$/;
 	private static readonly FALLBACK = /^Consultant fallback: no consultant available - \S.*$/;
 	private static readonly USER_AUDIT = /^Audit by pi at the user's request - \S.*$/;
-	private static readonly SPAWNED = /^spawned teammate (\S+)/;
+	private static readonly COMMS_LOG = "pi-agent-comms-log";
 	private static readonly NUDGE = "pi-consult-cycle";
-	private static readonly TEAMS_LOG = "pi-teams-log";
 	private static readonly MUTATIONS = new Set(["edit", "write", "bash", "powershell"]);
 	private static readonly RETRYABLE = new Set(["error", "timeout"]);
 	private static readonly EXPIRING = new Set(["unavailable", "auth"]);
@@ -141,12 +140,12 @@ export class AgentEffortPolicy {
 			this.settled(ctx);
 		});
 		pi.on("model_select", (_event, ctx: ExtensionContext) => {
-			if (this.holding && this.previous && this.spawns.size === 0) this.lower(ctx);
+			if (this.holding && this.previous) this.lower(ctx);
 		});
 		// Source-less: a model switch sets the level before model_select fires,
 		// so no selection is read as a user release; only the command releases.
 		pi.on("thinking_level_select", (event, ctx: ExtensionContext) => {
-			if (this.holding && this.previous && this.spawns.size === 0 && AgentEffortPolicy.LOWER.has(event.level)) this.lower(ctx);
+			if (this.holding && this.previous && AgentEffortPolicy.LOWER.has(event.level)) this.lower(ctx);
 		});
 		pi.registerCommand("consult-effort", {
 			description: "Show pi-consult's thinking-level hold and audit ladder, or end the hold with `release`.",
@@ -250,8 +249,8 @@ export class AgentEffortPolicy {
 	private ladder(): string {
 		const serving = this.serving();
 		if (serving.length > 0) return `consultant (${serving.join(", ")})`;
-		if (this.teamsPresent()) return "independent agent via pi-teams (every enabled consultant expired)";
-		return "stopped: no consultant and no pi-teams; pi audits only on the user's explicit request";
+		if (this.commsPresent()) return "independent agent via agent-comms (every enabled consultant expired)";
+		return "stopped: no consultant and no agent-comms; pi audits only on the user's explicit request";
 	}
 
 	private restore(ctx: ExtensionContext | undefined, reason: string): void {
@@ -287,7 +286,7 @@ export class AgentEffortPolicy {
 		this.nudged = undefined;
 	}
 
-	private lower(ctx: ExtensionContext | undefined, quiet = false): void {
+	private lower(ctx: ExtensionContext | undefined): void {
 		const pi = this.pi;
 		if (!pi) return;
 		const context = ctx ?? this.live;
@@ -303,7 +302,7 @@ export class AgentEffortPolicy {
 				`pi-consult: this model offers nothing below ${after}; the consultation hold is unsupported on it and pi stays at ${after}.`,
 				"warning",
 			);
-		} else if (!unsupported && after !== current && !quiet) {
+		} else if (!unsupported && after !== current) {
 			this.notify(
 				context,
 				`pi-consult: consultation hold: pi's thinking set to ${after} (was ${current}) while this run executes the answer; /consult-effort release ends the cycle early.`,
@@ -321,7 +320,7 @@ export class AgentEffortPolicy {
 			this.previous = pi.getThinkingLevel();
 			this.persist();
 		}
-		if (this.spawns.size === 0) this.lower(this.live);
+		this.lower(this.live);
 	}
 
 	/** No consultant instructions are in progress: restore without closing. */
@@ -376,9 +375,11 @@ export class AgentEffortPolicy {
 		);
 	}
 
-	private teamsPresent(): boolean {
+	private commsPresent(): boolean {
 		try {
-			return this.pi?.getAllTools().some((tool) => tool.name === "team_spawn") ?? false;
+			const tools = this.pi?.getAllTools() ?? [];
+			return ["comms_spawn", "comms_send", "comms_wait"]
+				.every((name) => tools.some((tool) => tool.name === name));
 		} catch {
 			return false;
 		}
@@ -393,13 +394,12 @@ export class AgentEffortPolicy {
 			return;
 		}
 		const pi = this.pi;
-		if (name !== "team_spawn" || !toolCallId || !pi || !this.holding) return;
-		if (!AgentEffortPolicy.isAudit(input?.task)) return;
-		// The teammate inherits the live level at spawn: give the auditor the
-		// user's level until this call's tool_execution_end. An open cycle with
-		// no answer in execution has no level to give it.
+		if (name !== "comms_spawn" || !toolCallId || !pi || !this.holding) return;
+		// The tool treats an empty argv as absent, so one task means what it means
+		// for the launch itself.
+		const argv = input?.argv;
+		if ((Array.isArray(argv) && argv.length > 0) || !AgentEffortPolicy.isAudit(input?.task)) return;
 		this.spawns.add(toolCallId);
-		if (this.previous && this.previous !== pi.getThinkingLevel()) pi.setThinkingLevel(this.previous);
 	}
 
 	private observeEnd(
@@ -408,8 +408,11 @@ export class AgentEffortPolicy {
 	): void {
 		if (!this.spawns.delete(String(event.toolCallId ?? ""))) return;
 		if (this.holding) {
-			const result = (event.result ?? {}) as { content?: Array<{ type?: string; text?: string }>; details?: unknown };
-			const id = event.isError ? undefined : AgentEffortPolicy.teammateId(result);
+			const result = (event.result ?? {}) as {
+				structuredContent?: unknown;
+				details?: unknown;
+			};
+			const id = event.isError ? undefined : AgentEffortPolicy.auditorId(result);
 			const serving = this.serving();
 			if (!id) {
 				this.auditFailed = true;
@@ -424,27 +427,25 @@ export class AgentEffortPolicy {
 					`pi-consult: independent audit ${id} was spawned while ${serving.join(", ")} can still serve; its verdict will not complete the cycle.`,
 					"warning",
 				);
-			} else {
+			} else if (!this.auditors.has(id)) {
 				this.auditors.add(id);
 				this.owed.add(id);
 				this.fresh.add(id);
 			}
 			this.persist();
 		}
-		if (this.spawns.size === 0 && this.holding && this.previous) this.lower(ctx, true);
 	}
 
-	/** Undo a spawn raise whose call never reported its end. */
+	/** Undo a spawn record whose call never reported its end. */
 	private rollback(ctx: ExtensionContext | undefined): void {
 		if (this.spawns.size === 0) return;
 		this.spawns.clear();
 		if (!this.holding) return;
 		this.auditFailed = true;
 		this.persist();
-		if (this.previous) this.lower(ctx, true);
 		this.notify(
 			ctx,
-			`pi-consult: an independent audit spawn never reported its end; pi's thinking is back at ${this.previous ? "low" : "its normal level"} and the audit is recorded as failed.`,
+			"pi-consult: an independent audit spawn never reported its end; the audit is recorded as failed.",
 			"warning",
 		);
 	}
@@ -460,12 +461,12 @@ export class AgentEffortPolicy {
 		}
 		if (
 			lines.some((line) => AgentEffortPolicy.AUDIT_UNAVAILABLE.test(line)) &&
-			this.teamsPresent() &&
+			this.commsPresent() &&
 			!this.auditFailed
 		) {
 			this.notify(
 				ctx,
-				"pi-consult: independent audit stated unavailable, but pi-teams is installed and no independent audit has failed in this cycle; spawn one with team_spawn.",
+				"pi-consult: independent audit stated unavailable, but agent-comms tools are registered and no independent audit has failed in this cycle; spawn one with comms_spawn.",
 				"warning",
 			);
 		}
@@ -475,19 +476,19 @@ export class AgentEffortPolicy {
 		else this.restore(ctx, "consultant fallback");
 	}
 
-	/** Settle owed auditors from the reports pi-teams logged on the branch. */
+	/** Settle owed auditors from the reports agent-comms logged on the branch. */
 	private collectReports(ctx: ExtensionContext): void {
 		if (this.auditors.size === 0) return;
 		const branch = ctx.sessionManager.getBranch() as unknown as Array<Record<string, unknown>>;
 		let changed = false;
 		for (const entry of branch) {
-			if (entry?.type !== "custom" || entry.customType !== AgentEffortPolicy.TEAMS_LOG) continue;
+			if (entry?.type !== "custom" || entry.customType !== AgentEffortPolicy.COMMS_LOG) continue;
 			const data = (entry.data ?? {}) as Record<string, unknown>;
-			const from = data.from;
+			const from = (data.from as { agentId?: unknown } | undefined)?.agentId;
 			if (data.direction !== "received" || data.kind !== "result" || typeof from !== "string") continue;
 			if (!this.auditors.has(from) || !this.owed.has(from)) continue;
 			this.owed.delete(from);
-			const payload = String(data.payload ?? "");
+			const payload = typeof data.payload === "string" ? data.payload : "";
 			const last = AgentEffortPolicy.lastPlain(payload) ?? "";
 			const verdict = last.match(AgentEffortPolicy.AUDIT_VERDICT)?.[1];
 			if (verdict === "approved") {
@@ -510,12 +511,12 @@ export class AgentEffortPolicy {
 		this.collectReports(ctx);
 		const line = AgentEffortPolicy.finalLine(message);
 		const consultId = line?.match(AgentEffortPolicy.COMPLETE)?.[1];
-		const teammate = consultId ? undefined : line?.match(AgentEffortPolicy.INDEPENDENT)?.[1];
-		if (!consultId && !teammate) {
+		const auditor = consultId ? undefined : line?.match(AgentEffortPolicy.INDEPENDENT)?.[1];
+		if (!consultId && !auditor) {
 			this.release(ctx);
 			return;
 		}
-		const refusal = consultId ? this.completionRefusal(consultId) : this.independentRefusal(teammate as string);
+		const refusal = consultId ? this.completionRefusal(consultId) : this.independentRefusal(auditor as string);
 		if (!refusal) {
 			this.restore(ctx, consultId ? "the consultant handed control back" : "the independent audit approved the work");
 			return;
@@ -538,7 +539,7 @@ export class AgentEffortPolicy {
 			return {
 				kind: "auditor",
 				reason,
-				action: `collect ${auditors.join(", ")} with team_wait, then close the cycle again`,
+				action: `collect ${auditors.join(", ")} with comms_wait, then close the cycle again`,
 			};
 		}
 		return {
@@ -572,28 +573,28 @@ export class AgentEffortPolicy {
 		return undefined;
 	}
 
-	private independentRefusal(teammate: string): Refusal | undefined {
+	private independentRefusal(auditor: string): Refusal | undefined {
 		const owed = this.owedRefusal();
 		if (owed) return owed;
-		const fresh = "spawn a fresh independent audit with team_spawn and close the cycle on its approved report";
-		if (!this.auditors.has(teammate)) {
+		const fresh = "spawn a fresh independent audit with comms_spawn and close the cycle on its approved report";
+		if (!this.auditors.has(auditor)) {
 			return {
 				kind: "unverified",
-				reason: `${teammate} is not an independent auditor spawned after every enabled consultant expired`,
+				reason: `${auditor} is not an independent auditor spawned after every enabled consultant expired`,
 				action: `climb the audit ladder: a serving consultant through continue, else ${fresh}`,
 			};
 		}
-		if (!this.independent.has(teammate)) {
+		if (!this.independent.has(auditor)) {
 			return {
 				kind: "unverified",
-				reason: `${teammate} has not reported an approved independent verdict after a passing convention audit`,
+				reason: `${auditor} has not reported an approved independent verdict after a passing convention audit`,
 				action: `fix what it found, then ${fresh}`,
 			};
 		}
-		if (!this.fresh.has(teammate)) {
+		if (!this.fresh.has(auditor)) {
 			return {
 				kind: "unverified",
-				reason: `${teammate} was spawned before your last edit, write, or command`,
+				reason: `${auditor} was spawned before your last edit, write, or command`,
 				action: fresh,
 			};
 		}
@@ -781,11 +782,14 @@ export class AgentEffortPolicy {
 		return AgentEffortPolicy.AUDIT_HEADER.test(first);
 	}
 
-	private static teammateId(event: { content?: Array<{ type?: string; text?: string }>; details?: unknown }): string | undefined {
-		const id = (event.details as { id?: unknown } | undefined)?.id;
-		if (typeof id === "string" && id.trim()) return id.trim();
-		const text = (event.content ?? []).map((part) => part?.text ?? "").join("\n");
-		return text.match(AgentEffortPolicy.SPAWNED)?.[1];
+	private static auditorId(event: { structuredContent?: unknown; details?: unknown }): string | undefined {
+		const answer = (event.structuredContent ??
+			(event.details as { answer?: unknown } | undefined)?.answer) as
+			{ status?: unknown; agent?: { agentId?: unknown } } | undefined;
+		const id = answer?.agent?.agentId;
+		return answer?.status === "spawned" && typeof id === "string" && id.trim()
+			? id.trim()
+			: undefined;
 	}
 
 	private static approves(answer: string | undefined): boolean {

@@ -145,7 +145,8 @@ test("pre_consult: the tool carries workflow prompt guidelines", () => {
 	assertIncludes(guidelines.join("\n"), "investigative tasks", "the investigative default survives compaction");
 	assertIncludes(guidelines.join("\n"), "Offload thinking work", "the offload default survives compaction");
 	assertIncludes(guidelines.join("\n"), "audit tasks", "audit tasks survive compaction");
-	assertIncludes(guidelines.join("\n"), "never team_attach, team_peer", "the independent session is a fresh teammate only");
+	assertIncludes(guidelines.join("\n"), "spawned with comms_spawn", "the independent session is a fresh agent-comms spawn");
+	assertIncludes(guidelines.join("\n"), "no argv", "only a task launch is an independent auditor");
 	assertIncludes(guidelines.join("\n"), "every roadblock", "roadblocks survive compaction");
 	assertIncludes(guidelines.join("\n"), "Consultant fallback", "the fallback wording survives compaction");
 	assertIncludes(guidelines.join("\n"), "Audit by pi at the user", "the direct-request audit survives compaction");
@@ -178,9 +179,9 @@ test("pre_consult: a nested call is rejected", async () => {
 	assertEq(threw, true);
 });
 
-test("pre_consult: contract v19 states the hold, the verdict and the completion line", async () => {
+test("pre_consult: contract v20 states the hold, the verdict and the completion line", async () => {
 	const text = await contractText();
-	assertEq(ConsultContract.VERSION, 19);
+	assertEq(ConsultContract.VERSION, 20);
 	assertIncludes(text, "holds your own thinking effort");
 	assertIncludes(text, "It never leaves you at high, xhigh, or max");
 	assertIncludes(text, "you own the implementation and the\n  execution");
@@ -195,7 +196,7 @@ test("pre_consult: contract v19 states the hold, the verdict and the completion 
 	assertNotIncludes(text, "low; never high, xhigh, or max)");
 });
 
-test("pre_consult: contract v19 requires a convention audit in every closing consultation", async () => {
+test("pre_consult: contract v20 requires a convention audit in every closing consultation", async () => {
 	const definition = register(runner(async () => [], TARGETS));
 	const text = await contractText();
 	assertIncludes(text, "Every closing consultation audits convention compliance");
@@ -235,8 +236,11 @@ test("pre_consult: the contract routes audits up a ladder", async () => {
 	assertIncludes(text, "Independent audit unavailable - <one-line reason>.");
 	assertIncludes(text, "the fallback never covers an audit");
 	assertIncludes(text, "never covers an audit or a closing\n  consultation");
-	assertIncludes(text, "never team_attach, team_peer, another", "only a fresh pi-teams teammate is independent");
-	assertIncludes(text, "but only as this fallback, never", "the independent session is fallback-only");
+	assertIncludes(text, "The independent agent is a fresh agent spawned with comms_spawn");
+	assertIncludes(text, "carrying dir and task and no argv, for this audit alone", "only a task launch is independent");
+	assertIncludes(text, "acknowledge the received message ids with comms_ack");
+	assertIncludes(text, "Consultation cycle: complete - <agent id> independently verified.");
+	assertIncludes(text, "but only as this fallback,", "the independent session is fallback-only");
 	assertIncludes(text, "a closing consultation to a fresh independent", "the acknowledgement names the fallback");
 	assertIncludes(text, "Consultant fallback: no consultant available - <one-line reason>.");
 	assertIncludes(text, "A slow, detached, or interrupted consult has not\n  expired; wait for its delivered result.");

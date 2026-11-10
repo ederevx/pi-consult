@@ -15,6 +15,7 @@ import type {
 	ToolCallEventResult,
 } from "@earendil-works/pi-coding-agent";
 
+import type { AuditorSession } from "./auditor-session.ts";
 import type { ConsultContract } from "./consult-contract.ts";
 import type { BranchEntry, ReceiptLedger } from "./receipt-ledger.ts";
 import type { ToolClassifier } from "./tool-classifier.ts";
@@ -23,15 +24,18 @@ export class ImplementationGate {
 	private readonly ledger: ReceiptLedger;
 	private readonly classifier: ToolClassifier;
 	private readonly contract: ConsultContract;
+	private readonly auditor: AuditorSession | undefined;
 
 	constructor(
 		ledger: ReceiptLedger,
 		classifier: ToolClassifier,
 		contract: ConsultContract,
+		auditor?: AuditorSession,
 	) {
 		this.ledger = ledger;
 		this.classifier = classifier;
 		this.contract = contract;
+		this.auditor = auditor;
 	}
 
 	/** Register the gate with pi. */
@@ -55,7 +59,11 @@ export class ImplementationGate {
 		const annotations = pi
 			.getAllTools()
 			.find((tool) => tool.name === name)?.annotations;
-		if (!this.classifier.isGated(name, annotations)) return undefined;
+		if (!this.classifier.isGated(
+			name,
+			annotations,
+			this.auditor?.allowsReporting(name) ?? false,
+		)) return undefined;
 		return { block: true, reason: this.contract.gateDenial(name) };
 	}
 

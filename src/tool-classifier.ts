@@ -31,13 +31,16 @@ export class ToolClassifier {
 	}
 
 	/** True when the tool must not run before the acknowledgement. */
-	isGated(name: string, annotations?: ToolAnnotations): boolean {
+	isGated(name: string, annotations?: ToolAnnotations, reporting = false): boolean {
 		if (!name) return true;
 		if (ToolClassifier.CONSULT_TOOLS.includes(name)) return false;
 		// Built-in mutations are gated before the allow list is consulted, so
 		// `gate.allow` can exempt onboarding tools but never edit/write/bash.
 		if (ToolClassifier.MUTATION_TOOLS.includes(name)) return true;
 		if (this.blocked.has(name)) return true;
+		// A session that may only report is not implementation work: its one
+		// reporting tool runs, and an explicit block above still holds.
+		if (reporting) return false;
 		if (ToolClassifier.READ_TOOLS.includes(name)) return false;
 		if (this.allowed.has(name)) return false;
 		// A tool's self-declared read-only hint is a claim, not a verified fact:

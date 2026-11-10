@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.25.0
+
+### Changed
+
+- The independent-audit rung is agent-comms: a fresh agent spawned with
+  `comms_spawn` on one `task`, with no `argv`, whose first task line is the
+  audit header. Its report arrives as a `kind: "result"` envelope, settles the
+  cycle through the `pi-agent-comms-log` branch record, and is acknowledged
+  with `comms_ack`. Pi-teams is no longer referenced anywhere in the package.
+- The auditor session is a `PI_COMMS_PARENT_AGENT_ID` child whose first prompt
+  line is the audit header; a wrapped prompt is not one. It stays blocked from
+  `edit`, `write`, and `powershell` for its whole life.
+- Launching an audit no longer touches the caller's thinking level: the child
+  reads its own configuration, so a raise reached no one. The hold, release,
+  model-selection, and settlement rules are unchanged.
+- Contract v20: the ladder names agent-comms, the completion line names an
+  agent id, and the gate names its one exemption.
+
+### Fixed
+
+- A dedicated independent auditor can send its report with `comms_send` before
+  acknowledging `pre_consult`; without that, the rung was unreachable on a
+  default configuration. The exemption is the auditor session's alone, is
+  limited to `comms_send`, and an explicit `gate.block` still wins.
+
 ## 0.24.9
 
 ### Fixed

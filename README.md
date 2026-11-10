@@ -32,8 +32,7 @@ which would reinterpret arguments. On Windows, use the executable (or
 ## Configuration
 
 pi-consult stores its settings in the `piConsult` object of pi's own
-`~/.pi/agent/settings.json`, the same convention as pi-teams (`piTeams`) and
-pi-daemon (`piDaemon`). The agent directory honors `PI_CODING_AGENT_DIR`.
+`~/.pi/agent/settings.json`, the same convention as pi-daemon (`piDaemon`). The agent directory honors `PI_CODING_AGENT_DIR`.
 Missing or malformed values fall back to the defaults.
 
 ```json
@@ -46,7 +45,7 @@ Missing or malformed values fall back to the defaults.
     "retentionDays": 30,
     "maxConcurrent": 2,
     "output": { "totalBytes": 24000, "answerBytes": 12000, "maxLines": 800 },
-    "gate": { "allow": ["pre_memory", "pre_daemon", "pre_cache", "pre_teams", "transcript_read"], "block": [], "trustReadOnlyHint": false },
+    "gate": { "allow": ["pre_memory", "pre_daemon", "pre_cache", "transcript_read"], "block": [], "trustReadOnlyHint": false },
     "claude": { "enabled": true, "command": "claude", "commandArgs": [], "isolation": "clean", "timeoutMs": 1200000, "silenceNoticeMs": 300000 },
     "codex": { "enabled": true, "command": "codex", "commandArgs": [], "isolation": "clean", "timeoutMs": 1200000, "silenceNoticeMs": 300000 }
   }
@@ -78,6 +77,9 @@ when the retired file exists and `piConsult` is absent, and separately when
 - `gate.trustReadOnlyHint` (default off) trusts a tool's self-declared
   read-only annotation. Off means any custom tool outside the built-in read
   tools, the consult tools, and `gate.allow` needs the acknowledgement first.
+  A dedicated independent auditor is the one exception to that: it can send
+  its report with `comms_send` before acknowledging `pre_consult`, unless the
+  operator explicitly blocks that tool, and nothing else is exempted.
 - Legacy keys (`gate.allowBashBeforeConsult`, `gate.consultEffort`) are ignored.
 
 The `files` parameter names paths the consultant reads itself. Absolute paths
@@ -130,7 +132,8 @@ The catalogue instructs the agent, and the tool's prompt guidelines repeat it:
   defects) or `Consultation tier: audit - <reason>.` (anything else, or when in
   doubt: a full review). Consultant-derived work is verified through
   `continue`; work pi did alone gets a new consult. Only when every enabled
-  consultant has expired does a fresh pi-teams auditor serve it instead. A task
+  consultant has expired does a fresh independent agent, spawned through
+  agent-comms, serve it instead. A task
   with no diff is briefed with its commands and resulting state, or the answer
   and its evidence. Any edit after an approved verdict reopens it. It is a
   commitment: pi-consult enforces only the completion line.
@@ -157,16 +160,21 @@ The catalogue instructs the agent, and the tool's prompt guidelines repeat it:
   1. **A consultant**, ending `Convention audit: compliant|none found -
      <detail>.` and then `Consultant verdict: approved - <reason>.` or
      `Consultant verdict: changes needed - <reason>.`
-  2. **A fresh pi-teams teammate**, only when every enabled consultant has
-     expired, never `team_attach`, `team_peer`, or another pi process; it also
+  2. **A fresh agent spawned with `comms_spawn`**, carrying `dir` and `task`
+     and no `argv`, only when every enabled consultant has expired, never
+     another pi process or a session that already holds the task; it also
      serves either tier of the closing consultation, only as this fallback.
      Its task starts `pi-consult independent audit - <scope>.` (the scope
-     names the tier), ends with a convention audit line, then
-     `Independent audit verdict: approved|changes needed - <reason>.`
+     names the tier), and it sends its report with `comms_send`, `kind:
+     "result"`, ending with a convention audit line, then
+     `Independent audit verdict: approved|changes needed - <reason>.` The
+     parent collects it with `comms_wait` or `comms_replay`, acknowledges the
+     received ids with `comms_ack`, and settles it on the address the envelope
+     carries.
   3. **pi itself**, only on the user's explicit request
      (`Audit by pi at the user's request - <request>.`).
 
-  Without pi-teams, or after a failed spawn or verdict-less report, pi stops
+  Without agent-comms, or after a failed spawn or verdict-less report, pi stops
   with `Independent audit unavailable - <reason>.` and leaves the work
   unaudited. `Consultant fallback: no consultant available - <reason>.` covers
   roadblocks only, never an audit or a closing consultation.
@@ -195,8 +203,8 @@ their own plain lines.
   consult's answer ends with a passing convention audit line and the approved
   verdict, it started after pi's last `edit`, `write`, `bash`, or
   `powershell`, and no consult is running or undelivered;
-- `Consultation cycle: complete - <teammate id> independently verified.` -
-  once every enabled consultant has expired, that teammate was spawned as the
+- `Consultation cycle: complete - <agent id> independently verified.` -
+  once every enabled consultant has expired, that agent was spawned as the
   independent auditor after the expiry, its logged report ends with a passing
   convention audit and the approved verdict, and pi has not edited, written,
   or run a command since;

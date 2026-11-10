@@ -1,3 +1,4 @@
+import { AuditorSession } from "../src/auditor-session.ts";
 import { ConsultContract } from "../src/consult-contract.ts";
 import { ImplementationGate } from "../src/implementation-gate.ts";
 import { ReceiptLedger } from "../src/receipt-ledger.ts";
@@ -121,6 +122,96 @@ test("gate: the compaction reminder keeps the roadblock and cycle obligations", 
 	assertIncludes(reminder, "every roadblock goes back to it");
 	assertIncludes(reminder, "never to you");
 	assertIncludes(reminder, "when every enabled consultant has ");
-	assertIncludes(reminder, "a fresh pi-teams independent auditor");
+	assertIncludes(reminder, "a fresh agent-comms independent auditor");
 	assertIncludes(reminder, "only after an approved");
+});
+/** The auditor guard and the gate as index.ts wires them: one auditor instance. */
+function auditSession(options: {
+	parent?: string;
+	prompt?: string;
+	branch?: BranchEntry[];
+	block?: string[];
+}): { pi: FakePi; ctx: FakeContext; decide: (toolName: string) => boolean } {
+	const original = process.env.PI_COMMS_PARENT_AGENT_ID;
+	if (options.parent === undefined) delete process.env.PI_COMMS_PARENT_AGENT_ID;
+	else process.env.PI_COMMS_PARENT_AGENT_ID = options.parent;
+	try {
+		const pi = new FakePi();
+		pi.registerTool({ name: "read", annotations: { readOnlyHint: true } });
+		pi.registerTool({ name: "edit" });
+		pi.registerTool({ name: "bash" });
+		pi.registerTool({ name: "comms_send", annotations: { readOnlyHint: false } });
+		pi.registerTool({ name: "comms_spawn", annotations: { readOnlyHint: false } });
+		const auditor = new AuditorSession();
+		auditor.register(pi as never);
+		const gate = new ImplementationGate(
+			new ReceiptLedger(ConsultContract.VERSION),
+			new ToolClassifier({ allow: [], block: options.block ?? [], trustReadOnlyHint: false }),
+			new ConsultContract(),
+			auditor,
+		);
+		const ctx = new FakeContext(options.branch ?? []);
+		if (options.prompt !== undefined) {
+			for (const handler of pi.handlers.get("before_agent_start") ?? []) {
+				handler({ prompt: options.prompt }, ctx);
+			}
+		}
+		const decide = (toolName: string): boolean => {
+			const event = { toolName, toolCallId: "t", input: {} };
+			const guard = (pi.handlers.get("tool_call") ?? []).some((handler) =>
+				(handler(event, ctx) as { block?: boolean } | undefined)?.block === true,
+			);
+			const gated = (gate.decide(pi as never, event as never, ctx as never) as
+				| { block?: boolean }
+				| undefined)?.block === true;
+			return guard || gated;
+		};
+		return { pi, ctx, decide };
+	} finally {
+		if (original === undefined) delete process.env.PI_COMMS_PARENT_AGENT_ID;
+		else process.env.PI_COMMS_PARENT_AGENT_ID = original;
+	}
+}
+
+const AUDIT_TASK = "pi-consult independent audit - check the diff.";
+
+test("gate: an auditor sends its report before acknowledging pre_consult", () => {
+	const session = auditSession({ parent: "parent-1", prompt: AUDIT_TASK });
+	assertEq(session.decide("comms_send"), false, "the report leaves the session");
+	assertEq(session.decide("read"), false, "reading the evidence is not work");
+});
+
+test("gate: the reporting exemption needs the auditor session, not just the tools", () => {
+	assertEq(auditSession({ prompt: AUDIT_TASK }).decide("comms_send"), true, "no parent env");
+	assertEq(auditSession({ parent: "parent-1", prompt: "Do the work." }).decide("comms_send"), true, "no audit header");
+	assertEq(auditSession({ parent: "parent-1" }).decide("comms_send"), true, "an undecided session is gated");
+});
+
+test("gate: the exemption admits nothing but comms_send", () => {
+	const session = auditSession({ parent: "parent-1", prompt: AUDIT_TASK });
+	assertEq(session.decide("comms_spawn"), true, "spawning is not reporting");
+	assertEq(session.decide("bash"), true, "a shell is not reporting");
+	assertEq(session.decide("edit"), true, "editing is not reporting");
+	assertEq(session.decide("write"), true, "writing is not reporting");
+	assertEq(session.decide("powershell"), true, "a shell is not reporting");
+});
+
+test("gate: an explicit block wins over the auditor's reporting exemption", () => {
+	const session = auditSession({ parent: "parent-1", prompt: AUDIT_TASK, block: ["comms_send"] });
+	assertEq(session.decide("comms_send"), true, "the operator refused that tool");
+});
+
+test("gate: the auditor stays read-only after the acknowledgement opens the gate", () => {
+	const branch = [userEntry("u1"), toolEntry("t1", "pre_consult", ack())];
+	const session = auditSession({ parent: "parent-1", prompt: AUDIT_TASK, branch });
+	assertEq(session.decide("edit"), true, "the guard outlives the gate");
+	assertEq(session.decide("write"), true);
+	assertEq(session.decide("powershell"), true);
+	assertEq(session.decide("bash"), false, "bash stays available to read evidence");
+});
+
+test("gate: any other session acknowledges as usual", () => {
+	const branch = [userEntry("u1"), toolEntry("t1", "pre_consult", ack())];
+	const session = auditSession({ parent: "parent-1", prompt: "Do the work.", branch });
+	assertEq(session.decide("edit"), false, "an ordinary child is not read-only");
 });

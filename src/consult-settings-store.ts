@@ -3,7 +3,7 @@
  *
  * One responsibility: read and atomically write pi-consult's settings
  * namespace inside pi's agent-directory `settings.json`, the house
- * convention shared with pi-teams (`piTeams`) and pi-daemon (`piDaemon`).
+ * convention shared with pi-daemon (`piDaemon`).
  * Loading, validating, and defaulting belong to `ConsultConfig`; command
  * parsing and display belong to `ConsultSettings`. The agent directory is
  * resolved on every call, so a redirected `PI_CODING_AGENT_DIR` — a test or

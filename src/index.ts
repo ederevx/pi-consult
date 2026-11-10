@@ -118,7 +118,8 @@ export class ConsultExtension {
 		const supervisor = new ConsultSupervisor(runner, records, delivery);
 
 		effort.register(pi);
-		new AuditorSession().register(pi);
+		const auditor = new AuditorSession();
+		auditor.register(pi);
 
 		const foreground = new ConsultForeground();
 		new PreConsultTool(contract, runner, effort).register(pi);
@@ -139,7 +140,7 @@ export class ConsultExtension {
 			bindEnvironment,
 		}).register(pi);
 		new ConsultTerminateTool(supervisor, effort).register(pi);
-		new ImplementationGate(ledger, toolClassifier, contract).register(pi);
+		new ImplementationGate(ledger, toolClassifier, contract, auditor).register(pi);
 		new AgentAvailability(failureClassifier, () => index.latest()?.consultId ?? null).register(pi);
 		new SessionLifecycle(
 			ledger,

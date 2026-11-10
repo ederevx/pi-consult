@@ -144,7 +144,8 @@ export class ConsultTool {
 				"finished work, audits it against the conventions you brief, and ends " +
 				"with a convention audit line and a verdict line: send the evidence back " +
 				"with continue. Never audit consultant work yourself: when every " +
-				"consultant has expired, a fresh pi-teams teammate audits it, and you " +
+				"consultant has expired, a fresh agent spawned through agent-comms " +
+				"audits it, and you " +
 				"audit only on the user's explicit request, saying so. " +
 				"consultants advise only; pi executes every change. Use `files` to " +
 				"point a consultant at paths it should read itself instead of pasting " +

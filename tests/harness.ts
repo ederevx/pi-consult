@@ -433,9 +433,9 @@ export class FakeEffortHost {
 		this.emit("session_tree", {});
 	}
 
-	/** Append a pi-teams report entry the way pi-teams logs one. */
-	pushTeamsLog(data: Record<string, unknown>): void {
-		this.branch.push({ type: "custom", id: `e${++this.seq}`, customType: "pi-teams-log", data });
+	/** Append an agent-comms envelope the way the comms log records one. */
+	pushCommsLog(data: Record<string, unknown>): void {
+		this.branch.push({ type: "custom", id: `e${++this.seq}`, customType: "pi-agent-comms-log", data });
 	}
 
 	toolCall(name: string, input?: Record<string, unknown>, toolCallId = ""): void {

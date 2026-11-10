@@ -3,8 +3,8 @@
  *
  * Drives the real AgentEffortPolicy: a consultant hands control back only
  * with an approved verdict, each enabled consultant can expire, and only
- * then may a pi-teams auditor spawned with the audit header settle the
- * cycle through the report pi-teams logs.
+ * then may an independent agent spawned through agent-comms with the audit
+ * header settle the cycle through the report the comms log records.
  */
 
 import { ConsultConfig } from "../src/consult-config.ts";
@@ -78,25 +78,33 @@ function expiredAudit(chosen: ConsultConfig = config()): Setup {
 	return state;
 }
 
-/** Spawn a teammate through the faked pi-teams tool result. */
+/** Register the three agent-comms tools the policy checks for. */
+function commsTools(host: FakeEffortHost): void {
+	for (const name of ["comms_spawn", "comms_send", "comms_wait"]) host.addTool(name);
+}
+
+/** The spawn answer the comms service returns for a created agent. */
+function spawned(id: string): Record<string, unknown> {
+	return { structuredContent: { status: "spawned", agent: { agentId: id } } };
+}
+
+/** Spawn an auditor through the faked comms_spawn answer. */
 function spawnAuditor(
 	state: Setup,
 	id: string,
 	task = "pi-consult independent audit - check the diff.",
 ): void {
-	state.host.addTool("team_spawn");
+	commsTools(state.host);
 	const call = `t-${id}`;
-	state.host.toolCall("team_spawn", { task }, call);
-	state.host.toolExecutionEnd(call, {
-		result: { details: { id }, content: [{ type: "text", text: `spawned teammate ${id}` }] },
-	});
+	state.host.toolCall("comms_spawn", { dir: ".", task }, call);
+	state.host.toolExecutionEnd(call, { result: spawned(id) });
 }
 
-/** Log a pi-teams report the way the broker stamps one. */
+/** Log an agent-comms report the way the comms log stamps one. */
 function logReport(state: Setup, from: string, verdict: string): void {
-	state.host.pushTeamsLog({
+	state.host.pushCommsLog({
 		direction: "received",
-		from,
+		from: { nodeId: "", agentId: from },
 		kind: "result",
 		payload: `Report body.\nConvention audit: compliant - AGENTS.md.\nIndependent audit verdict: ${verdict} - reason.`,
 	});
@@ -217,7 +225,7 @@ test("audit: two timed-out retries with a plan in force still expire the consult
 	assertEq(state.host.getThinkingLevel(), "high");
 });
 
-test("audit: the audit spawn raises to the level captured after a reinstated hold", () => {
+test("audit: an audit spawn never raises the level above the plan's hold", () => {
 	const state = expiredAudit();
 	state.policy.engage(state.ctx as never, "c-e040");
 	state.policy.settle(
@@ -229,11 +237,13 @@ test("audit: the audit spawn raises to the level captured after a reinstated hol
 	state.policy.engage(state.ctx as never, "c-e041");
 	state.policy.settle("c-e041", consultDetails("c-e041", [consultRun("claude", "timeout")], false));
 	assertEq(state.host.getThinkingLevel(), "low", "the timeout reinstated the hold");
-	state.host.addTool("team_spawn");
-	state.host.toolCall("team_spawn", { task: "pi-consult independent audit - check." }, "t1");
-	assertEq(state.host.getThinkingLevel(), "high", "the spawn raises to the captured level");
-	state.host.toolExecutionEnd("t1", { result: { details: { id: "tm-1" } } });
-	assertEq(state.host.getThinkingLevel(), "low", "the plan is still in force after the spawn");
+	state.host.setCalls.length = 0;
+	commsTools(state.host);
+	state.host.toolCall("comms_spawn", { task: "pi-consult independent audit - check." }, "t1");
+	assertEq(state.host.getThinkingLevel(), "low", "the launch leaves the hold in place");
+	state.host.toolExecutionEnd("t1", { result: spawned("tm-1") });
+	assertEq(state.host.getThinkingLevel(), "low", "and so does its end");
+	assertEq(state.host.setCalls.length, 0, "the launch asks for no level change");
 });
 
 test("audit: a settle with nothing owed releases the level and keeps the ladder", () => {
@@ -283,56 +293,68 @@ test("audit: a spawn while codex can still serve warns and never enters the ledg
 	assertIncludes(notices(state.ctx), "not an independent auditor");
 });
 
-test("audit: the audit spawn raises for the call, ignores the selection, then lowers", () => {
+test("audit: an audit spawn leaves the released level alone before and after", () => {
 	const state = expiredAudit();
-	state.host.addTool("team_spawn");
+	commsTools(state.host);
 	const task = "pi-consult independent audit - check.";
-	state.host.toolCall("team_spawn", { task }, "t1");
-	assertEq(state.host.getThinkingLevel(), "high", "the spawn raises to the captured level");
+	state.host.setCalls.length = 0;
+	state.host.toolCall("comms_spawn", { task }, "t1");
+	assertEq(state.host.getThinkingLevel(), "high", "the launch changes nothing");
 	state.host.emit("thinking_level_select", { level: "high" });
-	assertEq(state.host.getThinkingLevel(), "high", "the spawn's own selection is not lowered");
-	state.host.toolExecutionEnd("t1", { result: { details: { id: "tm-1" } } });
-	assertEq(state.host.getThinkingLevel(), "high", "the result leaves normal effort");
+	assertEq(state.host.getThinkingLevel(), "high");
+	state.host.toolExecutionEnd("t1", { result: spawned("tm-1") });
+	assertEq(state.host.getThinkingLevel(), "high", "and neither does its end");
+	assertEq(state.host.setCalls.length, 0, "no level was ever set for the launch");
 	assert((lastEntry(state.host).owed as string[]).includes("tm-1"));
 	assert((lastEntry(state.host).fresh as string[]).includes("tm-1"));
 });
 
-test("audit: only a task starting with the header is a spawn", () => {
+test("audit: only a task starting with the header is recorded as a spawn", () => {
 	const plain = expiredAudit();
-	plain.host.addTool("team_spawn");
-	plain.host.toolCall("team_spawn", { task: "do the work" }, "t-plain");
-	assertEq(plain.host.getThinkingLevel(), "high", "no header, no raise");
-	plain.host.toolExecutionEnd("t-plain", { result: { details: { id: "tm-plain" } } });
+	commsTools(plain.host);
+	plain.host.toolCall("comms_spawn", { task: "do the work" }, "t-plain");
+	plain.host.toolExecutionEnd("t-plain", { result: spawned("tm-plain") });
 	assert(!((lastEntry(plain.host).owed as string[] | undefined) ?? []).includes("tm-plain"));
+	plain.host.emit("turn_end", { message: assistantMessage("working.") });
+	assertEq(lastEntry(plain.host).auditFailed, false, "an ordinary child is not a failed audit");
 
 	const blank = expiredAudit();
-	blank.host.addTool("team_spawn");
+	commsTools(blank.host);
 	const task = "\n\npi-consult independent audit - scope.";
-	blank.host.toolCall("team_spawn", { task }, "t-blank");
-	assertEq(blank.host.getThinkingLevel(), "high", "leading blank lines are skipped");
-	blank.host.toolExecutionEnd("t-blank", { result: { details: { id: "tm-blank" } } });
+	blank.host.toolCall("comms_spawn", { task }, "t-blank");
+	blank.host.toolExecutionEnd("t-blank", { result: spawned("tm-blank") });
 	assert((lastEntry(blank.host).owed as string[]).includes("tm-blank"));
+	assertEq(blank.host.getThinkingLevel(), "high", "no launch touches the level");
 });
 
-test("audit: the teammate id comes from details.id or the spawn text", () => {
+test("audit: the auditor id comes only from a spawned comms answer", () => {
+	const byAnswer = expiredAudit();
+	spawnAuditor(byAnswer, "tm-answer");
+	assert((lastEntry(byAnswer.host).owed as string[]).includes("tm-answer"));
+
 	const byDetails = expiredAudit();
-	spawnAuditor(byDetails, "tm-details");
+	commsTools(byDetails.host);
+	const task = "pi-consult independent audit - scope.";
+	byDetails.host.toolCall("comms_spawn", { dir: ".", task }, "t-details");
+	byDetails.host.toolExecutionEnd("t-details", {
+		result: { details: { answer: { status: "spawned", agent: { agentId: "tm-details" } } } },
+	});
 	assert((lastEntry(byDetails.host).owed as string[]).includes("tm-details"));
 
-	const byText = expiredAudit();
-	byText.host.addTool("team_spawn");
-	const task = "pi-consult independent audit - scope.";
-	byText.host.toolCall("team_spawn", { task }, "t-text");
-	byText.host.toolExecutionEnd("t-text", {
-		result: { content: [{ type: "text", text: "spawned teammate tm-text" }] },
+	const notSpawned = expiredAudit();
+	commsTools(notSpawned.host);
+	notSpawned.host.toolCall("comms_spawn", { dir: ".", task }, "t-failed");
+	notSpawned.host.toolExecutionEnd("t-failed", {
+		result: { structuredContent: { status: "declined", agent: { agentId: "tm-failed" } } },
 	});
-	assert((lastEntry(byText.host).owed as string[]).includes("tm-text"));
+	assertEq(lastEntry(notSpawned.host).auditFailed, true);
+	assert(!((lastEntry(notSpawned.host).owed as string[] | undefined) ?? []).includes("tm-failed"));
 
 	const noId = expiredAudit();
-	noId.host.addTool("team_spawn");
-	noId.host.toolCall("team_spawn", { task }, "t-noid");
+	commsTools(noId.host);
+	noId.host.toolCall("comms_spawn", { dir: ".", task }, "t-noid");
 	noId.host.toolExecutionEnd("t-noid", {
-		result: { content: [{ type: "text", text: "nothing useful" }] },
+		result: { content: [{ type: "text", text: "spawned tm-text" }] },
 	});
 	assertEq(lastEntry(noId.host).auditFailed, true);
 });
@@ -340,21 +362,21 @@ test("audit: the teammate id comes from details.id or the spawn text", () => {
 test("audit: a logged approved verdict restores; other log shapes are ignored", async () => {
 	const state = expiredAudit();
 	spawnAuditor(state, "tm-log");
-	state.host.pushTeamsLog({
+	state.host.pushCommsLog({
 		direction: "received",
-		from: "someone-else",
+		from: { nodeId: "", agentId: "someone-else" },
 		kind: "result",
 		payload: "Independent audit verdict: approved - forged.",
 	});
-	state.host.pushTeamsLog({
+	state.host.pushCommsLog({
 		direction: "received",
-		from: "tm-log",
+		from: { nodeId: "", agentId: "tm-log" },
 		kind: "message",
 		payload: "Independent audit verdict: approved - not a report.",
 	});
-	state.host.pushTeamsLog({
+	state.host.pushCommsLog({
 		direction: "sent",
-		from: "tm-log",
+		from: { nodeId: "", agentId: "tm-log" },
 		kind: "result",
 		payload: "Independent audit verdict: approved - not received.",
 	});
@@ -397,29 +419,29 @@ test("audit: an auditor spawned before a later edit is not fresh", async () => {
 test("audit: a verdict-less report sets auditFailed and silences the unavailable warning", async () => {
 	const state = expiredAudit();
 	spawnAuditor(state, "tm-bad");
-	state.host.pushTeamsLog({
+	state.host.pushCommsLog({
 		direction: "received",
-		from: "tm-bad",
+		from: { nodeId: "", agentId: "tm-bad" },
 		kind: "result",
 		payload: "Report body with no verdict.",
 	});
 	await state.host.run("Independent audit unavailable - no independent agent.");
 	assertEq(lastEntry(state.host).auditFailed, true);
-	assertNotIncludes(notices(state.ctx), "pi-teams is installed");
+	assertNotIncludes(notices(state.ctx), "agent-comms tools are registered");
 });
 
-test("audit: the unavailable line warns only while pi-teams is present and nothing failed", async () => {
+test("audit: the unavailable line warns only while agent-comms is present and nothing failed", async () => {
 	const present = setup();
 	present.policy.engage(present.ctx as never, "c-000106");
-	present.host.addTool("team_spawn");
+	commsTools(present.host);
 	await present.host.run("Independent audit unavailable - no independent agent.");
-	assertIncludes(notices(present.ctx), "spawn one with team_spawn");
+	assertIncludes(notices(present.ctx), "spawn one with comms_spawn");
 	assertEq(present.host.getThinkingLevel(), "high", "the claim changes no state");
 
 	const absent = setup();
 	absent.policy.engage(absent.ctx as never, "c-000107");
 	await absent.host.run("Independent audit unavailable - no independent agent.");
-	assertNotIncludes(notices(absent.ctx), "pi-teams is installed");
+	assertNotIncludes(notices(absent.ctx), "agent-comms tools are registered");
 });
 
 test("audit: reload restores an owed auditor and a later report settles it", async () => {
@@ -444,8 +466,8 @@ test("audit: describe() reports each rung of the ladder", () => {
 	assertIncludes(consultant.policy.describe(), "audit ladder: consultant (claude, codex)");
 
 	const independent = expiredAudit();
-	independent.host.addTool("team_spawn");
-	assertIncludes(independent.policy.describe(), "independent agent via pi-teams");
+	commsTools(independent.host);
+	assertIncludes(independent.policy.describe(), "independent agent via agent-comms");
 
 	const stopped = expiredAudit();
 	assertIncludes(stopped.policy.describe(), "stopped:");
@@ -460,44 +482,43 @@ test("audit: the roadblock fallback needs every enabled consultant expired", asy
 	assertIncludes(notices(serving.ctx), "has not expired in this cycle");
 });
 
-test("audit: a completed spawn registers, then leaves normal effort quietly", () => {
+test("audit: a completed spawn registers, then leaves the level alone", () => {
 	const state = expiredAudit();
-	state.host.addTool("team_spawn");
+	commsTools(state.host);
 	const task = "pi-consult independent audit - check.";
-	state.host.toolCall("team_spawn", { task }, "t-quiet");
-	assertEq(state.host.getThinkingLevel(), "high", "the spawn raises");
+	state.host.toolCall("comms_spawn", { task }, "t-quiet");
+	assertEq(state.host.getThinkingLevel(), "high", "the launch changes no level");
 	const before = state.ctx.notifyCalls.length;
-	state.host.toolExecutionEnd("t-quiet", { result: { details: { id: "tm-quiet" } } });
-	assertEq(state.host.getThinkingLevel(), "high", "the end leaves normal effort");
-	assertEq(state.ctx.notifyCalls.length, before, "the end's lowering is quiet");
+	state.host.toolExecutionEnd("t-quiet", { result: spawned("tm-quiet") });
+	assertEq(state.host.getThinkingLevel(), "high");
+	assertEq(state.ctx.notifyCalls.length, before, "the end says nothing");
 	assert((lastEntry(state.host).owed as string[]).includes("tm-quiet"));
 });
 
-test("audit: a failed or aborted spawn records a failed audit and lowers", () => {
+test("audit: a failed or aborted spawn records a failed audit", () => {
 	for (const label of ["blocked", "aborted"]) {
 		const state = expiredAudit();
-		state.host.addTool("team_spawn");
+		commsTools(state.host);
 		const task = "pi-consult independent audit - check.";
-		state.host.toolCall("team_spawn", { task }, "t-fail");
-		assertEq(state.host.getThinkingLevel(), "high", `${label}: the spawn raises`);
+		state.host.toolCall("comms_spawn", { task }, "t-fail");
 		state.host.toolExecutionEnd("t-fail", { isError: true });
-		assertEq(state.host.getThinkingLevel(), "high", `${label}: the failed end leaves normal effort`);
+		assertEq(state.host.getThinkingLevel(), "high", `${label}: no level is touched`);
 		assertEq(lastEntry(state.host).auditFailed, true, `${label}: the audit is failed`);
 		assertIncludes(notices(state.ctx), "did not complete");
 	}
 });
 
-test("audit: two parallel spawns lower only when the last one ends", () => {
+test("audit: two parallel spawns both register and settle independently", () => {
 	const state = expiredAudit();
-	state.host.addTool("team_spawn");
+	commsTools(state.host);
 	const task = "pi-consult independent audit - check.";
-	state.host.toolCall("team_spawn", { task }, "t-p1");
-	state.host.toolCall("team_spawn", { task }, "t-p2");
+	state.host.toolCall("comms_spawn", { task }, "t-p1");
+	state.host.toolCall("comms_spawn", { task }, "t-p2");
 	assertEq(state.host.getThinkingLevel(), "high");
-	state.host.toolExecutionEnd("t-p1", { result: { details: { id: "tm-p1" } } });
-	assertEq(state.host.getThinkingLevel(), "high", "one spawn is still pending");
-	state.host.toolExecutionEnd("t-p2", { result: { details: { id: "tm-p2" } } });
-	assertEq(state.host.getThinkingLevel(), "high", "the second end leaves normal effort");
+	state.host.toolExecutionEnd("t-p1", { result: spawned("tm-p1") });
+	assertEq(state.host.getThinkingLevel(), "high", "a pending spawn changes no level");
+	state.host.toolExecutionEnd("t-p2", { result: spawned("tm-p2") });
+	assertEq(state.host.getThinkingLevel(), "high");
 	const owed = lastEntry(state.host).owed as string[];
 	assert(owed.includes("tm-p1") && owed.includes("tm-p2"), "both auditors are owed");
 });
@@ -505,24 +526,23 @@ test("audit: two parallel spawns lower only when the last one ends", () => {
 test("audit: a lost spawn end is rolled back at every run boundary", () => {
 	for (const boundary of ["turn_end", "agent_start", "agent_settled"]) {
 		const state = expiredAudit();
-		state.host.addTool("team_spawn");
+		commsTools(state.host);
 		const task = "pi-consult independent audit - check.";
-		state.host.toolCall("team_spawn", { task }, "t-lost");
-		assertEq(state.host.getThinkingLevel(), "high", `${boundary}: the spawn raises`);
+		state.host.toolCall("comms_spawn", { task }, "t-lost");
 		if (boundary === "turn_end") state.host.emit("turn_end", { message: assistantMessage("working.") });
 		else state.host.emit(boundary, {});
-		assertEq(state.host.getThinkingLevel(), "high", `${boundary}: the boundary restores normal effort`);
+		assertEq(state.host.getThinkingLevel(), "high", `${boundary}: the level is untouched`);
 		assertEq(lastEntry(state.host).auditFailed, true, `${boundary}: the audit is failed`);
 		assertIncludes(notices(state.ctx), "never reported its end");
 	}
 });
 
-test("audit: a reload mid-spawn drops the pending set and lowers", () => {
+test("audit: a reload mid-spawn drops the pending set without touching the level", () => {
 	const shared = config();
 	const first = expiredAudit(shared);
-	first.host.addTool("team_spawn");
+	commsTools(first.host);
 	const task = "pi-consult independent audit - check.";
-	first.host.toolCall("team_spawn", { task }, "t-reload");
+	first.host.toolCall("comms_spawn", { task }, "t-reload");
 	assertEq(first.host.getThinkingLevel(), "high");
 
 	const host2 = new FakeEffortHost(first.host.getThinkingLevel(), THINKING_LEVELS, first.host.branch);
@@ -531,24 +551,24 @@ test("audit: a reload mid-spawn drops the pending set and lowers", () => {
 	const policy2 = new AgentEffortPolicy(shared);
 	policy2.register(host2 as never);
 	host2.emit("session_start", {});
-	assertEq(host2.getThinkingLevel(), "high", "load drops the pending spawn and leaves normal effort");
+	assertEq(host2.getThinkingLevel(), "high", "load drops the pending spawn");
 	assertEq(lastEntry(host2).holding, true);
 });
 
 test("audit: a non-audit spawn and a spawn with the hold off are ignored", () => {
 	const plain = expiredAudit();
-	plain.host.addTool("team_spawn");
-	plain.host.toolCall("team_spawn", { task: "do the work" }, "t-plain");
+	commsTools(plain.host);
+	plain.host.toolCall("comms_spawn", { task: "do the work" }, "t-plain");
 	assertEq(plain.host.getThinkingLevel(), "high");
-	plain.host.toolExecutionEnd("t-plain", { result: { details: { id: "tm-plain" } } });
+	plain.host.toolExecutionEnd("t-plain", { result: spawned("tm-plain") });
 	assert(!(((lastEntry(plain.host).owed as string[] | undefined) ?? []).includes("tm-plain")));
 
 	const idle = setup();
-	idle.host.addTool("team_spawn");
+	commsTools(idle.host);
 	const task = "pi-consult independent audit - idle.";
-	idle.host.toolCall("team_spawn", { task }, "t-idle");
-	assertEq(idle.host.getThinkingLevel(), "high", "no hold, no raise");
-	idle.host.toolExecutionEnd("t-idle", { result: { details: { id: "tm-idle" } } });
+	idle.host.toolCall("comms_spawn", { task }, "t-idle");
+	assertEq(idle.host.getThinkingLevel(), "high", "no hold, no record");
+	idle.host.toolExecutionEnd("t-idle", { result: spawned("tm-idle") });
 	assertEq(lastEntry(idle.host).holding, undefined, "an idle end changes nothing");
 	idle.host.emit("turn_end", { message: assistantMessage("working.") });
 	assertEq(idle.host.getThinkingLevel(), "high");
@@ -610,9 +630,9 @@ test("audit: a verdict followed by a closing fence is not approved", async () =>
 test("audit: an auditor payload ending in a quoted line is a failed audit", async () => {
 	const state = expiredAudit();
 	spawnAuditor(state, "tm-quote");
-	state.host.pushTeamsLog({
+	state.host.pushCommsLog({
 		direction: "received",
-		from: "tm-quote",
+		from: { nodeId: "", agentId: "tm-quote" },
 		kind: "result",
 		payload: `Independent audit verdict: approved - reason.\n> Still unfinished.`,
 	});
@@ -631,7 +651,7 @@ test("audit: a refused marker names the owed auditor to wait for", async () => {
 	assertEq(sent.length, 1);
 	assertEq(sent[0].options?.deliverAs, "followUp");
 	assertEq(sent[0].options?.triggerTurn, true);
-	assertIncludes(sent[0].message.content ?? "", "team_wait");
+	assertIncludes(sent[0].message.content ?? "", "comms_wait");
 });
 
 test("audit: a changes-needed auditor gets a note for a fresh audit, never a release", async () => {
@@ -687,9 +707,9 @@ test("audit: none found before an approval restores", async () => {
 test("audit: an independent approval without a convention audit does not verify", async () => {
 	const state = expiredAudit();
 	spawnAuditor(state, "tm-bare");
-	state.host.pushTeamsLog({
+	state.host.pushCommsLog({
 		direction: "received",
-		from: "tm-bare",
+		from: { nodeId: "", agentId: "tm-bare" },
 		kind: "result",
 		payload: "Independent audit verdict: approved - reason.",
 	});
