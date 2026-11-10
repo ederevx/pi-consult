@@ -78,14 +78,20 @@ function expiredAudit(chosen: ConsultConfig = config()): Setup {
 	return state;
 }
 
-/** Register the three agent-comms tools the policy checks for. */
+/** Register the agent-comms tools the policy checks for, and the stop. */
 function commsTools(host: FakeEffortHost): void {
-	for (const name of ["comms_spawn", "comms_send", "comms_wait"]) host.addTool(name);
+	for (const name of ["comms_spawn", "comms_send", "comms_wait", "session_stop"]) host.addTool(name);
 }
 
 /** The spawn answer the comms service returns for a created agent. */
 function spawned(id: string): Record<string, unknown> {
-	return { structuredContent: { status: "spawned", agent: { agentId: id } } };
+	return {
+		structuredContent: {
+			status: "spawned",
+			agent: { agentId: id },
+			session: { name: id },
+		},
+	};
 }
 
 /** Spawn an auditor through the faked comms_spawn answer. */
@@ -108,6 +114,13 @@ function logReport(state: Setup, from: string, verdict: string): void {
 		kind: "result",
 		payload: `Report body.\nConvention audit: compliant - AGENTS.md.\nIndependent audit verdict: ${verdict} - reason.`,
 	});
+}
+
+/** The stop call that ends the session a spawn opened. */
+function stopAuditor(state: { host: FakeEffortHost }, name: string, ended = true): void {
+	const call = `stop-${name}`;
+	state.host.toolCall("session_stop", { name }, call);
+	state.host.toolExecutionEnd(call, { result: { details: { ok: true, name, ended } } });
 }
 
 test("audit: an ok consult needs an approved verdict to restore", async () => {
@@ -384,6 +397,7 @@ test("audit: a logged approved verdict restores; other log shapes are ignored", 
 	assertEq(state.host.getThinkingLevel(), "high");
 
 	logReport(state, "tm-log", "approved");
+	stopAuditor(state, "tm-log");
 	await state.host.run("Consultation cycle: complete - tm-log independently verified.");
 	assertEq(state.host.getThinkingLevel(), "high");
 });
@@ -399,10 +413,12 @@ test("audit: changes needed, an edit, then a fresh audit that approves restores"
 	state.host.toolCall("edit", {});
 	spawnAuditor(state, "tm-second");
 	logReport(state, "tm-second", "approved");
+	stopAuditor(state, "tm-second");
+	stopAuditor(state, "tm-first");
 	await state.host.run("Consultation cycle: complete - tm-first independently verified.");
 	assertEq(state.host.getThinkingLevel(), "high", "the first id stays refused");
 	await state.host.run("Consultation cycle: complete - tm-second independently verified.");
-	assertEq(state.host.getThinkingLevel(), "high");
+	assertEq(lastEntry(state.host).holding, false, "both sessions stopped, the cycle closes");
 });
 
 test("audit: an auditor spawned before a later edit is not fresh", async () => {
@@ -456,8 +472,214 @@ test("audit: reload restores an owed auditor and a later report settles it", asy
 	policy2.register(host2 as never);
 	host2.emit("session_start", {});
 	logReport(first, "tm-reload", "approved");
+	stopAuditor({ host: host2 }, "tm-reload");
 	await host2.run("Consultation cycle: complete - tm-reload independently verified.");
-	assertEq(host2.getThinkingLevel(), "high");
+	assertEq(lastEntry(host2).holding, false, "the reloaded cycle closes on the stop");
+});
+
+test("audit: an approved report alone leaves the cycle open until the session is stopped", async () => {
+	const state = expiredAudit();
+	spawnAuditor(state, "tm-open");
+	logReport(state, "tm-open", "approved");
+	await state.host.run("Consultation cycle: complete - tm-open independently verified.");
+	assertEq(lastEntry(state.host).holding, true, "the cycle stays open");
+	assertIncludes(notices(state.ctx), "has not been confirmed ended");
+	assertIncludes(cycleNotes(state.host).map((item) => item.message.content ?? "").join("\n"), 'session_stop({name: "tm-open"})');
+	const pending = lastEntry(state.host).auditorSessions as Record<string, { ended: boolean }>;
+	assertEq(pending["tm-open"].ended, false);
+
+	stopAuditor(state, "tm-open");
+	await state.host.run("Consultation cycle: complete - tm-open independently verified.");
+	assertEq(lastEntry(state.host).holding, false, "the confirmed stop closes it");
+});
+
+test("audit: a stop that has not ended the run, or that failed, keeps the cycle open", async () => {
+	for (const answer of [
+		{ result: { details: { ok: true, name: "tm-live", ended: false } } },
+		{ isError: true, result: { details: { ok: false, error: "no-such-session" } } },
+	]) {
+		const state = expiredAudit();
+		spawnAuditor(state, "tm-live");
+		logReport(state, "tm-live", "approved");
+		state.host.toolCall("session_stop", { name: "tm-live" }, "stop-tm-live");
+		state.host.toolExecutionEnd("stop-tm-live", answer);
+		await state.host.run("Consultation cycle: complete - tm-live independently verified.");
+		assertEq(lastEntry(state.host).holding, true, `kept open for ${JSON.stringify(answer)}`);
+		const pending = lastEntry(state.host).auditorSessions as Record<string, { ended: boolean }>;
+		assertEq(pending["tm-live"].ended, false);
+	}
+});
+
+test("audit: a rejected or malformed report still owes the stop", async () => {
+	const state = expiredAudit();
+	spawnAuditor(state, "tm-broken");
+	state.host.pushCommsLog({
+		direction: "received",
+		from: { nodeId: "", agentId: "tm-broken" },
+		kind: "result",
+		payload: "Report body with no verdict.",
+	});
+	await state.host.run("Consultation cycle: complete - tm-broken independently verified.");
+	const pending = lastEntry(state.host).auditorSessions as Record<string, { ended: boolean }>;
+	assertEq(pending["tm-broken"].ended, false, "a malformed report leaves the session owed");
+});
+
+test("audit: an outstanding stop survives a reload", async () => {
+	const shared = config();
+	const first = expiredAudit(shared);
+	spawnAuditor(first, "tm-persist");
+	logReport(first, "tm-persist", "approved");
+
+	const host2 = new FakeEffortHost(first.host.getThinkingLevel(), THINKING_LEVELS, first.host.branch);
+	const ctx2 = new FakeContext(first.host.branch, "session-audit-4", scratchDir(), true);
+	host2.attachContext(ctx2);
+	const policy2 = new AgentEffortPolicy(shared);
+	policy2.register(host2 as never);
+	host2.emit("session_start", {});
+	commsTools(host2);
+	await host2.run("Consultation cycle: complete - tm-persist independently verified.");
+	assertEq(lastEntry(host2).holding, true, "the reload keeps the obligation");
+});
+
+test("audit: a stop for a session the policy never spawned changes nothing", () => {
+	const state = expiredAudit();
+	state.host.toolCall("session_stop", { name: "tm-stranger" }, "stop-stranger");
+	state.host.toolExecutionEnd("stop-stranger", { result: { details: { ok: true, name: "tm-stranger", ended: true } } });
+	assertEq(JSON.stringify(lastEntry(state.host).auditorSessions), "{}");
+});
+
+test("audit: without the stop tool the rung is not offered", async () => {
+	const state = setup();
+	state.policy.engage(state.ctx as never, "c-000108");
+	for (const name of ["comms_spawn", "comms_send", "comms_wait"]) state.host.addTool(name);
+	await state.host.run("Independent audit unavailable - no independent agent.");
+	assertNotIncludes(notices(state.ctx), "agent-comms tools are registered");
+});
+
+test("audit: an answer with no session name creates no stop obligation", async () => {
+	const state = expiredAudit();
+	commsTools(state.host);
+	state.host.toolCall("comms_spawn", { dir: ".", task: "pi-consult independent audit - x." }, "t-nameless");
+	state.host.toolExecutionEnd("t-nameless", {
+		result: { structuredContent: { status: "spawned", agent: { agentId: "tm-nameless" } } },
+	});
+	assertEq(JSON.stringify(lastEntry(state.host).auditorSessions), "{}");
+	logReport(state, "tm-nameless", "approved");
+	await state.host.run("Consultation cycle: complete - tm-nameless independently verified.");
+	assertEq(lastEntry(state.host).holding, false, "nothing left to stop");
+});
+
+test("audit: a confirmed stop stays confirmed through a later refusal", async () => {
+	const shared = config();
+	const state = expiredAudit(shared);
+	spawnAuditor(state, "tm-once");
+	logReport(state, "tm-once", "approved");
+	stopAuditor(state, "tm-once");
+	const call = "stop-again";
+	state.host.toolCall("session_stop", { name: "tm-once" }, call);
+	state.host.toolExecutionEnd(call, { isError: true, result: { details: { ok: false, error: "no-such-session" } } });
+	await state.host.run("Consultation cycle: complete - tm-once independently verified.");
+	assertEq(lastEntry(state.host).holding, false, "a refused second stop does not reopen the obligation");
+});
+
+test("audit: a consultant approval cannot close over a running auditor session", async () => {
+	const state = expiredAudit();
+	spawnAuditor(state, "tm-consult");
+	logReport(state, "tm-consult", "approved");
+	state.policy.engage(state.ctx as never, "c-000301");
+	state.policy.settle(
+		"c-000301",
+		consultDetails("c-000301", [consultRun("claude", "ok")]),
+		verdictAnswers({ claude: APPROVED_VERDICT }),
+	);
+	await state.host.run("Consultation cycle: complete - c-000301 verified.");
+	assertEq(lastEntry(state.host).holding, true, "the approval waits for the stop");
+	assertIncludes(notices(state.ctx), "tm-consult has not been confirmed ended");
+
+	stopAuditor(state, "tm-consult");
+	await state.host.run("Consultation cycle: complete - c-000301 verified.");
+	assertEq(lastEntry(state.host).holding, false);
+});
+
+test("audit: the expired-consult close and the fallback close both wait for the stop", async () => {
+	for (const line of [
+		"Consultation cycle: complete - c-000302 verified.",
+		"Consultant fallback: no consultant available - only agent-comms is left.",
+	]) {
+		const state = expiredAudit();
+		spawnAuditor(state, "tm-path");
+		logReport(state, "tm-path", "approved");
+		state.policy.engage(state.ctx as never, "c-000302");
+		state.policy.settle(
+			"c-000302",
+			consultDetails("c-000302", [consultRun("claude", "error", "boom")], false),
+		);
+		await state.host.run(line);
+		assertEq(lastEntry(state.host).holding, true, `kept open for: ${line}`);
+		assertIncludes(notices(state.ctx), "has not been confirmed ended");
+	}
+});
+
+test("audit: no consultant available keeps the cycle open over a running session", async () => {
+	const state = expiredAudit();
+	spawnAuditor(state, "tm-probe");
+	logReport(state, "tm-probe", "approved");
+	await state.host.run("Working.");
+	state.policy.observeAvailability(state.ctx as never, [
+		{ name: "claude", available: false, reason: "no-auth" },
+		{ name: "codex", available: false, reason: "no-auth" },
+	]);
+	assertEq(lastEntry(state.host).holding, true);
+	assertIncludes(notices(state.ctx), "tm-probe has not been confirmed ended");
+});
+
+test("audit: an explicit release ends the obligation and names the running session", async () => {
+	const state = expiredAudit();
+	spawnAuditor(state, "tm-release");
+	const handler = state.host.commands.get("consult-effort")?.handler as (
+		args: string,
+		commandCtx: unknown,
+	) => Promise<void>;
+	await handler("release", state.ctx);
+	assertEq(lastEntry(state.host).holding, false);
+	assertIncludes(notices(state.ctx), "tm-release was left running");
+	assertEq(JSON.stringify(lastEntry(state.host).auditorSessions), "{}");
+
+	// The next cycle is not blocked by the released one's session.
+	state.policy.engage(state.ctx as never, "c-000303");
+	state.policy.settle(
+		"c-000303",
+		consultDetails("c-000303", [consultRun("claude", "unavailable"), consultRun("codex", "auth")], false),
+	);
+	assertEq(lastEntry(state.host).holding, true, "the next cycle starts");
+	spawnAuditor(state, "tm-next");
+	logReport(state, "tm-next", "approved");
+	stopAuditor(state, "tm-next");
+	await state.host.run("Consultation cycle: complete - tm-next independently verified.");
+	assertEq(lastEntry(state.host).holding, false);
+});
+
+test("audit: the leftover-session warning reaches the transcript without a UI", async () => {
+	const host = new FakeEffortHost("high", THINKING_LEVELS);
+	const ctx = new FakeContext(host.branch, "session-audit-headless", scratchDir(), false);
+	host.attachContext(ctx);
+	const policy = new AgentEffortPolicy(config());
+	policy.register(host as never);
+	host.emit("session_start", {});
+	policy.engage(ctx as never, "c-exp002");
+	policy.settle(
+		"c-exp002",
+		consultDetails("c-exp002", [consultRun("claude", "unavailable"), consultRun("codex", "auth")], false),
+	);
+	spawnAuditor({ host }, "tm-headless");
+	const handler = host.commands.get("consult-effort")?.handler as (
+		args: string,
+		commandCtx: unknown,
+	) => Promise<void>;
+	await handler("release", ctx);
+	assertEq(JSON.stringify(lastEntry(host).auditorSessions), "{}");
+	const content = host.messages.map((entry) => (entry.message as { content?: string }).content ?? "").join("\n");
+	assertIncludes(content, "tm-headless was left running");
 });
 
 test("audit: describe() reports each rung of the ladder", () => {
