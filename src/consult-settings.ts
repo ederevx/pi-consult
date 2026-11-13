@@ -115,8 +115,7 @@ export class ConsultSettings {
 		const values = new Map<string, string>();
 		for (const spec of ConsultSettings.SPECS) {
 			const configured = config.value(spec.path);
-			// A model may be stored unqualified; the row shows the identifier the
-			// picker marks, so opening and confirming it keeps that model.
+			// Stored model identifiers may omit the provider.
 			const value = spec.kind === "model" && typeof configured === "string" && configured
 				? this.models?.resolve(configured)?.value ?? configured
 				: configured;
