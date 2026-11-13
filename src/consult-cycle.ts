@@ -1,16 +1,17 @@
 /**
  * pi-consult — the consultation cycle.
  *
- * Owns one consultation cycle: from an unapproved consultant answer until
- * that answer is approved, the consult is terminated, or the run settles. The
- * cycle closes on a passing convention audit and an approved verdict, or, once
- * every enabled consultant has expired, on an approved report from a dedicated
- * independent auditor spawned through agent-comms; a fallback the records
- * support, or an explicit user audit, also ends it. Every change is persisted
- * on the session branch. pi's own thinking level is never touched here, and
- * consultant `effort` settings are not touched either. A refused completion
- * line is answered once with what still closes the cycle; it closes unverified
- * only when every consultant the cited consult ran against has expired.
+ * Owns one consultation cycle: a consult opens it, and a qualifying completion
+ * line, a fallback the records support, an explicit user audit, or an
+ * availability probe that no consultant can serve closes it. The completion
+ * line itself qualifies on a passing convention audit and an approved verdict,
+ * or, once every enabled consultant has expired, on an approved report from a
+ * dedicated independent auditor spawned through agent-comms. A refused
+ * completion line is answered once with what still closes the cycle; it closes
+ * unverified only when every consultant the cited consult ran against has
+ * expired. Every change is persisted on the session branch. pi's own thinking
+ * level is never touched here, and consultant `effort` settings are not touched
+ * either.
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -22,7 +23,7 @@ import { FallbackEvidence } from "./fallback-evidence.ts";
 
 /** The persisted cycle state, written on every change. */
 interface CycleEntry {
-	/// The field name predates the cycle: it is the open flag, not a hold.
+	/** Whether the consultation cycle is open. */
 	holding: boolean;
 	owed: string[];
 	fresh: string[];
@@ -501,7 +502,7 @@ export class ConsultCycle {
 	}
 
 	/** Close the cycle on its own terms, unless a spawned session is still
-	 *  running; only an explicit release ends a cycle over that. */
+	 *  running; over that, only the user-audit line ends it. */
 	private close(ctx: ExtensionContext | undefined, reason: string): void {
 		const pending = this.sessionRefusal();
 		if (pending) {

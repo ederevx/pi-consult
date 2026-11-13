@@ -40,8 +40,8 @@ export interface SettingSpec {
 /** The live model catalogue a "model" row selects from; injected so the
  *  command works without a session context. */
 export interface ModelChoices {
-	/** Every eligible fallback model, identifier plus label. */
-	choices(): { value: string; label: string }[];
+	/** Every eligible fallback model: identifier, label, and search text. */
+	choices(): { value: string; label: string; search?: string }[];
 	/** The model an unset selection resolves to, when one does. */
 	defaultChoice(): { value: string; label: string } | undefined;
 	/** Resolve a configured selection (or the pi default when unset) against
@@ -245,7 +245,7 @@ export class ConsultSettings {
 	}
 
 	/** The model choices a "model" row offers, for the dock's picker. */
-	modelChoices(): { value: string; label: string }[] {
+	modelChoices(): { value: string; label: string; search?: string }[] {
 		return this.models ? this.models.choices() : [];
 	}
 

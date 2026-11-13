@@ -11,7 +11,7 @@ roadblock.
 ## Install
 
 ```bash
-pi install git:github.com/ederevx/pi-consult@v0.26.0
+pi install git:github.com/ederevx/pi-consult@v0.26.2
 ```
 
 The package has no runtime dependencies; it uses the host-provided
@@ -189,14 +189,15 @@ The catalogue instructs the agent, and the tool's prompt guidelines repeat it:
 
 ### The consultation cycle
 
-From the first consultant answer that gives pi a plan without an approved
-verdict, the cycle is open until that answer is approved, the consult is
-terminated, or the run settles. pi's thinking level is never captured, lowered,
-or restored: a plan is executed at whatever level pi's own settings give it,
-and a model switch behaves exactly as it does outside a cycle. The cycle ends
-when one of these markers qualifies. Completion markers must be the final
-non-blank line; fallback and user-request markers must appear on their own
-plain lines.
+From the consult that a brief is sent to, the cycle is open until a marker
+closes it: a qualifying completion line, a fallback line the records support,
+an explicit user audit, or an availability probe that finds no enabled
+consultant. A receipt still owed and an unconfirmed auditor session each hold
+the automatic close. pi's thinking level is never captured, lowered, or
+restored: a plan is executed at whatever level pi's own settings give it, and a
+model switch behaves exactly as it does outside a cycle. Completion markers
+must be the final non-blank line; fallback and user-request markers must appear
+on their own plain lines.
 
 - `Consultation cycle: complete - <consult id> verified.` - the cited
   consult's answer ends with a passing convention audit line and the approved

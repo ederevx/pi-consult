@@ -496,10 +496,10 @@ test("settings dock: a row failure reaches the presenter's own notify", async ()
 // a rejected value keeps the picker open with the reason, and Escape cancels.
 test("the model picker searches the catalogue like /model", async () => {
 	const options = [
-		{ value: "", label: "Pi default (Fast (one/fast))" },
-		{ value: "one/fast", label: "Fast (one/fast)" },
-		{ value: "one/deep", label: "Deep (one/deep)" },
-		{ value: "two/smart", label: "Smart (two/smart)" },
+		{ value: "", label: "Pi default (Fast (one/fast))", isDefault: true },
+		{ value: "one/fast", label: "Fast (one/fast)", search: "one one/fast Fast" },
+		{ value: "one/deep", label: "Deep (one/deep)", search: "one one/deep Deep" },
+		{ value: "two/smart", label: "Smart (two/smart)", search: "two two/smart Smart" },
 	];
 	const applied: string[] = [];
 	let cancelled = false;
@@ -514,40 +514,105 @@ test("the model picker searches the catalogue like /model", async () => {
 		() => {
 			cancelled = true;
 		},
+		"one/deep",
 	);
 	const shown = (): string => picker.render(120).join("\n");
 
 	assertIncludes(shown(), "Pi default (Fast (one/fast))", "the default row leads the list");
-	picker.handleInput("d");
-	picker.handleInput("e");
-	picker.handleInput("e");
-	picker.handleInput("p");
-	assertNotIncludes(shown(), "one/fast", "typing narrows the list away from a mismatch");
-	assertIncludes(shown(), "Deep (one/deep)", "the fuzzy match stays");
-	picker.handleInput("\u001b[B");
+	assertIncludes(shown(), "· default", "the default row is marked");
+	assertIncludes(shown(), "✓ Deep (one/deep)", "the stored selection is marked");
+
 	picker.handleInput("\r");
-	assertEq(applied.length, 1, "Enter applies the highlighted model once");
+	assertEq(applied.join(","), "one/deep", "Enter alone keeps the stored selection");
+
+	for (const key of ["s", "m", "a", "r"]) picker.handleInput(key);
+	assertIncludes(shown(), "Smart (two/smart)", "the fuzzy match stays");
+	assertNotIncludes(shown(), "Deep (one/deep)", "typing narrows away from a mismatch");
+	picker.handleInput("\r");
+	assertEq(applied.join(","), "one/deep,two/smart", "Enter applies what is highlighted");
+	assertIncludes(shown(), "two/smart is unavailable", "the rejection names the reason");
+	assert(!cancelled, "a rejection does not close the picker");
+
 	picker.handleInput("\u001b");
 	assert(cancelled, "Escape cancels the picker");
+});
 
-	// A rejected value reports the reason and leaves the picker mounted.
-	applied.length = 0;
-	cancelled = false;
-	const rejected = new ModelSearchComponent(
+test("the model picker pages, floats the default, and colors a rejection", () => {
+	const many = Array.from({ length: 25 }, (_unused, row) => ({
+		value: `p/m${row}`,
+		label: `Model ${row} (p/m${row})`,
+		search: `p p/m${row} Model ${row}`,
+	}));
+	const options = [
+		{ value: "", label: "Pi default (Model 3 (p/m3))", isDefault: true },
+		...many,
+	];
+	const colors: string[] = [];
+	const theme = {
+		fg: (color: string, text: string): string => {
+			colors.push(color);
+			return text;
+		},
+	};
+	let rejected = false;
+	const picker = new ModelSearchComponent(
 		"Fallback model",
 		options,
-		plainTheme,
-		(value) => (value === "two/smart" ? "two/smart is unavailable" : undefined),
-		() => {
-			cancelled = true;
-		},
+		theme,
+		() => (rejected ? "p/m1 is unavailable" : undefined),
+		() => undefined,
+		"p/m24",
 	);
-	rejected.handleInput("t");
-	rejected.handleInput("w");
-	rejected.handleInput("o");
-	rejected.handleInput("\r");
-	const afterReject = rejected.render(120).join("\n");
-	assertIncludes(afterReject, "two/smart is unavailable", "the rejection names the reason");
-	assert(!cancelled, "a rejection does not close the picker");
-	assertIncludes(afterReject, "Smart (two/smart)", "the rejected row stays selected");
+	const shown = (): string => picker.render(120).join("\n");
+
+	assertIncludes(shown(), "(26/26)", "a long list reports its page position");
+	assertIncludes(shown(), "Model 24 (p/m24)", "the stored selection starts on screen");
+	assertIncludes(shown(), "Model 15 (p/m15)", "the window ends at the selection");
+	assertNotIncludes(shown(), "Model 0 (p/m0)", "the window does not fit every row");
+
+	picker.handleInput("\u001b[5~");
+	assertIncludes(shown(), "(16/26)", "PageUp moves the selection one page");
+	picker.handleInput("\u001b[6~");
+	assertIncludes(shown(), "(26/26)", "PageDown returns it, clamped at the last row");
+
+	picker.handleInput("d");
+	assertIncludes(shown(), "Pi default (Model 3 (p/m3))", "typing keeps the default row visible");
+	picker.handleInput("\u007f");
+	assertIncludes(shown(), "(1/26)", "backspace clears the query and rewinds the list");
+
+	for (const key of ["m", "o", "d", "e", "l", " ", "1"]) picker.handleInput(key);
+	rejected = true;
+	picker.handleInput("\r");
+	assertIncludes(shown(), "p/m1 is unavailable", "the rejection is rendered");
+	assertEq(colors.at(-1), "error", "the rejection uses pi's error color");
+});
+
+test("settings dock: the model row's picker opens on the stored model", () => {
+	const applied: string[] = [];
+	const owner = {
+		specs: () => [
+			{
+				key: "fallback.model",
+				label: "Fallback model",
+				path: ["fallback", "model"],
+				kind: "model" as const,
+				description: "The model a fallback consult runs on",
+			},
+		],
+		current: () => new Map([["fallback.model", "one/deep"]]),
+		apply: (key: string, value: string): string | undefined => {
+			applied.push(`${key}=${value}`);
+			return undefined;
+		},
+		reset: () => undefined,
+		modelChoices: () => [
+			{ value: "one/fast", label: "Fast (one/fast)", search: "one one/fast Fast" },
+			{ value: "one/deep", label: "Deep (one/deep)", search: "one one/deep Deep" },
+		],
+		modelDefault: () => ({ value: "one/fast", label: "Fast (one/fast)" }),
+	};
+	const item = new ConsultSettingsPresenter(owner).items()[0];
+	const picker = item.submenu?.(String(item.currentValue), () => undefined) as ModelSearchComponent;
+	picker.handleInput("\r");
+	assertEq(applied.join(","), "fallback.model=one/deep", "Enter alone keeps the stored model");
 });

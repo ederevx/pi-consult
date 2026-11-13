@@ -31,7 +31,7 @@ export interface SettingsOwner {
 	apply(key: string, value: string): string | undefined;
 	reset(): string | undefined;
 	/** The model choices a "model" row offers, and its resolved default. */
-	modelChoices?(): { value: string; label: string }[];
+	modelChoices?(): { value: string; label: string; search?: string }[];
 	modelDefault?(): { value: string; label: string } | undefined;
 	/** The reasoning levels the resolved fallback model offers, for the
 	 *  model-driven enum row. */
@@ -182,13 +182,15 @@ export class ConsultSettingsPresenter {
 
 	/** The live-catalogue picker for one model row: pi's /model layout with a
 	 *  fuzzy search over the available models, the resolved default first, and
-	 *  never a stale stored selection. */
+	 *  the stored selection as the row it opens on. */
 	private picker(spec: SettingSpec, currentValue: string, done: SubmenuDone): Component {
 		const fallback = this.owner.modelDefault?.();
 		const choices = this.owner.modelChoices?.() ?? [];
 		const options: SearchChoice[] = [];
-		if (fallback) options.push({ value: "", label: `Pi default (${fallback.label})` });
-		for (const choice of choices) options.push({ value: choice.value, label: choice.label });
+		if (fallback) options.push({ value: "", label: `Pi default (${fallback.label})`, isDefault: true });
+		for (const choice of choices) {
+			options.push({ value: choice.value, label: choice.label, search: choice.search });
+		}
 		if (options.length === 0) {
 			return new ExtensionSelectorComponent(
 				spec.label,
@@ -208,6 +210,7 @@ export class ConsultSettingsPresenter {
 				return undefined;
 			},
 			() => done(),
+			currentValue,
 		);
 	}
 

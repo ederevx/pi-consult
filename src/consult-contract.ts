@@ -321,7 +321,7 @@ export class ConsultContract {
 		);
 		lines.push(
 			"- After that acknowledgement nothing is blocked: no consult receipt, no " +
-				"effort declaration, no waiver. The closing consultation every task " +
+				"waiver. The closing consultation every task " +
 				"owes and the consultant-mode, roadblock, and audit terms are " +
 				"commitments, not gate checks. pi-consult checks only the completion " +
 				"line. A failed or unavailable consultant does not close the gate. " +
@@ -352,7 +352,7 @@ export class ConsultContract {
 		return (
 			`pi-consult: "${toolName}" requires the session acknowledgement. ` +
 			"Call pre_consult with acknowledge: true, wait for it to return, then " +
-			"retry this call. No consultation receipt or effort declaration is " +
+			"retry this call. No consultation receipt is " +
 			"required."
 		);
 	}
@@ -396,14 +396,14 @@ export class ConsultContract {
 		snapshot: GateSnapshot,
 		consults: readonly ConsultantName[],
 		lastConsultId: string | null,
-		effort: string,
+		cycle: string,
 	): string {
 		const parts = [
 			`acknowledged: ${snapshot.acknowledged ? "yes" : "no"}`,
 			`contract: v${ConsultContract.VERSION}`,
 			"closing consult: every task (sanity check or audit)",
 			"consultant work: consultant-verified (commitment, not gate)",
-			effort,
+			cycle,
 			`consults on branch: ${lastConsultId === null ? 0 : consults.length}`,
 			`last consult: ${lastConsultId ?? "(none)"}`,
 		];

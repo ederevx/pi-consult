@@ -258,7 +258,7 @@ test("audit: an audit spawn never touches the level", () => {
 	assertEq(state.host.setCalls.length, 0, "nothing asks for a level change");
 });
 
-test("audit: a settle with nothing owed releases the level and keeps the ladder", () => {
+test("audit: a settle with nothing owed leaves the level alone and keeps the ladder", () => {
 	const state = setup(config({ codex: { enabled: false } }));
 	state.policy.engage(state.ctx as never, "c-e050");
 	state.policy.settle("c-e050", consultDetails("c-e050", [consultRun("claude", "error", "boom")], false));
@@ -266,7 +266,7 @@ test("audit: a settle with nothing owed releases the level and keeps the ladder"
 	state.policy.settle("c-e051", consultDetails("c-e051", [consultRun("claude", "error", "boom")], false));
 	assertEq(lastEntry(state.host).holding, true, "two failures keep the cycle open");
 	assertEq((lastEntry(state.host).failures as Record<string, number>).claude, 2, "the ladder keeps both");
-	assertEq(state.host.getThinkingLevel(), "high", "holding nothing releases the level");
+	assertEq(state.host.getThinkingLevel(), "high", "a settle with nothing owed never touches the level");
 });
 
 test("audit: an aborted billing run never expires, and a later ok clears", async () => {

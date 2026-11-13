@@ -43,6 +43,8 @@ export interface FallbackChoice {
 	value: string;
 	/** The dock row's label. */
 	label: string;
+	/** Provider-first text the dock's picker searches, as /model's does. */
+	search: string;
 	/** The registry's own model object, streamed exactly as configured. */
 	model: CatalogueModel;
 }
@@ -69,6 +71,9 @@ export class FallbackModels {
 			.map((model) => ({
 				value: FallbackModels.identifier(model),
 				label: `${model.name} (${FallbackModels.identifier(model)})`,
+				search:
+					`${model.provider} ${FallbackModels.identifier(model)} ` +
+					`${model.provider} ${model.id}${model.name ? ` ${model.name}` : ""}`,
 				model: model as CatalogueModel,
 			}));
 	}
