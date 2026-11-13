@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.26.3
+
+### Fixed
+
+- Opening the fallback-model row on a model stored without its provider keeps
+  that model: the row shows the identifier the catalogue resolves it to, so
+  confirming it no longer clears the override.
+- The default row of that picker searches the same text as the model it names,
+  so a query ranks both by the same match.
+
 ## 0.26.2
 
 ### Changed
