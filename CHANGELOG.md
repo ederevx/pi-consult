@@ -1,11 +1,27 @@
 # Changelog
 
+## 0.26.2
+
+### Changed
+
+- The fallback-model picker opens on the stored model, marks it with a check,
+  floats the resolved default above the matches while the query is a prefix of
+  "default", searches the provider-first text `/model` itself searches, and
+  reports a rejected value in pi's error color.
+
+### Fixed
+
+- The cycle's documentation, comments, and test descriptions no longer describe
+  the removed thinking-level hold, and the tests that restated rendering now
+  check the picker's behaviour, the fallback close after a user audit, and the
+  note dedup across two cycles.
+
 ## 0.26.1
 
 ### Fixed
 
-- The comments that still described the removed thinking-level hold, and two
-  arguments passed to a `load()` that takes none, are gone.
+- The comments that still described the removed thinking-level hold are gone,
+  and each session-event handler now passes `load()` the context it takes.
 
 ## 0.26.0
 
