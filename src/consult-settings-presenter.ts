@@ -69,7 +69,7 @@ export class ConsultSettingsPresenter {
 	private view: ConsultSettingsView | undefined;
 	/** The values last displayed to the user, for rollback on a failed write. */
 	private displayed = new Map<string, string>();
-	/** The mounted dock's theme, so the picker renders in the same colors. */
+	/** The mounted dock's theme; undefined while no dock is mounted. */
 	private theme: SearchTheme | undefined;
 
 	constructor(owner: SettingsOwner) {
@@ -187,7 +187,14 @@ export class ConsultSettingsPresenter {
 		const fallback = this.owner.modelDefault?.();
 		const choices = this.owner.modelChoices?.() ?? [];
 		const options: SearchChoice[] = [];
-		if (fallback) options.push({ value: "", label: `Pi default (${fallback.label})`, isDefault: true });
+		if (fallback) {
+			options.push({
+				value: "",
+				label: `Pi default (${fallback.label})`,
+				search: choices.find((choice) => choice.value === fallback.value)?.search,
+				isDefault: true,
+			});
+		}
 		for (const choice of choices) {
 			options.push({ value: choice.value, label: choice.label, search: choice.search });
 		}

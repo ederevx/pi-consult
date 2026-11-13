@@ -114,7 +114,13 @@ export class ConsultSettings {
 		const config = ConsultConfig.load(this.store);
 		const values = new Map<string, string>();
 		for (const spec of ConsultSettings.SPECS) {
-			values.set(spec.key, ConsultSettings.display(config.value(spec.path)));
+			const configured = config.value(spec.path);
+			// A model may be stored unqualified; the row shows the identifier the
+			// picker marks, so opening and confirming it keeps that model.
+			const value = spec.kind === "model" && typeof configured === "string" && configured
+				? this.models?.resolve(configured)?.value ?? configured
+				: configured;
+			values.set(spec.key, ConsultSettings.display(value));
 		}
 		return values;
 	}

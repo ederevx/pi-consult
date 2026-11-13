@@ -616,3 +616,58 @@ test("settings dock: the model row's picker opens on the stored model", () => {
 	picker.handleInput("\r");
 	assertEq(applied.join(","), "fallback.model=one/deep", "Enter alone keeps the stored model");
 });
+
+test("the model row shows the catalogue identifier an unqualified stored value resolves to", () => {
+	const { file } = make("dock-unqualified");
+	writeFileSync(file, JSON.stringify({ piConsult: { fallback: { model: "deep" } } }));
+	const settings = new ConsultSettings(new ConsultSettingsStore(file), {
+		choices: () => [
+			{ value: "one/fast", label: "Fast (one/fast)", search: "one one/fast Fast" },
+			{ value: "one/deep", label: "Deep (one/deep)", search: "one one/deep Deep" },
+		],
+		defaultChoice: () => ({ value: "one/fast", label: "Fast (one/fast)" }),
+		resolve: (configured?: string) => {
+			const value = configured === undefined
+				? "one/fast"
+				: configured.includes("/") ? configured : `one/${configured}`;
+			return { value, label: value, model: {} as never };
+		},
+		unset: () => undefined,
+	});
+	const item = new ConsultSettingsPresenter(settings)
+		.items()
+		.find((candidate) => candidate.id === "fallback.model");
+	assertEq(String(item?.currentValue), "one/deep", "the row shows the resolved identifier");
+	const picker = item?.submenu?.(String(item.currentValue), () => undefined) as ModelSearchComponent;
+	assertIncludes(picker.render(120).join("\n"), "✓ Deep (one/deep)", "the stored model is checked");
+	picker.handleInput("\r");
+	assertEq(stored(file).piConsult.fallback.model, "one/deep",
+		"Enter keeps the same model, now stored qualified");
+});
+
+test("the picker's default row searches the catalogue text of the same model", () => {
+	const owner = {
+		specs: () => [
+			{
+				key: "fallback.model",
+				label: "Fallback model",
+				path: ["fallback", "model"],
+				kind: "model" as const,
+				description: "The model a fallback consult runs on",
+			},
+		],
+		current: () => new Map([["fallback.model", "one/deep"]]),
+		apply: () => undefined,
+		reset: () => undefined,
+		modelChoices: () => [
+			{ value: "one/fast", label: "Fast (one/fast)", search: "one one/fast Fast" },
+			{ value: "one/deep", label: "Deep (one/deep)", search: "one one/deep Deep" },
+		],
+		modelDefault: () => ({ value: "one/fast", label: "Fast (one/fast)" }),
+	};
+	const item = new ConsultSettingsPresenter(owner).items()[0];
+	const picker = item.submenu?.(String(item.currentValue), () => undefined) as ModelSearchComponent;
+	for (const key of ["o", "n", "e", "o"]) picker.handleInput(key);
+	assertIncludes(picker.render(120).join("\n"), "Pi default (Fast (one/fast))",
+		"the default row matches the text its catalogue row matches");
+});

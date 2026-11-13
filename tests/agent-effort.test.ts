@@ -554,7 +554,7 @@ test("agent effort: an unknown, unapproved or terminated consult is refused", as
 
 	const terminated = setup({ level: "high" });
 	terminated.policy.engage(terminated.ctx as never, "c-000026");
-	terminated.policy.settle("c-000026", undefined, undefined, false);
+	terminated.policy.settle("c-000026");
 	await terminated.host.run("Consultation cycle: complete - c-000026 verified.");
 	assertEq(terminated.host.getThinkingLevel(), "high", "a terminated consult leaves the level alone");
 	assertEq(lastEntry(terminated.host).holding, true, "a terminated consult does not close the cycle");
