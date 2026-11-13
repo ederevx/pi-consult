@@ -294,7 +294,7 @@ test("consult tool: engage starts the cycle and settle fires only on a foregroun
 	assertEq(result.details.ok, true);
 	assertEq(engages.length, 1, "engage runs for the started consult");
 	assertEq(engages[0].id, result.details.consultId);
-	assertEq(engages[0].waits, true, "a call that waits lifts the hold");
+	assertEq(engages[0].waits, undefined, "engage carries no hold flag");
 	assertEq(settles.length, 1, "a foreground receipt settles the consult");
 	assertEq(settles[0].id, result.details.consultId);
 	assertEq(
@@ -349,6 +349,6 @@ test("consult tool: engage starts the cycle and settle fires only on a foregroun
 		new FakeContext([], "sess-effort-3", scratchDir(), false) as never,
 	);
 	assertEq(running.details.phase, "running");
-	assertEq(backgroundWaits[0], false, "a background consult leaves the hold in place");
+	assertEq(backgroundWaits[0], undefined, "engage carries no hold flag");
 	await background.supervisor.get(running.details.consultId)?.done();
 });

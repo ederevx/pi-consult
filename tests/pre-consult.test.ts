@@ -150,7 +150,7 @@ test("pre_consult: the tool carries workflow prompt guidelines", () => {
 	assertIncludes(guidelines.join("\n"), "every roadblock", "roadblocks survive compaction");
 	assertIncludes(guidelines.join("\n"), "Consultant fallback", "the fallback wording survives compaction");
 	assertIncludes(guidelines.join("\n"), "Audit by pi at the user", "the direct-request audit survives compaction");
-	assertIncludes(guidelines.join("\n"), "low thinking effort", "the consultant-mode effort line survives compaction");
+	assertIncludes(guidelines.join("\n"), "execute the answer as written", "the consultant-mode execution line survives compaction");
 	assertIncludes(guidelines.join("\n"), "Consultation cycle: complete", "the cycle-complete line survives compaction");
 });
 
@@ -179,11 +179,10 @@ test("pre_consult: a nested call is rejected", async () => {
 	assertEq(threw, true);
 });
 
-test("pre_consult: contract v20 states the hold, the verdict and the completion line", async () => {
+test("pre_consult: contract v21 states the cycle, the verdict and the completion line", async () => {
 	const text = await contractText();
-	assertEq(ConsultContract.VERSION, 20);
-	assertIncludes(text, "holds your own thinking effort");
-	assertIncludes(text, "It never leaves you at high, xhigh, or max");
+	assertEq(ConsultContract.VERSION, 21);
+	assertIncludes(text, "pi-consult never changes pi's own thinking level");
 	assertIncludes(text, "you own the implementation and the\n  execution");
 	assertIncludes(text, "Consultant verdict: approved - <one-line reason>.");
 	assertIncludes(text, "inspects files with its own native read-only tools");
@@ -192,11 +191,11 @@ test("pre_consult: contract v20 states the hold, the verdict and the completion 
 	assertNotIncludes(text, "consult_reply");
 	assertIncludes(text, "Consultation cycle: complete - <consult id> verified.");
 	assertIncludes(text, "Never write the line earlier, and never quote, indent, or fence it.");
-	assertIncludes(text, "/consult-effort release");
-	assertNotIncludes(text, "low; never high, xhigh, or max)");
+	assertNotIncludes(text, "consult-effort release");
+	assertNotIncludes(text, "holds your own thinking effort");
 });
 
-test("pre_consult: contract v20 requires a convention audit in every closing consultation", async () => {
+test("pre_consult: contract v21 requires a convention audit in every closing consultation", async () => {
 	const definition = register(runner(async () => [], TARGETS));
 	const text = await contractText();
 	assertIncludes(text, "Every closing consultation audits convention compliance");

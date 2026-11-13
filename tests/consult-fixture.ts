@@ -196,7 +196,7 @@ export function buildConsultFixture(
 			formatter,
 			supervisor,
 			foreground: new ConsultForeground(),
-			effort: effort as never,
+			cycle: effort as never,
 		}),
 		terminate: new ConsultTerminateTool(supervisor, effort as never),
 	};

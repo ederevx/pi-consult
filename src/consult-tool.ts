@@ -27,7 +27,7 @@ import type {
 	ConsultantResult,
 	FallbackMetadata,
 } from "./contracts.ts";
-import type { AgentEffortPolicy } from "./agent-effort-policy.ts";
+import type { ConsultCycle } from "./consult-cycle.ts";
 import type { AnswerFormatter } from "./answer-formatter.ts";
 import type { ArtifactStore, ConsultPaths } from "./artifact-store.ts";
 import type { BriefComposer } from "./brief-composer.ts";
@@ -76,7 +76,7 @@ export interface ConsultToolDeps {
 	supervisor: ConsultSupervisor;
 	foreground: ConsultForeground;
 	/** pi's thinking-level cycle; engaged by a consult, settled by its receipt. */
-	effort?: AgentEffortPolicy;
+	cycle?: ConsultCycle;
 	/** Snapshots the session that starts an invocation: registry, copied
 	 *  scope, and default model, read once through the live API. */
 	bindEnvironment?: (ctx: ExtensionToolContext) => BoundEnvironment;
@@ -329,7 +329,7 @@ export class ConsultTool {
 			consultId, sessionId, params, targets, composed, continuation, paths, ctx, nativeResume);
 		const invocation = await this.deps.supervisor.start(spec);
 
-		this.deps.effort?.engage(ctx, consultId, params.background !== true);
+		this.deps.cycle?.engage(ctx, consultId);
 		const steps = ctx.mode === "tui" && this.append
 			? new ConsultStepCards(consultId, this.stepAppend(sessionId)) : undefined;
 		steps?.start(this.startInfo(params, spec));
@@ -362,9 +362,9 @@ export class ConsultTool {
 
 		const receipt: ConsultReceipt = await this.deps.supervisor.receipt(invocation);
 		if (invocation.state === "terminated") {
-			this.deps.effort?.settle(consultId, undefined, undefined, false);
+			this.deps.cycle?.settle(consultId);
 		} else {
-			this.deps.effort?.settle(consultId, receipt.details, receipt.answers);
+			this.deps.cycle?.settle(consultId, receipt.details, receipt.answers);
 		}
 		return {
 			content: [

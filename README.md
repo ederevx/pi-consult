@@ -5,12 +5,13 @@ consultants — **Claude Code** and **OpenAI Codex** — behind an
 acknowledgement gate, and every task ends with a consultation: a sanity check
 for a simple change, an audit for anything larger. In consultant mode the
 consultant owns the design and its verification; pi owns implementation and
-execution, at low thinking effort, and consults again at any roadblock.
+execution, never changes its own thinking level, and consults again at any
+roadblock.
 
 ## Install
 
 ```bash
-pi install git:github.com/ederevx/pi-consult@v0.24.0
+pi install git:github.com/ederevx/pi-consult@v0.26.0
 ```
 
 The package has no runtime dependencies; it uses the host-provided
@@ -186,25 +187,16 @@ The catalogue instructs the agent, and the tool's prompt guidelines repeat it:
   unaudited. `Consultant fallback: no consultant available - <reason>.` covers
   roadblocks only, never an audit or a closing consultation.
 
-### pi's thinking level
+### The consultation cycle
 
 From the first consultant answer that gives pi a plan without an approved
-verdict, pi-consult captures pi's thinking level and lowers it to `low`
-(`medium` where the model has no `low`) while pi executes that plan. Waiting on
-a consult lifts the level again; a background consult leaves it in place. The
-lift cannot cover the turn that writes the brief, which runs before pi-consult
-sees the call. When the consult finishes the level is captured and lowered
-again if the plan is still in force: a failed or timed-out consult leaves it in
-force, and a result the user stopped with Escape takes effect at the next run.
-An approved answer, a terminated consult, or the end of the run returns the
-captured level. On a model with nothing below `high` it warns and reports the
-hold unsupported. While executing under the plan any raise, including the
-automatic one a model switch makes, is lowered again; only
-`/consult-effort release` ends a cycle early
-(`/consult-effort` alone shows its state). The cycle ends, and pi's previous
-level returns, when one of these markers qualifies. Completion markers must be
-the final non-blank line; fallback and user-request markers must appear on
-their own plain lines.
+verdict, the cycle is open until that answer is approved, the consult is
+terminated, or the run settles. pi's thinking level is never captured, lowered,
+or restored: a plan is executed at whatever level pi's own settings give it,
+and a model switch behaves exactly as it does outside a cycle. The cycle ends
+when one of these markers qualifies. Completion markers must be the final
+non-blank line; fallback and user-request markers must appear on their own
+plain lines.
 
 - `Consultation cycle: complete - <consult id> verified.` - the cited
   consult's answer ends with a passing convention audit line and the approved
@@ -224,15 +216,11 @@ tells the agent once per distinct reason what still closes the cycle: the
 result to wait for, the consult to continue for its verdict, or the fresh
 audit to spawn. The one exception: when every consultant the cited consult
 ran against has expired (quota, credit, or auth exhaustion, or found
-unavailable), the cycle closes unverified and pi's previous level returns.
+unavailable), the cycle closes unverified.
 
 Markers inside code fences or blockquotes, or quoted mid-sentence, are
 ignored. The cycle is recorded on the session branch, so reload, compaction,
-and `/tree` navigation carry it; leaving a branch mid-cycle restores the
-level. `off`, `minimal`, and `low` are left alone, the configured default for
-new sessions is unchanged, and consultant `effort` settings are unaffected.
-`/consult-status` and `/consult-effort` report the current rung of the audit
-ladder.
+and `/tree` navigation carry it. Consultant `effort` settings are unaffected.
 
 ### Live output
 
@@ -308,7 +296,8 @@ or a provider error — never a timeout or an abort — one private conversation
 with the selected pi model serves it instead — and only after every requested
 consultant ran to such a failure: one success, timeout, abort, or
 non-eligible error blocks the takeover. The fallback model is chosen in
-`/consult-settings` from only the models the session can actually use
+`/consult-settings` from only the models the session can actually use:
+the row opens pi's `/model` layout with a fuzzy search over the catalogue
 (`fallback.model`; unset follows pi's own default). Its reasoning effort is
 `fallback.reasoning`: the row offers only the levels the selected model's
 thinking map supports, unset follows the model's default, and a level the
@@ -339,9 +328,8 @@ spawned; a suspected secret is refused, never sent.
 
 ## Commands
 
-- `/consult-status` — show acknowledgement state and consultation history.
-- `/consult-effort` — show the thinking-level hold; `/consult-effort release`
-  ends it.
+- `/consult-status` — show acknowledgement state, the open cycle, and
+  consultation history.
 - `/consult-settings` — open pi's settings dock for the `piConsult`
   object, or use `/consult-settings key=value`, `/consult-settings list`, and
   `/consult-settings reset` from the command line for scripted and headless

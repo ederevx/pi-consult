@@ -158,7 +158,7 @@ test("consult sessions: Escape detaches instead of aborting", async () => {
 	assertEq((last.options as { triggerTurn?: boolean }).triggerTurn, false,
 		"an Escape detach waits for the user");
 	assertEq(settleArgs.length, 1, "the delivery settles once");
-	assertEq(settleArgs[0][3], false, "an escaped result is not executed");
+	assertEq(settleArgs[0][0], result.details.consultId, "the delivery settles that consult");
 });
 
 test("consult sessions: delivery settles by how the consult ended", () => {
@@ -178,14 +178,15 @@ test("consult sessions: delivery settles by how the consult ended", () => {
 	delivery.announce(invocation("c-esc", "escape", "completed"), receipt as never);
 	delivery.announce(invocation("c-term", "background", "terminated"), receipt as never);
 
-	assertEq(settles[0][3], true, "a resumed turn executes the answer");
+	assertEq(settles[0][0], "c-bg", "a resumed turn settles its consult");
+	assertEq(settles[0][1], receipt.details, "the resumed turn carries the receipt");
 	assertEq(sent[0].triggerTurn, true);
+	assertEq(settles[1][0], "c-esc", "an escaped result still settles");
 	assertEq(settles[1][1], receipt.details, "an escaped result still accounts");
-	assertEq(settles[1][3], false, "no turn starts, so nothing executes");
 	assertEq(sent[1].triggerTurn, false);
+	assertEq(settles[2][0], "c-term", "a terminated consult settles");
 	assertEq(settles[2][1], undefined, "a terminated consult carries no details");
 	assertEq(settles[2][2], undefined, "a terminated consult carries no answers");
-	assertEq(settles[2][3], false);
 	assertEq(sent[2].triggerTurn, false);
 });
 
@@ -500,10 +501,9 @@ test("consult sessions: terminate settles only a successful termination", async 
 	assert(settleArgs.length >= 1, "the successful terminate settles the consult");
 	for (const args of settleArgs) {
 		assertEq(args[0], started.details.consultId);
-		assertEq(args.length, 4, "terminate reports the consult executing nothing");
+		assertEq(args.length, 1, "terminate reports the consult executing nothing");
 		assertEq(args[1], undefined, "terminate passes no details");
 		assertEq(args[2], undefined, "terminate passes no answers");
-		assertEq(args[3], false, "a terminated consult is not executed");
 	}
 
 	const failed = await fixture.terminate.execute({ id: "c-000000000000" });

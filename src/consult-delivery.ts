@@ -11,7 +11,7 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-import type { AgentEffortPolicy } from "./agent-effort-policy.ts";
+import type { ConsultCycle } from "./consult-cycle.ts";
 import type { AnswerFormatter } from "./answer-formatter.ts";
 import { RESULT_MESSAGE, STALL_MESSAGE } from "./contracts.ts";
 import type { ConsultInvocation } from "./consult-invocation.ts";
@@ -28,7 +28,7 @@ export class ConsultDelivery {
 	private readonly pi: ExtensionAPI;
 	private readonly identity: SessionIdentity;
 	private readonly formatter: AnswerFormatter;
-	private readonly effort: AgentEffortPolicy | undefined;
+	private readonly cycle: ConsultCycle | undefined;
 	private readonly announced = new Set<string>();
 	private readonly missed = new Map<string, HeldResult>();
 
@@ -36,12 +36,12 @@ export class ConsultDelivery {
 		pi: ExtensionAPI,
 		identity: SessionIdentity,
 		formatter: AnswerFormatter,
-		effort?: AgentEffortPolicy,
+		cycle?: ConsultCycle,
 	) {
 		this.pi = pi;
 		this.identity = identity;
 		this.formatter = formatter;
-		this.effort = effort;
+		this.cycle = cycle;
 	}
 
 	/** Deliver a finished background consult, once, in its own session;
@@ -106,9 +106,9 @@ export class ConsultDelivery {
 			},
 		);
 		if (!terminated) {
-			this.effort?.settle(invocation.consultId, receipt.details, receipt.answers, resumes);
+			this.cycle?.settle(invocation.consultId, receipt.details, receipt.answers);
 		} else {
-			this.effort?.settle(invocation.consultId, undefined, undefined, false);
+			this.cycle?.settle(invocation.consultId);
 		}
 	}
 

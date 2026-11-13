@@ -9,7 +9,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { AgentAvailability } from "./agent-availability.ts";
-import { AgentEffortPolicy } from "./agent-effort-policy.ts";
+import { ConsultCycle } from "./consult-cycle.ts";
 import { AuditorSession } from "./auditor-session.ts";
 import { AnswerFormatter } from "./answer-formatter.ts";
 import { ArtifactStore } from "./artifact-store.ts";
@@ -112,17 +112,17 @@ export class ConsultExtension {
 		const artifacts = new ArtifactStore(config.artifactDir);
 		const records = new ConsultRecordStore(artifacts);
 		const identity = new SessionIdentity();
-		const effort = new AgentEffortPolicy(config);
+		const cycle = new ConsultCycle(config);
 		const formatter = new AnswerFormatter(config.output);
-		const delivery = new ConsultDelivery(pi, identity, formatter, effort);
+		const delivery = new ConsultDelivery(pi, identity, formatter, cycle);
 		const supervisor = new ConsultSupervisor(runner, records, delivery);
 
-		effort.register(pi);
+		cycle.register(pi);
 		const auditor = new AuditorSession();
 		auditor.register(pi);
 
 		const foreground = new ConsultForeground();
-		new PreConsultTool(contract, runner, effort).register(pi);
+		new PreConsultTool(contract, runner, cycle).register(pi);
 		new ConsultTool({
 			config,
 			ledger,
@@ -135,11 +135,11 @@ export class ConsultExtension {
 			formatter,
 			supervisor,
 			foreground,
-			effort,
+			cycle,
 			fallback: (context) => nativeFallback.takeover(context),
 			bindEnvironment,
 		}).register(pi);
-		new ConsultTerminateTool(supervisor, effort).register(pi);
+		new ConsultTerminateTool(supervisor, cycle).register(pi);
 		new ImplementationGate(ledger, toolClassifier, contract, auditor).register(pi);
 		new AgentAvailability(failureClassifier, () => index.latest()?.consultId ?? null).register(pi);
 		new SessionLifecycle(
@@ -153,7 +153,7 @@ export class ConsultExtension {
 			contract,
 			config,
 		).register(pi);
-		new ConsultCommands(pi, ledger, index, contract, effort).register();
+		new ConsultCommands(pi, ledger, index, contract, cycle).register();
 	}
 }
 

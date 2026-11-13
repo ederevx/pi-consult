@@ -1,14 +1,14 @@
 /**
  * pi-consult — the independent-audit ladder in consultant mode.
  *
- * Drives the real AgentEffortPolicy: a consultant hands control back only
+ * Drives the real ConsultCycle: a consultant hands control back only
  * with an approved verdict, each enabled consultant can expire, and only
  * then may an independent agent spawned through agent-comms with the audit
  * header settle the cycle through the report the comms log records.
  */
 
 import { ConsultConfig } from "../src/consult-config.ts";
-import { AgentEffortPolicy } from "../src/agent-effort-policy.ts";
+import { ConsultCycle } from "../src/consult-cycle.ts";
 import type { BranchEntry } from "../src/receipt-ledger.ts";
 import type { RunStatus } from "../src/contracts.ts";
 import {
@@ -32,7 +32,7 @@ import {
 interface Setup {
 	host: FakeEffortHost;
 	ctx: FakeContext;
-	policy: AgentEffortPolicy;
+	policy: ConsultCycle;
 	config: ConsultConfig;
 }
 
@@ -47,7 +47,7 @@ function setup(chosen: ConsultConfig = config()): Setup {
 	const host = new FakeEffortHost("high", THINKING_LEVELS);
 	const ctx = new FakeContext(host.branch, "session-audit", scratchDir(), true);
 	host.attachContext(ctx);
-	const policy = new AgentEffortPolicy(chosen);
+	const policy = new ConsultCycle(chosen);
 	policy.register(host as never);
 	host.emit("session_start", {});
 	return { host, ctx, policy, config: chosen };
@@ -206,7 +206,7 @@ test("audit: one plain error does not expire; two do", async () => {
 	assertEq(state.host.getThinkingLevel(), "high");
 });
 
-test("audit: a timeout reinstating the hold does not close the cycle or reset failures", () => {
+test("audit: a timeout does not close the cycle or reset failures", () => {
 	const state = setup(config({ codex: { enabled: false } }));
 	state.policy.engage(state.ctx as never, "c-e020");
 	state.policy.settle(
@@ -218,7 +218,7 @@ test("audit: a timeout reinstating the hold does not close the cycle or reset fa
 	state.policy.settle("c-e021", consultDetails("c-e021", [consultRun("claude", "timeout")], false));
 	assertEq(lastEntry(state.host).holding, true, "the cycle stays open");
 	assertEq((lastEntry(state.host).failures as Record<string, number>).claude, 1, "the timeout still counts");
-	assertEq(state.host.getThinkingLevel(), "low", "the plan is still in force");
+	assertEq(state.host.setCalls.length, 0, "the plan changes no level");
 });
 
 test("audit: two timed-out retries with a plan in force still expire the consultant", async () => {
@@ -238,7 +238,7 @@ test("audit: two timed-out retries with a plan in force still expire the consult
 	assertEq(state.host.getThinkingLevel(), "high");
 });
 
-test("audit: an audit spawn never raises the level above the plan's hold", () => {
+test("audit: an audit spawn never touches the level", () => {
 	const state = expiredAudit();
 	state.policy.engage(state.ctx as never, "c-e040");
 	state.policy.settle(
@@ -246,17 +246,16 @@ test("audit: an audit spawn never raises the level above the plan's hold", () =>
 		consultDetails("c-e040", [consultRun("claude", "ok")]),
 		verdictAnswers({ claude: "The plan." }),
 	);
-	assertEq(state.host.getThinkingLevel(), "low", "the plan lowered the level");
+	assertEq(state.host.getThinkingLevel(), "high", "the plan leaves the level alone");
 	state.policy.engage(state.ctx as never, "c-e041");
 	state.policy.settle("c-e041", consultDetails("c-e041", [consultRun("claude", "timeout")], false));
-	assertEq(state.host.getThinkingLevel(), "low", "the timeout reinstated the hold");
-	state.host.setCalls.length = 0;
+	assertEq(state.host.getThinkingLevel(), "high", "a timeout leaves the level alone");
 	commsTools(state.host);
 	state.host.toolCall("comms_spawn", { task: "pi-consult independent audit - check." }, "t1");
-	assertEq(state.host.getThinkingLevel(), "low", "the launch leaves the hold in place");
+	assertEq(state.host.getThinkingLevel(), "high", "the launch leaves the level alone");
 	state.host.toolExecutionEnd("t1", { result: spawned("tm-1") });
-	assertEq(state.host.getThinkingLevel(), "low", "and so does its end");
-	assertEq(state.host.setCalls.length, 0, "the launch asks for no level change");
+	assertEq(state.host.getThinkingLevel(), "high", "and so does its end");
+	assertEq(state.host.setCalls.length, 0, "nothing asks for a level change");
 });
 
 test("audit: a settle with nothing owed releases the level and keeps the ladder", () => {
@@ -468,7 +467,7 @@ test("audit: reload restores an owed auditor and a later report settles it", asy
 	const host2 = new FakeEffortHost(first.host.getThinkingLevel(), THINKING_LEVELS, first.host.branch);
 	const ctx2 = new FakeContext(first.host.branch, "session-audit-2", scratchDir(), true);
 	host2.attachContext(ctx2);
-	const policy2 = new AgentEffortPolicy(shared);
+	const policy2 = new ConsultCycle(shared);
 	policy2.register(host2 as never);
 	host2.emit("session_start", {});
 	logReport(first, "tm-reload", "approved");
@@ -533,7 +532,7 @@ test("audit: an outstanding stop survives a reload", async () => {
 	const host2 = new FakeEffortHost(first.host.getThinkingLevel(), THINKING_LEVELS, first.host.branch);
 	const ctx2 = new FakeContext(first.host.branch, "session-audit-4", scratchDir(), true);
 	host2.attachContext(ctx2);
-	const policy2 = new AgentEffortPolicy(shared);
+	const policy2 = new ConsultCycle(shared);
 	policy2.register(host2 as never);
 	host2.emit("session_start", {});
 	commsTools(host2);
@@ -633,14 +632,10 @@ test("audit: no consultant available keeps the cycle open over a running session
 	assertIncludes(notices(state.ctx), "tm-probe has not been confirmed ended");
 });
 
-test("audit: an explicit release ends the obligation and names the running session", async () => {
+test("audit: a user audit ends the obligation and names the running session", async () => {
 	const state = expiredAudit();
 	spawnAuditor(state, "tm-release");
-	const handler = state.host.commands.get("consult-effort")?.handler as (
-		args: string,
-		commandCtx: unknown,
-	) => Promise<void>;
-	await handler("release", state.ctx);
+	await state.host.run("Audit by pi at the user's request - the owner asked.");
 	assertEq(lastEntry(state.host).holding, false);
 	assertIncludes(notices(state.ctx), "tm-release was left running");
 	assertEq(JSON.stringify(lastEntry(state.host).auditorSessions), "{}");
@@ -663,7 +658,7 @@ test("audit: the leftover-session warning reaches the transcript without a UI", 
 	const host = new FakeEffortHost("high", THINKING_LEVELS);
 	const ctx = new FakeContext(host.branch, "session-audit-headless", scratchDir(), false);
 	host.attachContext(ctx);
-	const policy = new AgentEffortPolicy(config());
+	const policy = new ConsultCycle(config());
 	policy.register(host as never);
 	host.emit("session_start", {});
 	policy.engage(ctx as never, "c-exp002");
@@ -672,11 +667,7 @@ test("audit: the leftover-session warning reaches the transcript without a UI", 
 		consultDetails("c-exp002", [consultRun("claude", "unavailable"), consultRun("codex", "auth")], false),
 	);
 	spawnAuditor({ host }, "tm-headless");
-	const handler = host.commands.get("consult-effort")?.handler as (
-		args: string,
-		commandCtx: unknown,
-	) => Promise<void>;
-	await handler("release", ctx);
+	await host.run("Audit by pi at the user's request - the owner asked.");
 	assertEq(JSON.stringify(lastEntry(host).auditorSessions), "{}");
 	const content = host.messages.map((entry) => (entry.message as { content?: string }).content ?? "").join("\n");
 	assertIncludes(content, "tm-headless was left running");
@@ -770,7 +761,7 @@ test("audit: a reload mid-spawn drops the pending set without touching the level
 	const host2 = new FakeEffortHost(first.host.getThinkingLevel(), THINKING_LEVELS, first.host.branch);
 	const ctx2 = new FakeContext(first.host.branch, "session-audit-3", scratchDir(), true);
 	host2.attachContext(ctx2);
-	const policy2 = new AgentEffortPolicy(shared);
+	const policy2 = new ConsultCycle(shared);
 	policy2.register(host2 as never);
 	host2.emit("session_start", {});
 	assertEq(host2.getThinkingLevel(), "high", "load drops the pending spawn");

@@ -1,41 +1,33 @@
 /**
- * pi-consult — pi's own thinking level in consultant mode.
+ * pi-consult — the consultation cycle.
  *
- * Owns one consultation cycle: from an unapproved consultant answer, pi runs
- * at low thinking for the rest of the run that executes it, and returns to
- * normal when the answer is approved, the consult is terminated, or the run
- * settles. The plan that answer left in force is recorded, so a consult that
- * fails or times out later reinstates the hold for the plan still in progress,
- * and a result the user stopped with Escape reinstates it at the next run. The
- * cycle closes on a passing convention audit and an approved
- * verdict, or, once every enabled consultant has expired, on an approved
- * report from a dedicated independent auditor spawned through agent-comms. A
- * fallback the records support, an explicit user audit, or
- * `/consult-effort release` also ends it. Every change is persisted on the
- * session branch. Consultant `effort` settings are
- * not touched. A refused completion line is answered once with what still
- * closes the cycle; it closes unverified only when every consultant the cited
- * consult ran against has expired.
+ * Owns one consultation cycle: from an unapproved consultant answer until
+ * that answer is approved, the consult is terminated, or the run settles. The
+ * cycle closes on a passing convention audit and an approved verdict, or, once
+ * every enabled consultant has expired, on an approved report from a dedicated
+ * independent auditor spawned through agent-comms; a fallback the records
+ * support, or an explicit user audit, also ends it. Every change is persisted
+ * on the session branch. pi's own thinking level is never touched here, and
+ * consultant `effort` settings are not touched either. A refused completion
+ * line is answered once with what still closes the cycle; it closes unverified
+ * only when every consultant the cited consult ran against has expired.
  */
 
-import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import type { ConsultConfig } from "./consult-config.ts";
 import type { ConsultDetails, ConsultRun, ConsultantAvailability, ConsultantName, RunParticipant } from "./contracts.ts";
 import { FailureClassifier } from "./failure-classifier.ts";
 import { FallbackEvidence } from "./fallback-evidence.ts";
 
-type Level = ReturnType<ExtensionAPI["getThinkingLevel"]>;
-
 /** The persisted cycle state, written on every change. */
-interface EffortEntry {
+interface CycleEntry {
+	/// The field name predates the cycle: it is the open flag, not a hold.
 	holding: boolean;
-	previous?: Level;
-	plan?: string;
-	due: boolean;
 	owed: string[];
 	fresh: string[];
 	approved: string[];
+	verifiedFallbackApprovals: string[];
 	failures: Partial<Record<ConsultantName, number>>;
 	expired: ConsultantName[];
 	unavailable: ConsultantName[];
@@ -67,7 +59,7 @@ interface SourceLine {
 	kind: "plain" | "quote" | "fence" | "indented";
 }
 
-export class AgentEffortPolicy {
+export class ConsultCycle {
 	static readonly ENTRY = "pi-consult-effort";
 	static readonly AUDIT_HEADER = /^pi-consult independent audit - \S.*$/;
 	private static readonly COMPLETE = /^Consultation cycle: complete - (c-[0-9a-f]+) verified\.$/;
@@ -84,20 +76,15 @@ export class AgentEffortPolicy {
 	private static readonly MUTATIONS = new Set(["edit", "write", "bash", "powershell"]);
 	private static readonly RETRYABLE = new Set(["error", "timeout"]);
 	private static readonly EXPIRING = new Set(["unavailable", "auth"]);
-	private static readonly LEVELS = new Set<string>(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
-	private static readonly LOWER = new Set<Level>(["medium", "high", "xhigh", "max"]);
-	private static readonly ABOVE = new Set<Level>(["high", "xhigh", "max"]);
 	private static readonly NAMES: readonly ConsultantName[] = ["claude", "codex"];
 	private readonly config: ConsultConfig;
 	private readonly classifier = new FailureClassifier();
 	private pi: ExtensionAPI | undefined;
-	private holding = false;
-	private previous: Level | undefined;
-	private plan: string | undefined;
-	private due = false;
+	private open = false;
 	private owed = new Set<string>();
 	private fresh = new Set<string>();
 	private approved = new Set<string>();
+	private verifiedFallbackApprovals = new Set<string>();
 	private failures = new Map<ConsultantName, number>();
 	private expired = new Set<ConsultantName>();
 	private unavailable = new Set<ConsultantName>();
@@ -109,7 +96,6 @@ export class AgentEffortPolicy {
 	private nudged: string | undefined;
 	private readonly spawns = new Set<string>();
 	private readonly stops = new Map<string, string>();
-	private unsupported = false;
 	private lastMessage: unknown;
 	private live: ExtensionContext | undefined;
 	private outcome = "completed";
@@ -118,7 +104,7 @@ export class AgentEffortPolicy {
 		this.config = config;
 	}
 
-	/** Register the cycle's observers and the user-only release command. */
+	/** Register the cycle's observers. */
 	register(pi: ExtensionAPI): void {
 		this.pi = pi;
 		pi.on("session_start", (_event, ctx: ExtensionContext) => this.load(ctx, false));
@@ -127,7 +113,6 @@ export class AgentEffortPolicy {
 			this.rollback(ctx);
 			this.lastMessage = undefined;
 			this.outcome = "completed";
-			this.resume(ctx);
 		});
 		pi.on("tool_call", (event) =>
 			this.observeCall(
@@ -150,43 +135,26 @@ export class AgentEffortPolicy {
 			this.rollback(ctx);
 			this.settled(ctx);
 		});
-		pi.on("model_select", (_event, ctx: ExtensionContext) => {
-			if (this.holding && this.previous) this.lower(ctx);
-		});
-		// Source-less: a model switch sets the level before model_select fires,
-		// so no selection is read as a user release; only the command releases.
-		pi.on("thinking_level_select", (event, ctx: ExtensionContext) => {
-			if (this.holding && this.previous && AgentEffortPolicy.LOWER.has(event.level)) this.lower(ctx);
-		});
-		pi.registerCommand("consult-effort", {
-			description: "Show pi-consult's thinking-level hold and audit ladder, or end the hold with `release`.",
-			handler: async (args: string, ctx: ExtensionCommandContext) => this.command(args, ctx),
-		});
 	}
 
-	/** A consult was launched: start the cycle, or join the running one. A call
-	 *  that waits lifts a held level; a background one leaves pi executing. */
-	engage(ctx: ExtensionContext | undefined, consultId: string, waits = true): void {
+	/** A consult was launched: start the cycle, or join the running one. */
+	engage(ctx: ExtensionContext | undefined, consultId: string): void {
 		if (!this.pi || !this.active()) return;
-		if (!this.holding) {
-			this.holding = true;
+		if (!this.open) {
+			this.open = true;
 			this.resetCycle();
 		}
 		if (ctx) this.live = ctx;
 		this.owed.add(consultId);
 		this.fresh.add(consultId);
-		if (waits) this.due = false;
 		this.persist();
-		if (waits) this.release(this.live, true);
 	}
 
-	/** The model received this consult's final receipt (delivered or returned).
-	 *  `executes` says the answer is about to be executed. */
+	/** The model received this consult's final receipt (delivered or returned). */
 	settle(
 		consultId: string,
 		details?: ConsultDetails,
 		answers?: ReadonlyMap<RunParticipant, string>,
-		executes = true,
 	): void {
 		if (!this.owed.delete(consultId)) return;
 		let answered: ConsultRun[] = [];
@@ -201,7 +169,7 @@ export class AgentEffortPolicy {
 				answered.length > 0 &&
 				answered.every(
 					(run) =>
-						AgentEffortPolicy.approves(answers?.get(run.consultant)) &&
+						ConsultCycle.approves(answers?.get(run.consultant)) &&
 						(run.consultant !== "fallback" || FallbackEvidence.usable(run)),
 				)
 			) {
@@ -218,16 +186,7 @@ export class AgentEffortPolicy {
 				if (run.consultant !== "fallback") this.account(run);
 			}
 		}
-		if (this.holding && answered.length > 0) {
-			this.plan = this.approved.has(consultId) ? undefined : consultId;
-		}
-		// A terminated consult carries no details and reinstates nothing.
-		const reinstates = this.holding && details !== undefined && this.plan !== undefined;
-		if (details) this.due = reinstates && !executes;
 		this.persist();
-		if (!this.holding) return;
-		if (reinstates && executes) this.hold();
-		else this.release(this.live);
 	}
 
 	/** The `pre_consult` probe result. */
@@ -236,25 +195,15 @@ export class AgentEffortPolicy {
 			if (item.available) this.unavailable.delete(item.name);
 			else this.unavailable.add(item.name);
 		}
-		if (!this.holding) return;
+		if (!this.open) return;
 		this.persist();
 		if (!this.fallbackRefusal()) this.close(ctx, "no consultant available");
 	}
 
-	/** A one-line state for `/consult-status` and `/consult-effort`. */
+	/** A one-line state for `/consult-status`. */
 	describe(): string {
-		return `${this.holdText()} | audit ladder: ${this.ladder()}`;
-	}
-
-	private holdText(): string {
-		if (!this.holding) return "effort hold: off";
-		const level = this.pi?.getThinkingLevel() ?? "unknown";
-		const state = this.unsupported ? "unsupported" : this.previous ? "on" : "open";
-		const owed = this.owed.size > 0 ? `, owed: ${[...this.owed].join(", ")}` : "";
-		const plan = this.plan ? `, plan: ${this.plan}` : "";
-		const due = this.due ? ", due" : "";
-		if (state === "open") return `effort hold: open (${level}${owed}${plan}${due})`;
-		return `effort hold: ${state} (${level}, restores to ${this.previous ?? "unchanged"}${owed}${plan}${due})`;
+		const owed = this.owed.size > 0 ? ` (owed: ${[...this.owed].join(", ")})` : "";
+		return `consultation cycle: ${this.open ? "open" : "closed"}${owed} | audit ladder: ${this.ladder()}`;
 	}
 
 	private ladder(): string {
@@ -264,20 +213,16 @@ export class AgentEffortPolicy {
 		return "stopped: no consultant and no agent-comms; pi audits only on the user's explicit request";
 	}
 
-	private restore(ctx: ExtensionContext | undefined, reason: string): void {
+	private finish(ctx: ExtensionContext | undefined, reason: string): void {
 		const pi = this.pi;
-		if (!pi || !this.holding) return;
+		if (!pi || !this.open) return;
 		const context = ctx ?? this.live;
-		const previous = this.previous;
 		const left = [...this.auditorSessions.values()].filter((item) => !item.ended);
-		this.holding = false;
-		this.previous = undefined;
-		this.unsupported = false;
+		this.open = false;
 		this.spawns.clear();
 		this.resetCycle();
 		this.persist();
-		if (previous && previous !== pi.getThinkingLevel()) pi.setThinkingLevel(previous);
-		this.notify(context, `pi-consult: ${reason}; pi's thinking level restored to ${pi.getThinkingLevel()}.`, "info");
+		this.notify(context, `pi-consult: ${reason}; consultation cycle closed.`, "info");
 		if (left.length > 0) {
 			const names = left.map((item) => item.name).join(", ");
 			const content =
@@ -285,7 +230,7 @@ export class AgentEffortPolicy {
 			// The record outlives the session's UI, so the message carries the
 			// warning into the transcript whether or not a UI can show it.
 			this.pi?.sendMessage(
-				{ customType: AgentEffortPolicy.LEFTOVER, content, display: true },
+				{ customType: ConsultCycle.LEFTOVER, content, display: true },
 				{ triggerTurn: false },
 			);
 			this.notify(context, content, "warning");
@@ -296,15 +241,13 @@ export class AgentEffortPolicy {
 		// A cycle owes only what it is still waiting for; an id whose receipt
 		// never arrived must not outlive it.
 		this.owed.clear();
-		this.plan = undefined;
-		this.due = false;
 		this.fresh.clear();
 		this.approved.clear();
 		this.verifiedFallbackApprovals.clear();
 		this.failures.clear();
 		this.expired.clear();
 		// A cycle owns the sessions it spawned: an ended cycle stops
-		// waiting for a stop, and restore() names any left running.
+		// waiting for a stop, and finish() names any left running.
 		this.auditorSessions.clear();
 		this.stops.clear();
 		this.auditors.clear();
@@ -312,67 +255,6 @@ export class AgentEffortPolicy {
 		this.auditFailed = false;
 		this.consulted.clear();
 		this.nudged = undefined;
-	}
-
-	private lower(ctx: ExtensionContext | undefined): void {
-		const pi = this.pi;
-		if (!pi) return;
-		const context = ctx ?? this.live;
-		const current = pi.getThinkingLevel();
-		if (!AgentEffortPolicy.LOWER.has(current)) return;
-		pi.setThinkingLevel("low");
-		if (AgentEffortPolicy.ABOVE.has(pi.getThinkingLevel())) pi.setThinkingLevel("medium");
-		const after = pi.getThinkingLevel();
-		const unsupported = AgentEffortPolicy.ABOVE.has(after);
-		if (unsupported && !this.unsupported) {
-			this.notify(
-				context,
-				`pi-consult: this model offers nothing below ${after}; the consultation hold is unsupported on it and pi stays at ${after}.`,
-				"warning",
-			);
-		} else if (!unsupported && after !== current) {
-			this.notify(
-				context,
-				`pi-consult: consultation hold: pi's thinking set to ${after} (was ${current}) while this run executes the answer; /consult-effort release ends the cycle early.`,
-				"info",
-			);
-		}
-		this.unsupported = unsupported;
-	}
-
-	/** Lower for the answer about to be executed: capture the level once. */
-	private hold(): void {
-		const pi = this.pi;
-		if (!pi || !this.holding) return;
-		if (!this.previous) {
-			this.previous = pi.getThinkingLevel();
-			this.persist();
-		}
-		this.lower(this.live);
-	}
-
-	/** No consultant instructions are in progress: restore without closing. */
-	private release(ctx: ExtensionContext | undefined, quiet = false): void {
-		const pi = this.pi;
-		const previous = this.previous;
-		if (!pi || !previous) return;
-		this.previous = undefined;
-		this.unsupported = false;
-		this.persist();
-		if (previous === pi.getThinkingLevel()) return;
-		pi.setThinkingLevel(previous);
-		if (quiet) return;
-		this.notify(ctx, `pi-consult: no consultant instructions in progress; pi's thinking level restored to ${pi.getThinkingLevel()}.`, "info");
-	}
-
-	/** The next run starts to execute a plan the user stopped with Escape: the
-	 *  hold fires here, before the run's first request reads the level. */
-	private resume(ctx: ExtensionContext): void {
-		if (!this.due) return;
-		this.live = ctx;
-		this.due = false;
-		this.persist();
-		if (this.plan) this.hold();
 	}
 
 	private account(run: ConsultRun): void {
@@ -384,17 +266,17 @@ export class AgentEffortPolicy {
 			return;
 		}
 		const kind = run.error ? this.classifier.classifyExpiry(run.error) : null;
-		if (AgentEffortPolicy.EXPIRING.has(run.status) || kind !== null) {
+		if (ConsultCycle.EXPIRING.has(run.status) || kind !== null) {
 			this.expired.add(name);
 			return;
 		}
-		if (AgentEffortPolicy.RETRYABLE.has(run.status)) {
+		if (ConsultCycle.RETRYABLE.has(run.status)) {
 			this.failures.set(name, (this.failures.get(name) ?? 0) + 1);
 		}
 	}
 
 	private serving(): ConsultantName[] {
-		return AgentEffortPolicy.NAMES.filter(
+		return ConsultCycle.NAMES.filter(
 			(name) =>
 				this.config.consultant(name).enabled &&
 				!this.unavailable.has(name) &&
@@ -416,8 +298,8 @@ export class AgentEffortPolicy {
 	}
 
 	private observeCall(name: string, toolCallId: string, input: Record<string, unknown> | undefined): void {
-		if (AgentEffortPolicy.MUTATIONS.has(name)) {
-			if (this.holding && this.fresh.size > 0) {
+		if (ConsultCycle.MUTATIONS.has(name)) {
+			if (this.open && this.fresh.size > 0) {
 				this.fresh.clear();
 				this.persist();
 			}
@@ -431,11 +313,11 @@ export class AgentEffortPolicy {
 			}
 			return;
 		}
-		if (name !== "comms_spawn" || !toolCallId || !pi || !this.holding) return;
+		if (name !== "comms_spawn" || !toolCallId || !pi || !this.open) return;
 		// The tool treats an empty argv as absent, so one task means what it means
 		// for the launch itself.
 		const argv = input?.argv;
-		if ((Array.isArray(argv) && argv.length > 0) || !AgentEffortPolicy.isAudit(input?.task)) return;
+		if ((Array.isArray(argv) && argv.length > 0) || !ConsultCycle.isAudit(input?.task)) return;
 		this.spawns.add(toolCallId);
 	}
 
@@ -450,13 +332,13 @@ export class AgentEffortPolicy {
 			return;
 		}
 		if (!this.spawns.delete(String(event.toolCallId ?? ""))) return;
-		if (this.holding) {
+		if (this.open) {
 			const result = (event.result ?? {}) as {
 				structuredContent?: unknown;
 				details?: unknown;
 			};
-			const id = event.isError ? undefined : AgentEffortPolicy.auditorId(result);
-			const session = event.isError ? undefined : AgentEffortPolicy.auditorSession(result);
+			const id = event.isError ? undefined : ConsultCycle.auditorId(result);
+			const session = event.isError ? undefined : ConsultCycle.auditorSession(result);
 			const serving = this.serving();
 			if (!id) {
 				this.auditFailed = true;
@@ -488,7 +370,7 @@ export class AgentEffortPolicy {
 	 *  confirmed stop stays confirmed: a later stop for that session is
 	 *  refused because there is nothing left to end. */
 	private confirmStop(name: string, event: { result?: unknown; isError?: boolean }): void {
-		if (!this.holding) return;
+		if (!this.open) return;
 		const entry = [...this.auditorSessions.values()].find((item) => item.name === name);
 		if (!entry || entry.ended) return;
 		const details = ((event.result ?? {}) as { details?: unknown }).details as
@@ -503,7 +385,7 @@ export class AgentEffortPolicy {
 		if (this.spawns.size === 0) return;
 		this.spawns.clear();
 		this.stops.clear();
-		if (!this.holding) return;
+		if (!this.open) return;
 		this.auditFailed = true;
 		this.persist();
 		this.notify(
@@ -515,15 +397,15 @@ export class AgentEffortPolicy {
 
 	private observeTurn(message: unknown, ctx: ExtensionContext): void {
 		this.lastMessage = message;
-		if (!this.holding) return;
+		if (!this.open) return;
 		this.collectReports(ctx);
-		const lines = AgentEffortPolicy.plainLines(AgentEffortPolicy.assistantText(message));
-		if (lines.some((line) => AgentEffortPolicy.USER_AUDIT.test(line))) {
-			this.restore(ctx, "audit by pi at the user's request");
+		const lines = ConsultCycle.plainLines(ConsultCycle.assistantText(message));
+		if (lines.some((line) => ConsultCycle.USER_AUDIT.test(line))) {
+			this.finish(ctx, "audit by pi at the user's request");
 			return;
 		}
 		if (
-			lines.some((line) => AgentEffortPolicy.AUDIT_UNAVAILABLE.test(line)) &&
+			lines.some((line) => ConsultCycle.AUDIT_UNAVAILABLE.test(line)) &&
 			this.commsPresent() &&
 			!this.auditFailed
 		) {
@@ -533,7 +415,7 @@ export class AgentEffortPolicy {
 				"warning",
 			);
 		}
-		if (!lines.some((line) => AgentEffortPolicy.FALLBACK.test(line))) return;
+		if (!lines.some((line) => ConsultCycle.FALLBACK.test(line))) return;
 		const refusal = this.fallbackRefusal();
 		if (refusal) this.notify(ctx, `pi-consult: consultant fallback stated, but ${refusal}; the cycle stays open.`, "warning");
 		else this.close(ctx, "consultant fallback");
@@ -545,17 +427,17 @@ export class AgentEffortPolicy {
 		const branch = ctx.sessionManager.getBranch() as unknown as Array<Record<string, unknown>>;
 		let changed = false;
 		for (const entry of branch) {
-			if (entry?.type !== "custom" || entry.customType !== AgentEffortPolicy.COMMS_LOG) continue;
+			if (entry?.type !== "custom" || entry.customType !== ConsultCycle.COMMS_LOG) continue;
 			const data = (entry.data ?? {}) as Record<string, unknown>;
 			const from = (data.from as { agentId?: unknown } | undefined)?.agentId;
 			if (data.direction !== "received" || data.kind !== "result" || typeof from !== "string") continue;
 			if (!this.auditors.has(from) || !this.owed.has(from)) continue;
 			this.owed.delete(from);
 			const payload = typeof data.payload === "string" ? data.payload : "";
-			const last = AgentEffortPolicy.lastPlain(payload) ?? "";
-			const verdict = last.match(AgentEffortPolicy.AUDIT_VERDICT)?.[1];
+			const last = ConsultCycle.lastPlain(payload) ?? "";
+			const verdict = last.match(ConsultCycle.AUDIT_VERDICT)?.[1];
 			if (verdict === "approved") {
-				if (AgentEffortPolicy.audited(payload)) this.independent.add(from);
+				if (ConsultCycle.audited(payload)) this.independent.add(from);
 			} else if (!verdict) this.auditFailed = true;
 			changed = true;
 		}
@@ -566,19 +448,13 @@ export class AgentEffortPolicy {
 		this.live = ctx;
 		const message = this.lastMessage;
 		this.lastMessage = undefined;
-		if (!this.holding) return;
-		if (this.outcome !== "completed") {
-			this.release(ctx);
-			return;
-		}
+		if (!this.open) return;
+		if (this.outcome !== "completed") return;
 		this.collectReports(ctx);
-		const line = AgentEffortPolicy.finalLine(message);
-		const consultId = line?.match(AgentEffortPolicy.COMPLETE)?.[1];
-		const auditor = consultId ? undefined : line?.match(AgentEffortPolicy.INDEPENDENT)?.[1];
-		if (!consultId && !auditor) {
-			this.release(ctx);
-			return;
-		}
+		const line = ConsultCycle.finalLine(message);
+		const consultId = line?.match(ConsultCycle.COMPLETE)?.[1];
+		const auditor = consultId ? undefined : line?.match(ConsultCycle.INDEPENDENT)?.[1];
+		if (!consultId && !auditor) return;
 		const refusal = consultId ? this.completionRefusal(consultId) : this.independentRefusal(auditor as string);
 		if (!refusal) {
 			this.close(ctx, consultId ? "the consultant handed control back" : "the independent audit approved the work");
@@ -589,7 +465,6 @@ export class AgentEffortPolicy {
 			this.close(ctx, `${spent.join(" and ")} expired before verifying ${consultId}; the cycle closes unverified`);
 		} else {
 			this.nudge(ctx, refusal);
-			this.release(ctx);
 		}
 	}
 
@@ -633,7 +508,7 @@ export class AgentEffortPolicy {
 			if (ctx) this.nudge(ctx, pending);
 			return;
 		}
-		this.restore(ctx, reason);
+		this.finish(ctx, reason);
 	}
 
 	private completionRefusal(consultId: string): Refusal | undefined {
@@ -720,24 +595,22 @@ export class AgentEffortPolicy {
 		this.nudged = content;
 		this.persist();
 		this.pi.sendMessage(
-			{ customType: AgentEffortPolicy.NUDGE, content, display: false },
+			{ customType: ConsultCycle.NUDGE, content, display: false },
 			refusal.kind === "owed" ? { deliverAs: "nextTurn" } : { deliverAs: "followUp", triggerTurn: true },
 		);
 	}
 
-	private load(ctx: ExtensionContext, navigated: boolean): void {
+	private load(ctx: ExtensionContext): void {
 		const pi = this.pi;
 		if (!pi) return;
 		this.live = ctx;
-		const wasPrevious = this.previous;
-		const data = AgentEffortPolicy.latest(ctx);
-		this.holding = data?.holding === true && this.active();
-		this.previous = this.holding ? data?.previous : undefined;
+		const data = ConsultCycle.latest(ctx);
+		this.open = data?.holding === true && this.active();
 		this.owed = new Set(data?.owed ?? []);
 		this.fresh = new Set(data?.fresh ?? []);
 		this.consulted = new Map(Object.entries(data?.consulted ?? {}));
 		this.verifiedFallbackApprovals = new Set(data?.verifiedFallbackApprovals ?? []);
-		this.approved = AgentEffortPolicy.approvals(
+		this.approved = ConsultCycle.approvals(
 			data?.approved,
 			this.verifiedFallbackApprovals,
 			this.consulted,
@@ -750,41 +623,14 @@ export class AgentEffortPolicy {
 		this.auditorSessions = new Map(Object.entries(data?.auditorSessions ?? {}));
 		this.auditFailed = data?.auditFailed === true;
 		this.nudged = data?.nudged;
-		this.plan = data?.plan;
-		this.due = data?.due === true;
 		this.spawns.clear();
 		this.stops.clear();
-		this.unsupported = false;
 		this.lastMessage = undefined;
-		if (this.previous) {
-			// A persisted hold has no run left to release it: restore now.
-			this.release(ctx);
-			return;
-		}
-		if (navigated && wasPrevious && wasPrevious !== pi.getThinkingLevel()) {
-			pi.setThinkingLevel(wasPrevious);
-			this.notify(ctx, `pi-consult: left a branch inside a consultation cycle; pi's thinking level restored to ${pi.getThinkingLevel()}.`, "info");
-		}
-	}
-
-	private async command(args: string, ctx: ExtensionCommandContext): Promise<void> {
-		if (args.trim() !== "release") {
-			ctx.ui.notify(`pi-consult: ${this.describe()}`, "info");
-			return;
-		}
-		if (!this.holding) {
-			ctx.ui.notify("pi-consult: no consultation hold is active.", "info");
-			return;
-		}
-		this.restore(ctx, "hold released by the user");
 	}
 
 	private persist(): void {
-		const data: EffortEntry = {
-			holding: this.holding,
-			previous: this.previous,
-			plan: this.plan,
-			due: this.due,
+		const data: CycleEntry = {
+			holding: this.open,
 			owed: [...this.owed],
 			fresh: [...this.fresh],
 			approved: [...this.approved],
@@ -799,7 +645,7 @@ export class AgentEffortPolicy {
 			consulted: Object.fromEntries(this.consulted),
 			nudged: this.nudged,
 		};
-		this.pi?.appendEntry(AgentEffortPolicy.ENTRY, data);
+		this.pi?.appendEntry(ConsultCycle.ENTRY, data);
 	}
 
 	private active(): boolean {
@@ -811,25 +657,24 @@ export class AgentEffortPolicy {
 	}
 
 	/** The last persisted entry on the branch, validated; undefined when absent. */
-	private static latest(ctx: ExtensionContext): Partial<EffortEntry> | undefined {
+	private static latest(ctx: ExtensionContext): Partial<CycleEntry> | undefined {
 		const branch = ctx.sessionManager.getBranch() as unknown as Array<Record<string, unknown>>;
 		for (let i = branch.length - 1; i >= 0; i--) {
 			const entry = branch[i];
-			if (entry?.type !== "custom" || entry.customType !== AgentEffortPolicy.ENTRY) continue;
+			if (entry?.type !== "custom" || entry.customType !== ConsultCycle.ENTRY) continue;
 			const raw = (entry.data ?? {}) as Record<string, unknown>;
 			const strings = (value: unknown): string[] =>
 				Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 			const names = (value: unknown): RunParticipant[] =>
-				AgentEffortPolicy.runNames(strings(value));
+				ConsultCycle.runNames(strings(value));
 			const failures: Partial<Record<ConsultantName, number>> = {};
 			const rawFailures = (typeof raw.failures === "object" && raw.failures !== null ? raw.failures : {}) as Record<string, unknown>;
-			for (const name of AgentEffortPolicy.NAMES) {
+			for (const name of ConsultCycle.NAMES) {
 				const count = rawFailures[name];
 				if (typeof count === "number" && Number.isFinite(count) && count > 0) failures[name] = Math.floor(count);
 			}
 			return {
 				holding: raw.holding === true,
-				previous: typeof raw.previous === "string" && AgentEffortPolicy.LEVELS.has(raw.previous) ? (raw.previous as Level) : undefined,
 				owed: strings(raw.owed),
 				fresh: strings(raw.fresh),
 				approved: strings(raw.approved),
@@ -839,12 +684,10 @@ export class AgentEffortPolicy {
 				unavailable: names(raw.unavailable),
 				auditors: strings(raw.auditors),
 				independent: strings(raw.independent),
-				auditorSessions: AgentEffortPolicy.auditorSessionsFrom(raw.auditorSessions),
+				auditorSessions: ConsultCycle.auditorSessionsFrom(raw.auditorSessions),
 				auditFailed: raw.auditFailed === true,
-				consulted: AgentEffortPolicy.consulted(raw.consulted),
+				consulted: ConsultCycle.consulted(raw.consulted),
 				nudged: typeof raw.nudged === "string" ? raw.nudged : undefined,
-				plan: typeof raw.plan === "string" ? raw.plan : undefined,
-				due: raw.due === true,
 			};
 		}
 		return undefined;
@@ -863,7 +706,7 @@ export class AgentEffortPolicy {
 		const out: Record<string, RunParticipant[]> = {};
 		for (const [id, names] of Object.entries(value as Record<string, unknown>)) {
 			if (!Array.isArray(names)) continue;
-			const valid = AgentEffortPolicy.runNames(
+			const valid = ConsultCycle.runNames(
 				names.filter((name): name is string => typeof name === "string"),
 			);
 			if (valid.length > 0) out[id] = valid;
@@ -874,7 +717,7 @@ export class AgentEffortPolicy {
 	private static isAudit(task: unknown): boolean {
 		if (typeof task !== "string") return false;
 		const first = task.split("\n").find((line) => line.trim() !== "")?.trim() ?? "";
-		return AgentEffortPolicy.AUDIT_HEADER.test(first);
+		return ConsultCycle.AUDIT_HEADER.test(first);
 	}
 
 	private static auditorId(event: { structuredContent?: unknown; details?: unknown }): string | undefined {
@@ -913,7 +756,7 @@ export class AgentEffortPolicy {
 
 	private static approves(answer: string | undefined): boolean {
 		if (!answer) return false;
-		return AgentEffortPolicy.VERDICT.test(AgentEffortPolicy.audited(answer) ?? "");
+		return ConsultCycle.VERDICT.test(ConsultCycle.audited(answer) ?? "");
 	}
 
 	/** The approvals a reload may keep: a primary consultant's answer stands on
@@ -936,9 +779,9 @@ export class AgentEffortPolicy {
 
 	/** The final plain line, only when a passing convention audit plainly precedes it. */
 	private static audited(text: string): string | undefined {
-		const [audit, last] = AgentEffortPolicy.classify(text).slice(-2);
+		const [audit, last] = ConsultCycle.classify(text).slice(-2);
 		if (audit?.kind !== "plain" || last?.kind !== "plain") return undefined;
-		return AgentEffortPolicy.CONVENTIONS.test(audit.text) ? last.text : undefined;
+		return ConsultCycle.CONVENTIONS.test(audit.text) ? last.text : undefined;
 	}
 
 	/** The last plain line of a final, tool-free assistant message. */
@@ -946,7 +789,7 @@ export class AgentEffortPolicy {
 		const record = message as { role?: string; content?: unknown };
 		if (record?.role !== "assistant" || !Array.isArray(record.content)) return undefined;
 		if (record.content.some((part) => (part as { type?: string })?.type === "toolCall")) return undefined;
-		return AgentEffortPolicy.lastPlain(AgentEffortPolicy.assistantText(message));
+		return ConsultCycle.lastPlain(ConsultCycle.assistantText(message));
 	}
 
 	private static assistantText(message: unknown): string {
@@ -1000,14 +843,14 @@ export class AgentEffortPolicy {
 
 	/** Plain lines anywhere: where a pi disclosure line may sit. */
 	private static plainLines(text: string): string[] {
-		return AgentEffortPolicy.classify(text)
+		return ConsultCycle.classify(text)
 			.filter((line) => line.kind === "plain")
 			.map((line) => line.text);
 	}
 
 	/** The final non-blank source line, only when it is plain. */
 	private static lastPlain(text: string): string | undefined {
-		const last = AgentEffortPolicy.classify(text).at(-1);
+		const last = ConsultCycle.classify(text).at(-1);
 		return last?.kind === "plain" ? last.text : undefined;
 	}
 }

@@ -5,6 +5,7 @@ import { ExtensionInputComponent, initTheme } from "@earendil-works/pi-coding-ag
 
 import { ConsultSettings } from "../src/consult-settings.ts";
 import { ConsultSettingsPresenter } from "../src/consult-settings-presenter.ts";
+import { ModelSearchComponent } from "../src/consult-model-search.ts";
 import { ConsultSettingsStore } from "../src/consult-settings-store.ts";
 import { ConsultSettingsView } from "../src/consult-settings-view.ts";
 import { assert, assertEq, assertIncludes, assertNotIncludes, scratchDir, test } from "./harness.ts";
@@ -488,4 +489,65 @@ test("settings dock: a row failure reaches the presenter's own notify", async ()
 	assertIncludes(notifications[0].message, "theme not initialized");
 	view?.handleInput("\u001b");
 	assertEq(JSON.stringify(await presented), JSON.stringify({ shown: true }), "the dock still closes");
+});
+
+// The fallback-model row picks from the live catalogue, so it searches rather
+// than cycling: typing narrows the list, Enter applies the highlighted model,
+// a rejected value keeps the picker open with the reason, and Escape cancels.
+test("the model picker searches the catalogue like /model", async () => {
+	const options = [
+		{ value: "", label: "Pi default (Fast (one/fast))" },
+		{ value: "one/fast", label: "Fast (one/fast)" },
+		{ value: "one/deep", label: "Deep (one/deep)" },
+		{ value: "two/smart", label: "Smart (two/smart)" },
+	];
+	const applied: string[] = [];
+	let cancelled = false;
+	const picker = new ModelSearchComponent(
+		"Fallback model",
+		options,
+		plainTheme,
+		(value) => {
+			applied.push(value);
+			return value === "two/smart" ? "two/smart is unavailable" : undefined;
+		},
+		() => {
+			cancelled = true;
+		},
+	);
+	const shown = (): string => picker.render(120).join("\n");
+
+	assertIncludes(shown(), "Pi default (Fast (one/fast))", "the default row leads the list");
+	picker.handleInput("d");
+	picker.handleInput("e");
+	picker.handleInput("e");
+	picker.handleInput("p");
+	assertNotIncludes(shown(), "one/fast", "typing narrows the list away from a mismatch");
+	assertIncludes(shown(), "Deep (one/deep)", "the fuzzy match stays");
+	picker.handleInput("\u001b[B");
+	picker.handleInput("\r");
+	assertEq(applied.length, 1, "Enter applies the highlighted model once");
+	picker.handleInput("\u001b");
+	assert(cancelled, "Escape cancels the picker");
+
+	// A rejected value reports the reason and leaves the picker mounted.
+	applied.length = 0;
+	cancelled = false;
+	const rejected = new ModelSearchComponent(
+		"Fallback model",
+		options,
+		plainTheme,
+		(value) => (value === "two/smart" ? "two/smart is unavailable" : undefined),
+		() => {
+			cancelled = true;
+		},
+	);
+	rejected.handleInput("t");
+	rejected.handleInput("w");
+	rejected.handleInput("o");
+	rejected.handleInput("\r");
+	const afterReject = rejected.render(120).join("\n");
+	assertIncludes(afterReject, "two/smart is unavailable", "the rejection names the reason");
+	assert(!cancelled, "a rejection does not close the picker");
+	assertIncludes(afterReject, "Smart (two/smart)", "the rejected row stays selected");
 });

@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.26.0
+
+### Changed
+
+- A consultation cycle no longer touches pi's thinking level. The hold, the
+  capture-and-lower on a plan, the raise while a consult waits, the low-effort
+  wording in the contract prompt, and the `/consult-effort` command are gone,
+  so a plan executes at whatever level pi's own settings give it and a model
+  switch behaves as it does outside a cycle. The cycle's open and closed states
+  are recorded under the same branch entry, which now means "open" rather than
+  "held".
+- The fallback-model row picks like pi's `/model`: a live-catalogue list with
+  a search line on top, fuzzy filtering, the resolved default first, a page
+  position when the list scrolls, and a rejection that keeps the picker open
+  with its reason.
+
 ## 0.25.1
 
 ### Fixed

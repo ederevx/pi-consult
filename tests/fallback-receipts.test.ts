@@ -3,7 +3,7 @@ import { AnswerFormatter } from "../src/answer-formatter.ts";
 import { ConsultRecordStore } from "../src/consult-record-store.ts";
 import type { ConsultDetails, ConsultRun } from "../src/contracts.ts";
 import { ConsultConfig } from "../src/consult-config.ts";
-import { AgentEffortPolicy } from "../src/agent-effort-policy.ts";
+import { ConsultCycle } from "../src/consult-cycle.ts";
 import { ConsultSettingsStore } from "../src/consult-settings-store.ts";
 import {
 	FakeContext,
@@ -20,7 +20,7 @@ function effortSetup() {
 	const host = new FakeEffortHost("high", ["low", "medium", "high"], []);
 	const ctx = new FakeContext(host.branch, "session-effort", scratchDir(), true);
 	host.attachContext(ctx);
-	const policy = new AgentEffortPolicy(ConsultConfig.from({}, scratchDir()));
+	const policy = new ConsultCycle(ConsultConfig.from({}, scratchDir()));
 	policy.register(host as never);
 	host.emit("session_start", {});
 	return { host, ctx, policy };

@@ -10,7 +10,7 @@
 
 import type { ExtensionAPI, ExtensionContext, ToolCallEvent } from "@earendil-works/pi-coding-agent";
 
-import { AgentEffortPolicy } from "./agent-effort-policy.ts";
+import { ConsultCycle } from "./consult-cycle.ts";
 
 export class AuditorSession {
 	private static readonly BLOCKED = new Set(["edit", "write", "powershell"]);
@@ -50,7 +50,7 @@ export class AuditorSession {
 	/** The header is the first non-empty line of the task, which is the prompt. */
 	private static isAuditPrompt(text: string): boolean {
 		const first = text.split("\n").find((line) => line.trim() !== "")?.trim() ?? "";
-		return AgentEffortPolicy.AUDIT_HEADER.test(first);
+		return ConsultCycle.AUDIT_HEADER.test(first);
 	}
 
 	private static firstPrompt(ctx: ExtensionContext): string | undefined {

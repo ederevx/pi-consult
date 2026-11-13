@@ -20,6 +20,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 import type { SettingSpec } from "./consult-settings.ts";
+import { ModelSearchComponent, type SearchChoice, type SearchTheme } from "./consult-model-search.ts";
 import { ConsultSettingsStore } from "./consult-settings-store.ts";
 import { ConsultSettingsView, type ViewTheme } from "./consult-settings-view.ts";
 
@@ -68,6 +69,8 @@ export class ConsultSettingsPresenter {
 	private view: ConsultSettingsView | undefined;
 	/** The values last displayed to the user, for rollback on a failed write. */
 	private displayed = new Map<string, string>();
+	/** The mounted dock's theme, so the picker renders in the same colors. */
+	private theme: SearchTheme | undefined;
 
 	constructor(owner: SettingsOwner) {
 		this.owner = owner;
@@ -144,6 +147,7 @@ export class ConsultSettingsPresenter {
 		try {
 			const items = this.items();
 			await custom.call(ctx.ui, (_tui, theme, _keybindings, done) => {
+				this.theme = theme as SearchTheme;
 				const view = new ConsultSettingsView(
 					items,
 					theme as ViewTheme,
@@ -159,6 +163,7 @@ export class ConsultSettingsPresenter {
 			return { shown: false, failure: ConsultSettingsPresenter.message(failure) };
 		} finally {
 			this.view = undefined;
+			this.theme = undefined;
 			this.ctx = undefined;
 		}
 	}
@@ -175,21 +180,15 @@ export class ConsultSettingsPresenter {
 		this.view?.updateValues(this.displayed);
 	}
 
-	/** The live-catalogue picker for one model row: only available models,
-	 *  the resolved default first, and never a stale stored selection. */
+	/** The live-catalogue picker for one model row: pi's /model layout with a
+	 *  fuzzy search over the available models, the resolved default first, and
+	 *  never a stale stored selection. */
 	private picker(spec: SettingSpec, currentValue: string, done: SubmenuDone): Component {
 		const fallback = this.owner.modelDefault?.();
 		const choices = this.owner.modelChoices?.() ?? [];
-		const options: string[] = [];
-		const values: string[] = [];
-		if (fallback) {
-			options.push(`Pi default (${fallback.label})`);
-			values.push("");
-		}
-		for (const choice of choices) {
-			options.push(choice.label);
-			values.push(choice.value);
-		}
+		const options: SearchChoice[] = [];
+		if (fallback) options.push({ value: "", label: `Pi default (${fallback.label})` });
+		for (const choice of choices) options.push({ value: choice.value, label: choice.label });
 		if (options.length === 0) {
 			return new ExtensionSelectorComponent(
 				spec.label,
@@ -198,7 +197,18 @@ export class ConsultSettingsPresenter {
 				() => done(),
 			);
 		}
-		return this.chooser(spec, options, values, done);
+		return new ModelSearchComponent(
+			spec.label,
+			options,
+			this.theme ?? { fg: (_color, text) => text },
+			(value) => {
+				const error = this.apply(spec.key, value);
+				if (error !== undefined) return error;
+				done();
+				return undefined;
+			},
+			() => done(),
+		);
 	}
 
 	/** The live level picker for the model-driven row: the resolved model's
