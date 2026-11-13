@@ -5,9 +5,9 @@
  * what the gate accepts. It returns the catalogue of tools, the full
  * consultation workflow the agent commits to (a closing consultation for
  * every task, consultant-owned design and verification, roadblocks and
- * audits back to a consultant), and consultant availability. A probe that
- * finds consultants unavailable records that, and restores the thinking
- * level the cycle had lowered when no enabled consultant can serve it.
+ * audits back to a consultant), and consultant availability. A probe records
+ * availability and closes an eligible cycle when no enabled consultant can
+ * serve it.
  */
 
 import type {

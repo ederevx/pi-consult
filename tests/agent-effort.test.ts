@@ -999,4 +999,3 @@ test("agent effort: a closed cycle clears the note dedup for the next cycle", as
 	await host.run("Consultation cycle: complete - c-080002 verified.");
 	assertEq(cycleNotes(host).length, 1, "the second cycle sends its own note");
 });
-

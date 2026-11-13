@@ -75,7 +75,7 @@ export interface ConsultToolDeps {
 	formatter: AnswerFormatter;
 	supervisor: ConsultSupervisor;
 	foreground: ConsultForeground;
-	/** pi's thinking-level cycle; engaged by a consult, settled by its receipt. */
+	/** The consultation cycle; opened by a consult, settled by its receipt. */
 	cycle?: ConsultCycle;
 	/** Snapshots the session that starts an invocation: registry, copied
 	 *  scope, and default model, read once through the live API. */

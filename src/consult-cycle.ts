@@ -107,8 +107,8 @@ export class ConsultCycle {
 	/** Register the cycle's observers. */
 	register(pi: ExtensionAPI): void {
 		this.pi = pi;
-		pi.on("session_start", (_event, ctx: ExtensionContext) => this.load(ctx, false));
-		pi.on("session_tree", (_event, ctx: ExtensionContext) => this.load(ctx, true));
+		pi.on("session_start", (_event, ctx: ExtensionContext) => this.load(ctx));
+		pi.on("session_tree", (_event, ctx: ExtensionContext) => this.load(ctx));
 		pi.on("agent_start", (_event, ctx: ExtensionContext) => {
 			this.rollback(ctx);
 			this.lastMessage = undefined;
