@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.26.1
+
+### Fixed
+
+- The comments that still described the removed thinking-level hold, and two
+  arguments passed to a `load()` that takes none, are gone.
+
 ## 0.26.0
 
 ### Changed
