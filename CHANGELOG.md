@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.26.5
+
+### Fixed
+
+- A call a registered extension declares as a prerequisite escape now reaches
+  its tool while the consultation acknowledgement is still owed, so two closed
+  gates can no longer wait on each other.
+
 ## 0.26.3
 
 ### Fixed
