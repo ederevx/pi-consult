@@ -88,6 +88,19 @@ test("pre_consult: returns the current catalogue and a versioned receipt", async
 	const result = await executor(definition)("call-1", { acknowledge: true });
 	assertEq(result.details.schema, 1);
 	assertEq(result.details.ack.contractVersion, ConsultContract.VERSION);
+	// The registration declares its own escape, so a gate closed on another
+	// extension's prerequisite still passes the acknowledgement.
+	const declared = (definition.annotations as Record<string, unknown>).piGateEscape as {
+		version: number;
+		admits: string[];
+	};
+	assertEq(declared.version, 1, "the escape declaration is versioned");
+	assertEq(
+		JSON.stringify(declared.admits),
+		JSON.stringify(["pre_consult"]),
+		"the tool declares only its own escape",
+	);
+	assertEq(definition.annotations?.readOnlyHint, true, "the declaration keeps the read-only hint");
 	const text = result.content[0].text;
 	assertIncludes(text, `pi-consult contract v${ConsultContract.VERSION}`);
 	assertIncludes(text, "native fallback conversation with the configured pi model");

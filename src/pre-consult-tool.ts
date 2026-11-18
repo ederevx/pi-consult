@@ -22,8 +22,12 @@ import type { ConsultCycle } from "./consult-cycle.ts";
 import type { ConsultantAvailability, PreConsultDetails } from "./contracts.ts";
 import { ConsultContract } from "./consult-contract.ts";
 import type { ConsultRunner } from "./consult-runner.ts";
+import { ToolGateEscapes } from "./tool-gate-escapes.ts";
 
 export class PreConsultTool {
+	/** The one tool completing the acknowledgement is this one. */
+	private static readonly ADMITS = ["pre_consult"];
+
 	private readonly contract: ConsultContract;
 	private readonly runner: ConsultRunner;
 	private readonly cycle: ConsultCycle | undefined;
@@ -36,6 +40,15 @@ export class PreConsultTool {
 
 	/** Register the tool with pi. */
 	register(pi: ExtensionAPI): void {
+		// The acknowledgement declares its own escape, so a gate closed on
+		// another extension's prerequisite still passes it.
+		const annotations = {
+			readOnlyHint: true,
+			[ToolGateEscapes.KEY]: {
+				version: ToolGateEscapes.VERSION,
+				admits: [...PreConsultTool.ADMITS],
+			},
+		};
 		pi.registerTool({
 			name: "pre_consult",
 			label: "pre_consult",
@@ -74,7 +87,7 @@ export class PreConsultTool {
 						"and route audits of consultant work to a consultant.",
 				}),
 			}),
-			annotations: { readOnlyHint: true },
+			annotations,
 			exposure: "model-only",
 			execute: async (
 				toolCallId: string,

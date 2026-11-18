@@ -18,6 +18,7 @@ import type {
 import type { AuditorSession } from "./auditor-session.ts";
 import type { ConsultContract } from "./consult-contract.ts";
 import type { BranchEntry, ReceiptLedger } from "./receipt-ledger.ts";
+import { ToolGateEscapes } from "./tool-gate-escapes.ts";
 import type { ToolClassifier } from "./tool-classifier.ts";
 
 export class ImplementationGate {
@@ -63,6 +64,7 @@ export class ImplementationGate {
 			name,
 			annotations,
 			this.auditor?.allowsReporting(name) ?? false,
+			ToolGateEscapes.admits(pi, name),
 		)) return undefined;
 		return { block: true, reason: this.contract.gateDenial(name) };
 	}

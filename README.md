@@ -111,7 +111,11 @@ Codex is surfaced as a warning.
   pi-consult independent auditor, where `edit`, `write`, and `powershell` stay
   blocked. Reads and the pi-consult tools are never blocked. The
   acknowledgement is session-wide, so compaction, reload, resume, and `/tree`
-  navigation keep it.
+  navigation keep it. A tool a registered extension declares as its own
+  prerequisite's escape - `annotations.piGateEscape = { version, admits }`,
+  read from the live registrations and never from the tool's input - is
+  admitted too, so a session owing two prerequisites can still acknowledge
+  each one; `gate.block` and pi's built-in mutations still win.
 - **`consult`** - sends a self-contained brief to `claude`, `codex`, or `both`
   and returns the answers plus a continuation id. Prefer one consultant; use
   `both` only for two genuinely independent perspectives. The result uses pi's

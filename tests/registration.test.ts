@@ -32,6 +32,11 @@ test("extension: only the surviving consultation tools are registered", () => {
 		"consult,consult_terminate,pre_consult",
 		"the consultation tools survive and the bridge tools are gone",
 	);
+	// Only the acknowledgement declares an escape; the consult tools add none.
+	for (const name of ["consult", "consult_terminate"]) {
+		const annotations = pi.tools.get(name)?.annotations as Record<string, unknown> | undefined;
+		assert(!(annotations && "piGateEscape" in annotations), `${name} declares no escape`);
+	}
 });
 
 test("extension: the registered fallback row offers the bound models", async () => {

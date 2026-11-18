@@ -31,13 +31,22 @@ export class ToolClassifier {
 	}
 
 	/** True when the tool must not run before the acknowledgement. */
-	isGated(name: string, annotations?: ToolAnnotations, reporting = false): boolean {
+	isGated(
+		name: string,
+		annotations?: ToolAnnotations,
+		reporting = false,
+		gateEscape = false,
+	): boolean {
 		if (!name) return true;
 		if (ToolClassifier.CONSULT_TOOLS.includes(name)) return false;
 		// Built-in mutations are gated before the allow list is consulted, so
 		// `gate.allow` can exempt onboarding tools but never edit/write/bash.
 		if (ToolClassifier.MUTATION_TOOLS.includes(name)) return true;
 		if (this.blocked.has(name)) return true;
+		// A tool another registered extension declares as its own prerequisite's
+		// escape stays reachable: two owing prerequisites must not each block the
+		// other's way through. It does not override an explicit block above.
+		if (gateEscape === true) return false;
 		// A session that may only report is not implementation work: its one
 		// reporting tool runs, and an explicit block above still holds.
 		if (reporting) return false;

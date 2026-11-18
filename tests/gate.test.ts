@@ -54,6 +54,33 @@ test("gate: an implementation tool is blocked until pre_consult acknowledges", (
 	assertNotIncludes(String(result?.reason), "consult_waive");
 });
 
+test("gate: a live declaration admits its own escape and nothing else", () => {
+	// The ledger stays empty: an admission never acknowledges the session.
+	const { pi, gate, ctx } = setup([]);
+	const blocked = (name: string) =>
+		(call(gate, pi, ctx, name) as { block?: boolean } | undefined)?.block === true;
+	const declare = (escape: unknown) =>
+		pi.registerTool({ name: "pre_memory", annotations: { piGateEscape: escape } });
+
+	assertEq(blocked("comms_ack"), true, "undeclared");
+	declare({ version: 2, admits: ["comms_ack"] });
+	assertEq(blocked("comms_ack"), true, "an unknown version admits nothing");
+	declare({ version: 1, admits: ["comms_ack"] });
+	assertEq(blocked("comms_ack"), false, "the declared escape runs");
+	assertEq(blocked("edit"), true, "a mutation stays blocked");
+	assertEq(blocked("bash"), true, "a shell stays blocked");
+	assertEq(blocked("pre_consult"), false, "the acknowledgement is always reachable");
+
+	declare({ version: 1, admits: "comms_ack" });
+	assertEq(blocked("comms_ack"), true, "a malformed declaration admits nothing");
+	declare({ admits: ["comms_ack"] });
+	assertEq(blocked("comms_ack"), true, "a versionless declaration admits nothing");
+	declare({ version: 1, admits: ["comms_ack"] });
+	assertEq(blocked("comms_ack"), false, "the union is read from every live registration");
+	pi.tools.delete("pre_memory");
+	assertEq(blocked("comms_ack"), true, "removing the declaration closes it again");
+});
+
 test("gate: acknowledgement alone opens every tool, with no consult owed", () => {
 	const branch = [userEntry("u1"), toolEntry("t1", "pre_consult", ack())];
 	const { pi, gate, ctx } = setup(branch);
