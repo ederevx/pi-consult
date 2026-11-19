@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.26.6
+
+### Changed
+
+- The test suite asserts each claim once: tests that restated the same check
+  are merged into the file that owns their subject, and the runner lists only
+  the files that remain. Nothing pi loads changes.
+
 ## 0.26.5
 
 ### Fixed
