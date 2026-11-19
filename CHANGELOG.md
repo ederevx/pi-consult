@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.26.7
+
+### Changed
+
+- The README installs the unpinned source and names `pi update --extensions`
+  as the package update, with `@<tag>` only as a way to pin a release.
+  Nothing pi loads changes.
+
 ## 0.26.6
 
 ### Changed
