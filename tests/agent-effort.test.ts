@@ -89,17 +89,8 @@ function expired(overrides: Record<string, unknown> = { codex: { enabled: false 
 	return state;
 }
 
-test("agent effort: engage opens the cycle and leaves the level alone", () => {
-	const { host, ctx, policy } = setup({ level: "high" });
-	policy.engage(ctx as never, "c-000001");
-	assertEq(host.getThinkingLevel(), "high");
-	assertEq(lastEntry(host).holding, true);
-	assertEq(lastEntry(host).previous, undefined, "no previous level is recorded");
-	assertEq(host.setCalls.length, 0);
-});
-
-test("agent effort: engage at any level leaves that level alone", () => {
-	for (const level of ["medium", "off", "minimal", "low"]) {
+test("agent effort: engage leaves the level alone", () => {
+	for (const level of ["high", "medium", "off", "minimal", "low"]) {
 		const { host, ctx, policy } = setup({ level });
 		policy.engage(ctx as never, `c-000002-${level}`);
 		assertEq(host.getThinkingLevel(), level, `${level} is left alone`);
@@ -224,35 +215,32 @@ test("agent effort: engaging during an open cycle leaves the level alone", () =>
 	assertEq(host.setCalls.length, 0, "no level is set");
 });
 
-test("agent effort: a timed-out consult leaves the level alone", () => {
-	const { host, ctx, policy } = setup({ level: "high" });
-	policy.engage(ctx as never, "c-010010");
-	policy.settle(
-		"c-010010",
-		consultDetails("c-010010", [consultRun("claude", "ok")]),
-		verdictAnswers({ claude: "The plan." }),
-	);
-	policy.engage(ctx as never, "c-010011");
-	policy.settle("c-010011", consultDetails("c-010011", [consultRun("claude", "timeout")]));
-	assertEq(host.getThinkingLevel(), "high", "a timeout changes nothing");
-	assertEq(host.setCalls.length, 0, "no level is set");
-	assertEq(lastEntry(host).holding, true, "the cycle stays open");
-});
-
-test("agent effort: a timeout delivered after the run changes no level", async () => {
-	const { host, ctx, policy } = setup({ level: "high" });
-	policy.engage(ctx as never, "c-010020");
-	policy.settle(
-		"c-010020",
-		consultDetails("c-010020", [consultRun("claude", "ok")]),
-		verdictAnswers({ claude: "The plan." }),
-	);
-	policy.engage(ctx as never, "c-010021");
-	await host.run("Working on the plan.");
-	policy.settle("c-010021", consultDetails("c-010021", [consultRun("claude", "timeout")]));
-	assertEq(host.getThinkingLevel(), "high", "the delivered timeout changes nothing");
-	assertEq(host.setCalls.length, 0, "no level is set");
-	assertEq(lastEntry(host).holding, true, "the cycle stays open");
+test("agent effort: a timeout leaves the level alone and keeps the cycle", async () => {
+	const rows: Array<[
+		string,
+		(host: FakeEffortHost) => Promise<void> | void,
+		(host: FakeEffortHost) => void,
+	]> = [
+		["at settle", () => undefined, () => undefined],
+		["after the run", (host) => host.run("Working on the plan."), () => undefined],
+		["escaped, next agent start", (host) => host.run("Escape.", "aborted"), (host) => host.emit("agent_start", {})],
+	];
+	for (const [row, before, after] of rows) {
+		const { host, ctx, policy } = setup({ level: "high" });
+		policy.engage(ctx as never, "c-010010");
+		policy.settle(
+			"c-010010",
+			consultDetails("c-010010", [consultRun("claude", "ok")]),
+			verdictAnswers({ claude: "The plan." }),
+		);
+		policy.engage(ctx as never, "c-010011");
+		await before(host);
+		policy.settle("c-010011", consultDetails("c-010011", [consultRun("claude", "timeout")]));
+		after(host);
+		assertEq(host.getThinkingLevel(), "high", `${row}: the timeout changes nothing`);
+		assertEq(host.setCalls.length, 0, `${row}: no level is set`);
+		assertEq(lastEntry(host).holding, true, `${row}: the cycle stays open`);
+	}
 });
 
 test("agent effort: a failed consult with no plan on record stays normal", () => {
@@ -272,23 +260,6 @@ test("agent effort: an escaped unapproved answer changes nothing at the next age
 		verdictAnswers({ claude: "The plan." }),
 	);
 	await host.run("Escape.", "aborted");
-	host.emit("agent_start", {});
-	assertEq(host.getThinkingLevel(), "high");
-	assertEq(host.setCalls.length, 0, "the next run sets nothing");
-	assertEq(lastEntry(host).holding, true, "the cycle is still open");
-});
-
-test("agent effort: an escaped timeout changes nothing at the next agent start", async () => {
-	const { host, ctx, policy } = setup({ level: "high" });
-	policy.engage(ctx as never, "c-110002");
-	policy.settle(
-		"c-110002",
-		consultDetails("c-110002", [consultRun("claude", "ok")]),
-		verdictAnswers({ claude: "The plan." }),
-	);
-	policy.engage(ctx as never, "c-110003");
-	await host.run("Escape.", "aborted");
-	policy.settle("c-110003", consultDetails("c-110003", [consultRun("claude", "timeout")]));
 	host.emit("agent_start", {});
 	assertEq(host.getThinkingLevel(), "high");
 	assertEq(host.setCalls.length, 0, "the next run sets nothing");
@@ -391,28 +362,79 @@ test("agent effort: a completion line with a consult still owed warns and stays 
 	assertEq(host.getThinkingLevel(), "high", "the later settled run leaves the level alone");
 });
 
-test("agent effort: a quoted fallback marker never closes the cycle", async () => {
-	const markers = [
-		"See Consultant fallback: no consultant available - quoted.",
-		"`Consultant fallback: no consultant available - quoted.`",
-		"> Consultant fallback: no consultant available - quoted.",
-		"```\nConsultant fallback: no consultant available - quoted.\n```",
-	];
-	for (const marker of markers) {
-		const state = expired();
-		await state.host.run(marker);
-		assertEq(state.host.getThinkingLevel(), "high", `normal for ${JSON.stringify(marker)}`);
-	}
-});
+test("agent effort: the fallback line closes only when every enabled consultant expired and nothing is owed", async () => {
+	const rows: Array<[string, (row: string) => Promise<void>]> = [
+		["quoted, four shapes", async (row) => {
+			const markers = [
+				"See Consultant fallback: no consultant available - quoted.",
+				"`Consultant fallback: no consultant available - quoted.`",
+				"> Consultant fallback: no consultant available - quoted.",
+				"```\nConsultant fallback: no consultant available - quoted.\n```",
+			];
+			for (const marker of markers) {
+				const state = expired();
+				await state.host.run(marker);
+				assertEq(state.host.getThinkingLevel(), "high", `${row}: normal for ${JSON.stringify(marker)}`);
+			}
+		}],
+		["expired, nothing owed", async (row) => {
+			const state = expired();
+			state.host.emit("agent_start", {});
+			state.host.emit("turn_end", {
+				message: assistantMessage("Consultant fallback: no consultant available - the CLI is gone."),
+			});
+			assertEq(state.host.getThinkingLevel(), "high", `${row}: the fallback closes the cycle at the turn, before any settle`);
+			assertEq(lastEntry(state.host).holding, false, `${row}: the closed cycle is persisted`);
+		}],
+		["probe says none available", async (row) => {
+			const { host, ctx, policy } = setup();
+			policy.engage(ctx as never, "c-000012");
+			policy.settle(
+				"c-000012",
+				consultDetails("c-000012", [consultRun("claude", "ok"), consultRun("codex", "error", "boom")], false),
+			);
+			policy.engage(ctx as never, "c-000013");
+			policy.settle(
+				"c-000013",
+				consultDetails("c-000013", [consultRun("claude", "ok"), consultRun("codex", "error", "boom")], false),
+			);
+			policy.observeAvailability(ctx as never, [
+				{ name: "claude", available: false, error: "missing" },
+				{ name: "codex", available: true },
+			]);
+			assertEq(host.getThinkingLevel(), "high", `${row}: the probe closes the cycle`);
+			assertIncludes(notices(ctx), "no consultant available");
+		}],
+		["two ordinary failures", async (row) => {
+			const { host, ctx, policy } = setup({ config: config({ codex: { enabled: false } }) });
+			policy.engage(ctx as never, "c-000015");
+			policy.settle("c-000015", consultDetails("c-000015", [consultRun("claude", "error", "boom")], false));
+			policy.engage(ctx as never, "c-000016");
+			policy.settle("c-000016", consultDetails("c-000016", [consultRun("claude", "error", "boom")], false));
+			await host.run("Consultant fallback: no consultant available - claude is down.");
+			assertEq(host.getThinkingLevel(), "high", `${row}: the second failure accepts the fallback`);
+		}],
+		["duplicate settles are one failure", async (row) => {
+			const { host, ctx, policy } = setup({ config: config({ codex: { enabled: false } }) });
+			policy.engage(ctx as never, "c-000017");
+			policy.settle("c-000017", consultDetails("c-000017", [consultRun("claude", "error", "boom")], false));
+			policy.settle("c-000017");
+			policy.settle("c-000017");
+			await host.run("Consultant fallback: no consultant available - one failure only.");
+			assertEq(host.getThinkingLevel(), "high", `${row}: one failure is not two`);
 
-test("agent effort: a standalone fallback line closes the cycle once a consultant is expired", async () => {
-	const state = expired();
-	state.host.emit("agent_start", {});
-	state.host.emit("turn_end", {
-		message: assistantMessage("Consultant fallback: no consultant available - the CLI is gone."),
-	});
-	assertEq(state.host.getThinkingLevel(), "high", "the fallback closes the cycle at the turn, before any settle");
-	assertEq(lastEntry(state.host).holding, false);
+			policy.engage(ctx as never, "c-000018");
+			policy.settle("c-000018", consultDetails("c-000018", [consultRun("claude", "error", "boom")], false));
+			await host.run("Consultant fallback: no consultant available - now twice.");
+			assertEq(host.getThinkingLevel(), "high", `${row}: the second failure accepts the fallback`);
+		}],
+		["plain line mid-reply", async (row) => {
+			const state = expired();
+			await state.host.run("Consultant fallback: no consultant available - the CLI is gone.\nStill explaining.");
+			assertEq(state.host.getThinkingLevel(), "high", `${row}: a plain line mid-reply still closes`);
+		}],
+	];
+	for (const [row, play] of rows) await play(row);
 });
 
 test("agent effort: a standalone fallback while codex can still serve warns and stays open", async () => {
@@ -425,26 +447,6 @@ test("agent effort: a standalone fallback while codex can still serve warns and 
 	assertIncludes(notices(ctx), "the cycle stays open");
 });
 
-test("agent effort: claude unavailable plus two codex failures close on the probe", () => {
-	const { host, ctx, policy } = setup();
-	policy.engage(ctx as never, "c-000012");
-	policy.settle(
-		"c-000012",
-		consultDetails("c-000012", [consultRun("claude", "ok"), consultRun("codex", "error", "boom")], false),
-	);
-	policy.engage(ctx as never, "c-000013");
-	policy.settle(
-		"c-000013",
-		consultDetails("c-000013", [consultRun("claude", "ok"), consultRun("codex", "error", "boom")], false),
-	);
-	policy.observeAvailability(ctx as never, [
-		{ name: "claude", available: false, error: "missing" },
-		{ name: "codex", available: true },
-	]);
-	assertEq(host.getThinkingLevel(), "high");
-	assertIncludes(notices(ctx), "no consultant available");
-});
-
 test("agent effort: a fallback line while a detached consult is owed is refused", async () => {
 	const { host, ctx, policy } = setup({ config: config({ codex: { enabled: false } }) });
 	policy.engage(ctx as never, "c-000014");
@@ -453,31 +455,6 @@ test("agent effort: a fallback line while a detached consult is owed is refused"
 	await host.run("Consultant fallback: no consultant available - roadblock.");
 	assertEq(host.getThinkingLevel(), "high");
 	assertIncludes(notices(ctx), "still running or undelivered");
-});
-
-test("agent effort: a disabled codex plus two claude failures accept the fallback", async () => {
-	const { host, ctx, policy } = setup({ config: config({ codex: { enabled: false } }) });
-	policy.engage(ctx as never, "c-000015");
-	policy.settle("c-000015", consultDetails("c-000015", [consultRun("claude", "error", "boom")], false));
-	policy.engage(ctx as never, "c-000016");
-	policy.settle("c-000016", consultDetails("c-000016", [consultRun("claude", "error", "boom")], false));
-	await host.run("Consultant fallback: no consultant available - claude is down.");
-	assertEq(host.getThinkingLevel(), "high");
-});
-
-test("agent effort: settling the same failed consult three times counts as one failure", async () => {
-	const { host, ctx, policy } = setup({ config: config({ codex: { enabled: false } }) });
-	policy.engage(ctx as never, "c-000017");
-	policy.settle("c-000017", consultDetails("c-000017", [consultRun("claude", "error", "boom")], false));
-	policy.settle("c-000017");
-	policy.settle("c-000017");
-	await host.run("Consultant fallback: no consultant available - one failure only.");
-	assertEq(host.getThinkingLevel(), "high", "one failure is not two");
-
-	policy.engage(ctx as never, "c-000018");
-	policy.settle("c-000018", consultDetails("c-000018", [consultRun("claude", "error", "boom")], false));
-	await host.run("Consultant fallback: no consultant available - now twice.");
-	assertEq(host.getThinkingLevel(), "high");
 });
 
 test("agent effort: the user-audit line closes the cycle; a quoted one does not", async () => {
@@ -493,46 +470,92 @@ test("agent effort: the user-audit line closes the cycle; a quoted one does not"
 	assertEq(quoted.host.getThinkingLevel(), "high");
 });
 
-test("agent effort: a completion line observed early does not latch", () => {
-	const { host, ctx, policy } = setup({ level: "high" });
-	policy.engage(ctx as never, "c-000021");
-	policy.settle(
-		"c-000021",
-		consultDetails("c-000021", [consultRun("claude", "ok")]),
-		verdictAnswers({ claude: APPROVED_VERDICT }),
-	);
-	host.emit("agent_start", {});
-	host.emit("turn_end", { message: assistantMessage("Consultation cycle: complete - c-000021 verified.") });
-	host.emit("turn_end", { message: assistantMessage("One more thought before I stop.") });
-	host.emit("agent_before_settle", { outcome: "completed" });
-	host.emit("agent_settled", {});
-	assertEq(host.getThinkingLevel(), "high", "no answer, so nothing is held");
-	assertEq(lastEntry(host).holding, true, "the cycle stays open");
-});
-
-test("agent effort: a completion line followed by text, or with a tool call, does not close the cycle", async () => {
-	const trailing = setup({ level: "high" });
-	trailing.policy.engage(trailing.ctx as never, "c-000022");
-	trailing.policy.settle(
-		"c-000022",
-		consultDetails("c-000022", [consultRun("claude", "ok")]),
-		verdictAnswers({ claude: APPROVED_VERDICT }),
-	);
-	await trailing.host.run("Consultation cycle: complete - c-000022 verified.\nbut wait, there is more");
-	assertEq(trailing.host.getThinkingLevel(), "high", "the line must be last");
-
-	const tool = setup({ level: "high" });
-	tool.policy.engage(tool.ctx as never, "c-000023");
-	tool.policy.settle(
-		"c-000023",
-		consultDetails("c-000023", [consultRun("claude", "ok")]),
-		verdictAnswers({ claude: APPROVED_VERDICT }),
-	);
-	tool.host.emit("agent_start", {});
-	tool.host.emit("turn_end", { message: assistantWithToolCall("Consultation cycle: complete - c-000023 verified.") });
-	tool.host.emit("agent_before_settle", { outcome: "completed" });
-	tool.host.emit("agent_settled", {});
-	assertEq(tool.host.getThinkingLevel(), "high", "a message with a tool call is not final");
+test("agent effort: a completion marker counts only as the last plain assistant line", async () => {
+	const line = "Consultation cycle: complete - c-000050 verified.";
+	const approved = (id: string): Setup => {
+		const state = setup({ level: "high" });
+		state.policy.engage(state.ctx as never, id);
+		state.policy.settle(
+			id,
+			consultDetails(id, [consultRun("claude", "ok")]),
+			verdictAnswers({ claude: APPROVED_VERDICT }),
+		);
+		return state;
+	};
+	const rows: Array<[string, () => Promise<void> | void]> = [
+		["observed early", () => {
+			const state = approved("c-000021");
+			state.host.emit("agent_start", {});
+			state.host.emit("turn_end", { message: assistantMessage("Consultation cycle: complete - c-000021 verified.") });
+			state.host.emit("turn_end", { message: assistantMessage("One more thought before I stop.") });
+			state.host.emit("agent_before_settle", { outcome: "completed" });
+			state.host.emit("agent_settled", {});
+			assertEq(state.host.getThinkingLevel(), "high", "observed early: no answer, so nothing is held");
+			assertEq(lastEntry(state.host).holding, true, "observed early: the cycle stays open");
+		}],
+		["trailing text", async () => {
+			const state = approved("c-000022");
+			await state.host.run("Consultation cycle: complete - c-000022 verified.\nbut wait, there is more");
+			assertEq(state.host.getThinkingLevel(), "high", "trailing text: the line must be last");
+		}],
+		["tool call", () => {
+			const state = approved("c-000023");
+			state.host.emit("agent_start", {});
+			state.host.emit("turn_end", { message: assistantWithToolCall("Consultation cycle: complete - c-000023 verified.") });
+			state.host.emit("agent_before_settle", { outcome: "completed" });
+			state.host.emit("agent_settled", {});
+			assertEq(state.host.getThinkingLevel(), "high", "tool call: a message with a tool call is not final");
+		}],
+		["toolResult role", () => {
+			const state = approved("c-000039");
+			state.host.emit("agent_start", {});
+			state.host.emit("turn_end", { message: { role: "toolResult", content: [{ type: "text", text: line }] } });
+			state.host.emit("agent_before_settle", { outcome: "completed" });
+			state.host.emit("agent_settled", {});
+			assertEq(state.host.getThinkingLevel(), "high", "toolResult role: only assistant text parts count");
+		}],
+		["inline content", () => {
+			const state = approved("c-000039");
+			state.host.emit("agent_start", {});
+			state.host.emit("turn_end", { message: { role: "assistant", content: line } });
+			state.host.emit("agent_before_settle", { outcome: "completed" });
+			state.host.emit("agent_settled", {});
+			assertEq(state.host.getThinkingLevel(), "high", "inline content: only text parts count");
+		}],
+		...([
+			["4-space indent", `    ${line}`],
+			["tab indent", `\t${line}`],
+			["blockquote before", `> Quoted example:\n${line}`],
+			["blockquote after", `${line}\n> Still unfinished.`],
+			["fence after", `${line}\n\`\`\`\ncaveat\n\`\`\``],
+			["nested ```` around a ``` block", "````\n```\n" + line + "\n```\n````"],
+			["nested ~~~ around a ``` block", "~~~\n```\n" + line + "\n```\n~~~"],
+			["open fence, no close", "```\n" + line],
+		] as Array<[string, string]>).map(([name, text]): [string, () => Promise<void>] => [name, async () => {
+			const state = approved("c-000050");
+			await state.host.run(text);
+			assertEq(state.host.getThinkingLevel(), "high", `${name}: released for ${JSON.stringify(text)}`);
+		}]),
+		["two-space indent is plain", async () => {
+			const state = setup({ level: "high" });
+			state.policy.engage(state.ctx as never, "c-000051");
+			state.policy.settle(
+				"c-000051",
+				consultDetails("c-000051", [consultRun("claude", "ok")]),
+				verdictAnswers({
+					claude: "  Convention audit: compliant - AGENTS.md.\n  Consultant verdict: approved - indented.",
+				}),
+			);
+			await state.host.run("Consultation cycle: complete - c-000051 verified.");
+			assertEq(state.host.getThinkingLevel(), "high", "two-space indent is plain");
+		}],
+		["closed fence is plain", async () => {
+			const state = approved("c-000052");
+			await state.host.run("```\ncaveat\n```\n\nConsultation cycle: complete - c-000052 verified.");
+			assertEq(state.host.getThinkingLevel(), "high", "closed fence is plain: it does not hide the last line");
+		}],
+	];
+	for (const [, play] of rows) await play();
 });
 
 test("agent effort: an unknown, unapproved or terminated consult is refused", async () => {
@@ -682,11 +705,11 @@ test("agent effort: describe() reports the cycle and registers no hold command",
 	assertEq(host.setCalls.length, 0);
 });
 
-test("agent effort: a user audit clears an id that never delivered, so the next cycle closes", async () => {
+test("agent effort: a released id stops refusing the next cycle", async () => {
 	const { host, ctx, policy } = setup({ level: "high" });
 	policy.engage(ctx as never, "c-060001");
 	await host.run("Audit by pi at the user's request - the owner asked.");
-	assertEq(lastEntry(host).holding, false, "the user audit closed the cycle");
+	assertEq(lastEntry(host).holding, false, "never-delivered id: the user audit closed the cycle");
 	policy.engage(ctx as never, "c-060002");
 	policy.settle(
 		"c-060002",
@@ -694,20 +717,18 @@ test("agent effort: a user audit clears an id that never delivered, so the next 
 		verdictAnswers({ claude: APPROVED_VERDICT }),
 	);
 	await host.run("Consultation cycle: complete - c-060002 verified.");
-	assertEq(lastEntry(host).holding, false, "the stale id does not outlive the cycle");
+	assertEq(lastEntry(host).holding, false, "never-delivered id: it does not outlive the cycle");
 	assertIncludes(notices(ctx), "the consultant handed control back");
-});
 
-test("agent effort: after a user audit a stale id no longer refuses the fallback line", async () => {
 	const state = expired();
 	state.policy.engage(state.ctx as never, "c-070001");
 	await state.host.run("Audit by pi at the user's request - the owner asked.");
-	assertEq(lastEntry(state.host).holding, false, "the user audit closed the cycle");
-	assertEq((lastEntry(state.host).owed as string[]).length, 0, "the closed cycle owes nothing");
+	assertEq(lastEntry(state.host).holding, false, "stale id vs fallback line: the user audit closed the cycle");
+	assertEq((lastEntry(state.host).owed as string[]).length, 0, "stale id vs fallback line: the closed cycle owes nothing");
 	state.policy.engage(state.ctx as never, "c-070002");
 	state.policy.settle("c-070002", consultDetails("c-070002", [consultRun("claude", "unavailable")], false));
 	await state.host.run("Consultant fallback: no consultant available - roadblock.");
-	assertEq(lastEntry(state.host).holding, false, "the fallback line closes the cycle");
+	assertEq(lastEntry(state.host).holding, false, "stale id vs fallback line: the fallback line closes the cycle");
 	assertIncludes(notices(state.ctx), "consultant fallback");
 });
 
@@ -760,79 +781,6 @@ test("agent effort: a probe with nothing available closes only when nothing is o
 	assertIncludes(notices(ctx), "no consultant available");
 });
 
-test("agent effort: a completion from a non-assistant or inline message is ignored", () => {
-	const { host, ctx, policy } = setup({ level: "high" });
-	policy.engage(ctx as never, "c-000039");
-	policy.settle(
-		"c-000039",
-		consultDetails("c-000039", [consultRun("claude", "ok")]),
-		verdictAnswers({ claude: APPROVED_VERDICT }),
-	);
-	const line = "Consultation cycle: complete - c-000039 verified.";
-	host.emit("agent_start", {});
-	host.emit("turn_end", { message: { role: "toolResult", content: [{ type: "text", text: line }] } });
-	host.emit("turn_end", { message: { role: "assistant", content: line } });
-	host.emit("agent_before_settle", { outcome: "completed" });
-	host.emit("agent_settled", {});
-	assertEq(host.getThinkingLevel(), "high", "only assistant text parts count");
-});
-
-test("agent effort: Markdown context hides a completion line from the last-line rule", async () => {
-	const line = "Consultation cycle: complete - c-000050 verified.";
-	const contexts = [
-		`    ${line}`,
-		`\t${line}`,
-		`> Quoted example:\n${line}`,
-		`${line}\n> Still unfinished.`,
-		`${line}\n\`\`\`\ncaveat\n\`\`\``,
-		"````\n```\n" + line + "\n```\n````",
-		"~~~\n```\n" + line + "\n```\n~~~",
-		"```\n" + line,
-	];
-	for (const text of contexts) {
-		const { host, ctx, policy } = setup({ level: "high" });
-		policy.engage(ctx as never, "c-000050");
-		policy.settle(
-			"c-000050",
-			consultDetails("c-000050", [consultRun("claude", "ok")]),
-			verdictAnswers({ claude: APPROVED_VERDICT }),
-		);
-		await host.run(text);
-		assertEq(host.getThinkingLevel(), "high", `released for ${JSON.stringify(text)}`);
-	}
-});
-
-test("agent effort: a two-space indent and a closed fence keep plain lines", async () => {
-	const indented = setup({ level: "high" });
-	indented.policy.engage(indented.ctx as never, "c-000051");
-	indented.policy.settle(
-		"c-000051",
-		consultDetails("c-000051", [consultRun("claude", "ok")]),
-		verdictAnswers({
-			claude: "  Convention audit: compliant - AGENTS.md.\n  Consultant verdict: approved - indented.",
-		}),
-	);
-	await indented.host.run("Consultation cycle: complete - c-000051 verified.");
-	assertEq(indented.host.getThinkingLevel(), "high", "a two-space indent is plain");
-
-	const fenced = setup({ level: "high" });
-	fenced.policy.engage(fenced.ctx as never, "c-000052");
-	fenced.policy.settle(
-		"c-000052",
-		consultDetails("c-000052", [consultRun("claude", "ok")]),
-		verdictAnswers({ claude: APPROVED_VERDICT }),
-	);
-	await fenced.host.run("```\ncaveat\n```\n\nConsultation cycle: complete - c-000052 verified.");
-	assertEq(fenced.host.getThinkingLevel(), "high", "a closed fence does not hide the last line");
-});
-
-test("agent effort: a plain fallback line in the middle of a reply closes the cycle", async () => {
-	const state = expired();
-	await state.host.run("Consultant fallback: no consultant available - the CLI is gone.\nStill explaining.");
-	assertEq(state.host.getThinkingLevel(), "high");
-});
-
-
 /** A consult settled with a non-approved answer, then its completion marker. */
 async function unapproved(state: Setup, id: string): Promise<void> {
 	state.policy.engage(state.ctx as never, id);
@@ -856,6 +804,16 @@ test("agent effort: an unapproved completion line sends one cycle note", async (
 	assertIncludes(sent[0].message.content ?? "", "verdict line");
 	assertEq(state.host.getThinkingLevel(), "high");
 	assertEq(lastEntry(state.host).nudged, sent[0].message.content, "the note is persisted");
+
+	// An owed consult is a wait for the turn, not a trigger of one.
+	const owed = setup({ level: "high" });
+	owed.policy.engage(owed.ctx as never, "c-100004");
+	await owed.host.run("Consultation cycle: complete - c-100004 verified.");
+	const waiting = cycleNotes(owed.host);
+	assertEq(waiting.length, 1, "owed consult: one note");
+	assertEq(waiting[0].options?.deliverAs, "nextTurn", "owed consult: the note waits for the turn");
+	assertEq(waiting[0].options?.triggerTurn, undefined, "owed consult: the note starts no turn");
+	assertIncludes(waiting[0].message.content ?? "", "wait for its delivered result");
 });
 
 test("agent effort: the same refused marker never sends the note twice", async () => {
@@ -865,6 +823,18 @@ test("agent effort: the same refused marker never sends the note twice", async (
 	assertEq(cycleNotes(state.host).length, 1);
 	const warnings = state.ctx.notifyCalls.filter((call) => call.message.includes("cycle marked complete"));
 	assertEq(warnings.length, 3, "every refusal still warns in the UI");
+
+	// A close clears the dedup, so the next cycle sends its own note.
+	const next = setup({ level: "high" });
+	await unapproved(next, "c-080001");
+	assertEq(cycleNotes(next.host).length, 1, "next cycle: the first refusal is answered");
+	assertEq(lastEntry(next.host).holding, true, "next cycle: the refused cycle stays open");
+	await next.host.run("Audit by pi at the user's request - the owner asked.");
+	assertEq(lastEntry(next.host).holding, false, "next cycle: the user audit closed the cycle");
+	await unapproved(next, "c-080001");
+	const sent = cycleNotes(next.host);
+	assertEq(sent.length, 2, "next cycle: it sends its own note");
+	assertEq(sent[1].message.content, sent[0].message.content, "next cycle: the same refusal, answered again");
 });
 
 test("agent effort: the note dedup survives a reload", async () => {
@@ -882,27 +852,6 @@ test("agent effort: the note dedup survives a reload", async () => {
 	assertEq(cycleNotes(host2).length, 0, "the persisted note is not sent again");
 });
 
-test("agent effort: an owed consult gets a wait note, then a close clears it", async () => {
-	const state = setup({ level: "high" });
-	state.policy.engage(state.ctx as never, "c-100004");
-	await state.host.run("Consultation cycle: complete - c-100004 verified.");
-	const sent = cycleNotes(state.host);
-	assertEq(sent.length, 1);
-	assertEq(sent[0].options?.deliverAs, "nextTurn");
-	assertEq(sent[0].options?.triggerTurn, undefined);
-	assertIncludes(sent[0].message.content ?? "", "wait for its delivered result");
-
-	state.policy.settle(
-		"c-100004",
-		consultDetails("c-100004", [consultRun("claude", "ok")]),
-		verdictAnswers({ claude: APPROVED_VERDICT }),
-	);
-	await state.host.run("Consultation cycle: complete - c-100004 verified.");
-	assertEq(state.host.getThinkingLevel(), "high");
-	assertEq(cycleNotes(state.host).length, 1, "the close sends nothing new");
-	assertEq(lastEntry(state.host).nudged, undefined, "the close clears the note");
-});
-
 test("agent effort: a changed refusal reason sends a new note", async () => {
 	const state = setup({ level: "high" });
 	state.policy.engage(state.ctx as never, "c-100005");
@@ -918,9 +867,23 @@ test("agent effort: a changed refusal reason sends a new note", async () => {
 	assertEq(sent.length, 2, "the aged-out reason is a new note");
 	assertIncludes(sent[1].message.content ?? "", "started before your last edit");
 	assertEq(state.host.getThinkingLevel(), "high");
+
+	// The close a wait note was waiting for clears it and sends nothing new.
+	const cleared = setup({ level: "high" });
+	cleared.policy.engage(cleared.ctx as never, "c-100004");
+	await cleared.host.run("Consultation cycle: complete - c-100004 verified.");
+	cleared.policy.settle(
+		"c-100004",
+		consultDetails("c-100004", [consultRun("claude", "ok")]),
+		verdictAnswers({ claude: APPROVED_VERDICT }),
+	);
+	await cleared.host.run("Consultation cycle: complete - c-100004 verified.");
+	assertEq(cleared.host.getThinkingLevel(), "high");
+	assertEq(cycleNotes(cleared.host).length, 1, "close clears nudged: the close sends nothing new");
+	assertEq(lastEntry(cleared.host).nudged, undefined, "close clears nudged: the note is cleared");
 });
 
-test("agent effort: a consult whose consultant ran out of agent closes unverified", async () => {
+test("agent effort: a spent consultant closes the consult unverified, with no note", async () => {
 	for (const run of [
 		consultRun("claude", "error", "insufficient_quota"),
 		consultRun("claude", "unavailable"),
@@ -934,25 +897,24 @@ test("agent effort: a consult whose consultant ran out of agent closes unverifie
 		assertEq(cycleNotes(state.host).length, 0, "no note when the agent is spent");
 		assertIncludes(notices(state.ctx), "closes unverified");
 	}
-});
 
-test("agent effort: an expired consultant closes an approved but stale consult unverified", async () => {
-	const state = setup({ level: "high", config: config({ codex: { enabled: false } }) });
-	state.policy.engage(state.ctx as never, "c-100007");
-	state.policy.settle(
+	// An approved but stale consult is closed by the same spent consultant.
+	const stale = setup({ level: "high", config: config({ codex: { enabled: false } }) });
+	stale.policy.engage(stale.ctx as never, "c-100007");
+	stale.policy.settle(
 		"c-100007",
 		consultDetails("c-100007", [consultRun("claude", "ok")]),
 		verdictAnswers({ claude: APPROVED_VERDICT }),
 	);
-	state.host.toolCall("edit", {});
-	state.policy.engage(state.ctx as never, "c-100008");
-	state.policy.settle(
+	stale.host.toolCall("edit", {});
+	stale.policy.engage(stale.ctx as never, "c-100008");
+	stale.policy.settle(
 		"c-100008",
 		consultDetails("c-100008", [consultRun("claude", "auth", "invalid api key")], false),
 	);
-	await state.host.run("Consultation cycle: complete - c-100007 verified.");
-	assertEq(state.host.getThinkingLevel(), "high");
-	assertEq(cycleNotes(state.host).length, 0);
+	await stale.host.run("Consultation cycle: complete - c-100007 verified.");
+	assertEq(stale.host.getThinkingLevel(), "high", "approved but stale: the spent consultant closes it unverified");
+	assertEq(cycleNotes(stale.host).length, 0, "approved but stale: no note when the agent is spent");
 });
 
 test("agent effort: a partly expired multi-consultant consult is not the exception", async () => {
@@ -995,26 +957,4 @@ test("agent effort: a refused marker does not close the cycle on a non-completed
 		assertEq(state.host.getThinkingLevel(), "high");
 		assertEq(cycleNotes(state.host).length, 0, `${outcome} sends no note`);
 	}
-});
-
-test("agent effort: a closed cycle clears the note dedup for the next cycle", async () => {
-	const { host, ctx, policy } = setup({ level: "high" });
-	const refuse = async (): Promise<void> => {
-		policy.engage(ctx as never, "c-080001");
-		policy.settle(
-			"c-080001",
-			consultDetails("c-080001", [consultRun("claude", "ok")]),
-			verdictAnswers({ claude: "Consultant verdict: changes needed - not yet." }),
-		);
-		await host.run("Consultation cycle: complete - c-080001 verified.");
-	};
-	await refuse();
-	assertEq(cycleNotes(host).length, 1, "the first refusal is answered");
-	assertEq(lastEntry(host).holding, true, "the refused cycle stays open");
-	await host.run("Audit by pi at the user's request - the owner asked.");
-	assertEq(lastEntry(host).holding, false, "the user audit closed the cycle");
-	await refuse();
-	const sent = cycleNotes(host);
-	assertEq(sent.length, 2, "the next cycle sends its own note");
-	assertEq(sent[1].message.content, sent[0].message.content, "the same refusal, answered again");
 });
