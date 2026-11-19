@@ -20,6 +20,9 @@ import re
 import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from link_guard import LinkCreationGuard  # noqa: E402
 SRC = os.path.join(REPO, "src")
 FAILURES: list[str] = []
 
@@ -101,6 +104,15 @@ def check_typescript(path: str) -> None:
             depth = 0
 
 
+def check_no_link_creation() -> None:
+    """No test source creates a link: symlinks are prohibited here."""
+    guard = LinkCreationGuard(REPO)
+    for problem in guard.self_test():
+        fail("tests/link_guard.py", problem)
+    for finding in guard.check():
+        fail("tests", finding)
+
+
 def main() -> int:
     if not os.path.isdir(SRC):
         print("oop lint: missing src/", file=sys.stderr)
@@ -123,6 +135,7 @@ def main() -> int:
     else:
         fail(entry, "missing src/index.ts")
 
+    check_no_link_creation()
     if FAILURES:
         for failure in FAILURES:
             print(f"oop lint: {failure}", file=sys.stderr)

@@ -1,11 +1,17 @@
-import { existsSync, mkdirSync, rmSync, rmdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "@earendil-works/pi-coding-agent";
 import type { ToolCall } from "@earendil-works/pi-ai";
 
 import { NativeReadTools } from "../src/native-read-tools.ts";
-import { assert, assertEq, assertIncludes, scratchDir, test, testUnsupported, unsupported } from "./harness.ts";
+import type {
+	NativeReadEntry,
+	NativeReadFileSystem,
+	NativeReadHandle,
+	NativeReadInfo,
+} from "../src/native-read-fs.ts";
+import { assert, assertEq, assertIncludes, scratchDir, test, testUnsupported } from "./harness.ts";
 
 const WINDOWS = process.platform === "win32";
 
@@ -16,27 +22,87 @@ function cwd(tag: string): string {
 	return dir;
 }
 
-/** Link a directory: a junction on Windows, a directory symlink elsewhere. */
-function linkDir(target: string, link: string): void {
-	symlinkSync(target, link, WINDOWS ? "junction" : "dir");
+function fileEntry(name: string): NativeReadEntry {
+	return { name, isFile: () => true, isDirectory: () => false, isSymbolicLink: () => false };
 }
 
-/** Remove a directory link, never what it points at. */
-function removeLink(link: string): void {
-	if (WINDOWS) rmdirSync(link);
-	else rmSync(link);
+function linkEntry(name: string): NativeReadEntry {
+	return { name, isFile: () => false, isDirectory: () => false, isSymbolicLink: () => true };
 }
 
-/** Link a file, or abandon the case when the host denies the privilege. */
-function linkFile(target: string, link: string): void {
-	try {
-		symlinkSync(target, link);
-	} catch (error) {
-		const code = (error as NodeJS.ErrnoException).code;
-		if (code !== "EPERM" && code !== "EACCES") throw error;
-		unsupported(
-			`the host denies file symlink creation (${code}): the privilege or Developer Mode is absent`,
-		);
+function missing(path: string): Error {
+	const error = new Error(`ENOENT: ${path}`) as Error & { code: string };
+	error.code = "ENOENT";
+	return error;
+}
+
+/**
+ * The filesystem a native read is decided through, answering as the case
+ * wrote it down.
+ *
+ * A link is one `aliases` entry: the canonical form a case says the path
+ * has. Nothing here creates an alias on the host, so a refusal is proved by
+ * the answer the tool consumed, and a read that never reaches its target is
+ * visible in `calls`.
+ */
+class FakeFileSystem implements NativeReadFileSystem {
+	readonly aliases = new Map<string, string>();
+	readonly absent = new Set<string>();
+	readonly kinds = new Map<string, "file" | "dir">();
+	readonly texts = new Map<string, string>();
+	readonly listings = new Map<string, NativeReadEntry[]>();
+	readonly calls: string[] = [];
+	rootQueries = 0;
+
+	constructor(private readonly rootPath: string) {}
+
+	async realpath(path: string): Promise<string> {
+		this.calls.push(`realpath ${path}`);
+		if (path === this.rootPath) this.rootQueries += 1;
+		const alias = this.aliases.get(path);
+		if (alias !== undefined) return alias;
+		if (this.absent.has(path)) throw missing(path);
+		return path;
+	}
+
+	async stat(path: string): Promise<NativeReadInfo> {
+		this.calls.push(`stat ${path}`);
+		if (this.absent.has(path)) throw missing(path);
+		const kind = this.kinds.get(path) ?? "file";
+		return {
+			size: this.texts.get(path)?.length ?? 0,
+			isFile: () => kind === "file",
+			isDirectory: () => kind === "dir",
+		};
+	}
+
+	async readdir(path: string): Promise<NativeReadEntry[]> {
+		this.calls.push(`readdir ${path}`);
+		const listed = this.listings.get(path);
+		if (!listed) throw new Error(`no listing was written for ${path}`);
+		return listed;
+	}
+
+	async open(path: string): Promise<NativeReadHandle> {
+		this.calls.push(`open ${path}`);
+		if (this.absent.has(path)) throw missing(path);
+		const body = Buffer.from(this.texts.get(path) ?? "", "utf8");
+		return {
+			read: async (buffer, offset, length, position) => {
+				const chunk = body.subarray(position, Math.min(position + length, body.length));
+				chunk.copy(buffer, offset);
+				return { bytesRead: chunk.length };
+			},
+			close: async () => {
+				this.calls.push(`close ${path}`);
+			},
+		};
+	}
+
+	/** Whether any answer this case consumed named `path`. */
+	touched(path: string): boolean {
+		return this.calls.some((entry) => entry === `stat ${path}` || entry === `open ${path}`
+			|| entry === `realpath ${path}` || entry === `readdir ${path}`);
 	}
 }
 
@@ -75,13 +141,17 @@ test("native read tools: absolute and parent paths are rejected", async () => {
 	}
 });
 
-test("native read tools: a directory link outside the root is refused", async () => {
+test("native read tools: a directory canonicalized outside the root is refused", async () => {
 	const root = cwd("link");
 	const outside = cwd("outside");
-	writeFileSync(join(outside, "secret.ts"), "leak\n");
-	linkDir(outside, join(root, "dir-link"));
-	writeFileSync(join(root, "plain.ts"), "inside\n");
-	const tools = await NativeReadTools.create(root);
+	const files = new FakeFileSystem(root);
+	files.kinds.set(root, "dir");
+	files.listings.set(root, [fileEntry("plain.ts"), linkEntry("dir-link")]);
+	// The link's canonical form is the outside directory: the refusal is
+	// decided on that answer, and the target behind it is never touched.
+	files.aliases.set(join(root, "dir-link"), outside);
+	files.aliases.set(join(root, "dir-link", "secret.ts"), join(outside, "secret.ts"));
+	const tools = await NativeReadTools.create(root, files);
 	const result = await tools.execute(call("read_file", { path: "dir-link/secret.ts" }), signal);
 	assertEq(result.readPath, undefined, "dir-link/secret.ts is no evidence");
 	assertIncludes(
@@ -89,18 +159,20 @@ test("native read tools: a directory link outside the root is refused", async ()
 		"file paths must be relative and stay inside the working directory",
 		"the escape is refused",
 	);
+	assertEq(files.touched(join(outside, "secret.ts")), false, "the outside file is never read");
 	const listing = await tools.execute(call("list_dir", { path: "." }), signal);
 	assertIncludes(text(listing), "plain.ts", "a listing names what the root holds");
 	assertIncludes(text(listing), '- "dir-link" (symlink)', "a link is named, not followed");
 	assertEq(listing.readPath, undefined, "a listing never verifies");
+	assertEq(files.touched(join(root, "dir-link")), false, "the listing does not follow the link");
 });
 
-test("native read tools: a file symlink outside the root is refused", async () => {
+test("native read tools: a file canonicalized outside the root is refused", async () => {
 	const root = cwd("file-link");
 	const outside = cwd("file-link-outside");
-	writeFileSync(join(outside, "secret.ts"), "leak\n");
-	linkFile(join(outside, "secret.ts"), join(root, "file-link.ts"));
-	const tools = await NativeReadTools.create(root);
+	const files = new FakeFileSystem(root);
+	files.aliases.set(join(root, "file-link.ts"), join(outside, "secret.ts"));
+	const tools = await NativeReadTools.create(root, files);
 	const result = await tools.execute(call("read_file", { path: "file-link.ts" }), signal);
 	assertEq(result.readPath, undefined, "file-link.ts is no evidence");
 	assertIncludes(
@@ -108,6 +180,7 @@ test("native read tools: a file symlink outside the root is refused", async () =
 		"file paths must be relative and stay inside the working directory",
 		"the escape is refused",
 	);
+	assertEq(files.touched(join(outside, "secret.ts")), false, "the outside file is never read");
 });
 
 test("native read tools: missing, directory, binary, and unreadable files have stable errors", async () => {
@@ -226,14 +299,16 @@ test("native read tools: directory listings do not verify", async () => {
 	assertEq(result.message.isError, false, "and the listing succeeds");
 });
 
-test("native read tools: a listing types a symlink without following it", async () => {
+test("native read tools: an entry the platform types as a link is named, not followed", async () => {
 	const root = cwd("listing-link");
-	writeFileSync(join(root, "a.ts"), "a\n");
-	linkFile(join(root, "a.ts"), join(root, "link.ts"));
-	const tools = await NativeReadTools.create(root);
+	const files = new FakeFileSystem(root);
+	files.kinds.set(root, "dir");
+	files.listings.set(root, [fileEntry("a.ts"), linkEntry("link.ts")]);
+	const tools = await NativeReadTools.create(root, files);
 	const result = await tools.execute(call("list_dir", { path: "." }), signal);
 	assertIncludes(text(result), '- "link.ts" (symlink)', "links are named, not followed");
 	assertEq(result.readPath, undefined, "a listing is not a read");
+	assertEq(files.touched(join(root, "link.ts")), false, "the entry is typed without being read");
 });
 
 test("native read tools: unknown tools and malformed arguments return tool errors", async () => {
@@ -331,51 +406,94 @@ test("native read tools: boundaries of an empty directory and an empty listing",
 	assertIncludes(text(past), "directory entry 2 is beyond the end of void", "a later offset is an error");
 });
 
-test("native read tools: an inward directory link reads, an outward one never does", async () => {
+test("native read tools: an inward link reads the file its answer names", async () => {
 	const root = cwd("inward");
-	const inner = join(root, "inner");
-	const outside = cwd("inward-outside");
-	mkdirSync(inner);
-	writeFileSync(join(inner, "a.ts"), "inside\n");
-	writeFileSync(join(outside, "secret.ts"), "leak\n");
-	linkDir(inner, join(root, "inner-link"));
-	linkDir(outside, join(root, "outward-link"));
-	const tools = await NativeReadTools.create(root);
+	const inside = join(root, "inner", "a.ts");
+	const files = new FakeFileSystem(root);
+	files.aliases.set(join(root, "inner-link", "a.ts"), inside);
+	files.texts.set(inside, "inside\n");
+	const tools = await NativeReadTools.create(root, files);
 	const inward = await tools.execute(call("read_file", { path: "inner-link/a.ts" }), signal);
 	assertEq(inward.readPath, "inner-link/a.ts", "a link that stays inside the root reads");
-	const outward = await tools.execute(call("read_file", { path: "outward-link/secret.ts" }), signal);
-	assertEq(outward.readPath, undefined, "outward-link/secret.ts is no evidence");
+	assertIncludes(text(inward), "inside", "the canonical target is what is read");
+	assertEq(files.touched(inside), true, "the read reached the canonical path");
+	assertEq(files.touched(join(root, "inner-link", "a.ts")), true, "and asked the seam for its answer");
+	assertEq(files.calls.filter((entry) => entry === `stat ${inside}`).length, 1,
+		"the canonical target is stat'ed once");
 });
 
-test("native read tools: a file-link chain and a dangling link never read", async () => {
+test("native read tools: a chain and a dangling target never read", async () => {
 	const root = cwd("chain");
 	const outside = cwd("chain-outside");
-	writeFileSync(join(outside, "secret.ts"), "leak\n");
-	linkFile(join(outside, "secret.ts"), join(root, "chain-1"));
-	linkFile(join(root, "chain-1"), join(root, "chain-2"));
-	linkFile(join(outside, "absent.ts"), join(root, "dangling"));
-	const tools = await NativeReadTools.create(root);
-	for (const path of ["chain-2", "dangling"]) {
-		const result = await tools.execute(call("read_file", { path }), signal);
-		assertEq(result.readPath, undefined, `${path} is no evidence`);
-	}
+	const files = new FakeFileSystem(root);
+	// The final answer Node's realpath would give for the chain, and a name
+	// whose target does not exist.
+	files.aliases.set(join(root, "chain-2"), join(outside, "secret.ts"));
+	files.absent.add(join(root, "dangling"));
+	const tools = await NativeReadTools.create(root, files);
+	const chained = await tools.execute(call("read_file", { path: "chain-2" }), signal);
+	assertEq(chained.readPath, undefined, "chain-2 is no evidence");
+	assertIncludes(text(chained), "file paths must be relative and stay inside", "the chain's answer is refused");
+	const dangling = await tools.execute(call("read_file", { path: "dangling" }), signal);
+	assertEq(dangling.readPath, undefined, "dangling is no evidence");
+	assertIncludes(text(dangling), "file not found: dangling", "a missing target is named as missing");
+	assertEq(files.touched(join(outside, "secret.ts")), false, "nothing behind the chain is read");
 });
 
-test("native read tools: the root is fixed for the instance", async () => {
+test("native read tools: an absent target whose directory is outside the root is refused", async () => {
+	const root = cwd("outward-absent");
+	const outside = cwd("outward-absent-outside");
+	const files = new FakeFileSystem(root);
+	// A name that does not exist yet is judged by its canonical parent.
+	files.absent.add(join(root, "outward-link", "new.ts"));
+	files.aliases.set(join(root, "outward-link"), outside);
+	const tools = await NativeReadTools.create(root, files);
+	const result = await tools.execute(call("read_file", { path: "outward-link/new.ts" }), signal);
+	assertEq(result.readPath, undefined, "outward-link/new.ts is no evidence");
+	assertIncludes(
+		text(result),
+		"file paths must be relative and stay inside the working directory",
+		"the canonical parent is refused",
+	);
+	assertEq(files.touched(join(outside, "new.ts")), false, "the absent target is never stat'ed");
+});
+
+test("native read tools: the root is canonicalized once, before the first call", async () => {
+	const outer = cwd("fixed-before");
+	const first = cwd("fixed-before-first");
+	const second = cwd("fixed-before-second");
+	const cwdLink = join(outer, "cwd-link");
+	const files = new FakeFileSystem(cwdLink);
+	files.aliases.set(cwdLink, first);
+	files.texts.set(join(first, "only.ts"), "first\n");
+	files.texts.set(join(second, "only.ts"), "second\n");
+	const tools = await NativeReadTools.create(cwdLink, files);
+	// Retargeted after the toolkit exists but before it ever ran: the tree it
+	// was pointed at is the tree it keeps.
+	files.aliases.set(cwdLink, second);
+	const read = await tools.execute(call("read_file", { path: "only.ts" }), signal);
+	assertIncludes(text(read), "first", "the first call reads the tree the toolkit was created for");
+	assertEq(files.rootQueries, 1, "the working directory is canonicalized once");
+	assertEq(files.touched(join(second, "only.ts")), false, "the retargeted tree is never touched");
+});
+
+test("native read tools: the root stays fixed between calls", async () => {
 	const outer = cwd("fixed-root");
 	const first = cwd("fixed-first");
 	const second = cwd("fixed-second");
-	writeFileSync(join(first, "only.ts"), "first\n");
-	writeFileSync(join(second, "only.ts"), "second\n");
-	linkDir(first, join(outer, "cwd-link"));
-	const tools = await NativeReadTools.create(join(outer, "cwd-link"));
+	const cwdLink = join(outer, "cwd-link");
+	const files = new FakeFileSystem(cwdLink);
+	files.aliases.set(cwdLink, first);
+	files.texts.set(join(first, "only.ts"), "first\n");
+	files.texts.set(join(second, "only.ts"), "second\n");
+	const tools = await NativeReadTools.create(cwdLink, files);
 	const before = await tools.execute(call("read_file", { path: "only.ts" }), signal);
 	assertIncludes(text(before), "first", "the read follows the root as it was");
-	removeLink(join(outer, "cwd-link"));
-	assertEq(existsSync(join(first, "only.ts")), true, "removing the link leaves its target alone");
-	linkDir(second, join(outer, "cwd-link"));
+	files.aliases.set(cwdLink, second);
 	const after = await tools.execute(call("read_file", { path: "only.ts" }), signal);
 	assertIncludes(text(after), "first", "a retargeted root does not widen the tree mid-consultation");
+	assertEq(files.rootQueries, 1, "the working directory is not canonicalized again");
+	assertEq(files.touched(join(second, "only.ts")), false, "the retargeted tree is never touched");
 });
 
 test("native read tools: an aborted read reports the abort and earns nothing", async () => {
@@ -387,23 +505,6 @@ test("native read tools: an aborted read reports the abort and earns nothing", a
 	const result = await tools.execute(call("read_file", { path: "a.ts" }), controller.signal);
 	assertEq(result.readPath, undefined, "an aborted read is no evidence");
 	assertIncludes(text(result), "aborted before read_file ran", "the abort is named");
-});
-
-test("native read tools: the root is fixed at creation, before the first call", async () => {
-	const outer = cwd("fixed-before");
-	const first = cwd("fixed-before-first");
-	const second = cwd("fixed-before-second");
-	writeFileSync(join(first, "only.ts"), "first\n");
-	writeFileSync(join(second, "only.ts"), "second\n");
-	linkDir(first, join(outer, "cwd-link"));
-	const tools = await NativeReadTools.create(join(outer, "cwd-link"));
-	// Retargeted after the toolkit exists but before it ever ran: the tree it
-	// was pointed at is the tree it keeps.
-	removeLink(join(outer, "cwd-link"));
-	assertEq(existsSync(join(first, "only.ts")), true, "removing the link leaves its target alone");
-	linkDir(second, join(outer, "cwd-link"));
-	const read = await tools.execute(call("read_file", { path: "only.ts" }), signal);
-	assertIncludes(text(read), "first", "the first call reads the tree the toolkit was created for");
 });
 
 test("native read tools: an abort during an empty read or listing earns nothing", async () => {

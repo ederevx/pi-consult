@@ -8,8 +8,10 @@
  * canonical paths, so a symlink cannot carry it outside the tree.
  */
 
-import { realpath } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
+
+import { NodeNativeReadFileSystem } from "./native-read-fs.ts";
+import type { NativeReadFileSystem } from "./native-read-fs.ts";
 
 /** A path the validator refuses before any filesystem access is trusted. */
 export class ConsultPathRefusal extends Error {
@@ -20,6 +22,14 @@ export class ConsultPathRefusal extends Error {
 }
 
 export class ConsultPathsValidator {
+	/** The one filesystem answer this rule needs: a path's canonical form.
+	 *  A test hands in its own answers, so a refusal through a link is
+	 *  proved without creating one on the host. */
+	constructor(
+		private readonly files: Pick<NativeReadFileSystem, "realpath"> =
+			new NodeNativeReadFileSystem(),
+	) {}
+
 	/** Why a path is refused on its own text, or undefined when it is fine. */
 	relativeError(file: string): string | undefined {
 		if (!ConsultPathsValidator.relative(file)) {
@@ -31,7 +41,7 @@ export class ConsultPathsValidator {
 	// The canonical root a native read is confined to, resolved by the caller
 	// once so the permitted tree cannot move between its calls.
 	async canonicalRoot(cwd: string): Promise<string> {
-		return realpath(cwd);
+		return this.files.realpath(cwd);
 	}
 
 	// The canonical absolute path a native read may open, inside a root that
@@ -44,11 +54,11 @@ export class ConsultPathsValidator {
 		const target = join(root, file);
 		let absolute: string;
 		try {
-			absolute = await realpath(target);
+			absolute = await this.files.realpath(target);
 		} catch (error) {
 			// A target that does not exist yet is judged by its canonical
 			// parent, so a symlinked directory cannot smuggle it out either.
-			const parent = await realpath(dirname(target)).catch(() => undefined);
+			const parent = await this.files.realpath(dirname(target)).catch(() => undefined);
 			if (!parent) throw error;
 			absolute = join(parent, basename(target));
 		}

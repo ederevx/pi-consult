@@ -9,8 +9,6 @@
  * capped by pi's own read limits rather than a private copy of them.
  */
 
-import { open, readdir, stat } from "node:fs/promises";
-
 import {
 	DEFAULT_MAX_BYTES,
 	DEFAULT_MAX_LINES,
@@ -20,6 +18,8 @@ import type { Tool, ToolCall, ToolResultMessage } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 
 import { ConsultPathRefusal, ConsultPathsValidator } from "./consult-paths.ts";
+import { NodeNativeReadFileSystem } from "./native-read-fs.ts";
+import type { NativeReadEntry, NativeReadFileSystem } from "./native-read-fs.ts";
 
 /** What one tool call produced: the result message, and the file a
  *  successful content read covered. */
@@ -37,15 +37,24 @@ const BINARY = "binary";
 const ABORTED = "aborted";
 
 export class NativeReadTools {
-	private readonly paths = new ConsultPathsValidator();
-
 	// The root is canonicalized before the toolkit exists: were it resolved on
 	// first use, a working-directory symlink retargeted after construction
 	// would decide which tree the first call may read.
-	private constructor(private readonly root: string) {}
+	private constructor(
+		private readonly root: string,
+		private readonly files: NativeReadFileSystem,
+		private readonly paths: ConsultPathsValidator,
+	) {}
 
-	static async create(cwd: string): Promise<NativeReadTools> {
-		return new NativeReadTools(await new ConsultPathsValidator().canonicalRoot(cwd));
+	/** One filesystem seam decides every answer a native read consumes; the
+	 *  default is Node's own, and a test hands in its answers instead of
+	 *  creating an alias on the host. */
+	static async create(
+		cwd: string,
+		files: NativeReadFileSystem = new NodeNativeReadFileSystem(),
+	): Promise<NativeReadTools> {
+		const paths = new ConsultPathsValidator(files);
+		return new NativeReadTools(await paths.canonicalRoot(cwd), files, paths);
 	}
 
 	definitions(): Tool[] {
@@ -84,7 +93,7 @@ export class NativeReadTools {
 		try {
 			const absolute = await this.paths.resolve(this.root, file);
 			NativeReadTools.check(signal);
-			const info = await stat(absolute);
+			const info = await this.files.stat(absolute);
 			NativeReadTools.check(signal);
 			if (info.isDirectory()) {
 				return { message: NativeReadTools.failure(call, `cannot read a directory: ${file}`) };
@@ -106,7 +115,7 @@ export class NativeReadTools {
 						),
 					};
 			}
-			const page = await NativeReadTools.page(absolute, offset, limit, signal);
+			const page = await this.page(absolute, offset, limit, signal);
 			// A chunk that completes the page can land after the abort, so the
 			// page is checked before it is allowed to become evidence.
 			NativeReadTools.check(signal);
@@ -143,7 +152,7 @@ export class NativeReadTools {
 		try {
 			const absolute = await this.paths.resolve(this.root, dir);
 			NativeReadTools.check(signal);
-			const info = await stat(absolute);
+			const info = await this.files.stat(absolute);
 			NativeReadTools.check(signal);
 			if (!info.isDirectory()) {
 				return { message: NativeReadTools.failure(call, `not a directory: ${dir}`) };
@@ -151,7 +160,7 @@ export class NativeReadTools {
 			// The entries are read first so an empty directory is checked for
 			// cancellation too: an empty listing would otherwise start no loop.
 			const entries: Array<{ name: string; type: string }> = [];
-			for (const entry of await readdir(absolute, { withFileTypes: true })) {
+			for (const entry of await this.files.readdir(absolute)) {
 				NativeReadTools.check(signal);
 				entries.push({ name: entry.name, type: NativeReadTools.type(entry) });
 			}
@@ -189,13 +198,13 @@ export class NativeReadTools {
 	}
 
 	/** One bounded page of whole lines, decoded strictly as UTF-8 text. */
-	private static async page(
+	private async page(
 		absolute: string,
 		offset: number,
 		limit: number,
 		signal: AbortSignal,
 	): Promise<{ text: string; next?: number; lines: number }> {
-		const handle = await open(absolute, "r");
+		const handle = await this.files.open(absolute);
 		try {
 			const kept: string[] = [];
 			let keptBytes = 0;
@@ -336,11 +345,7 @@ export class NativeReadTools {
 		return record;
 	}
 
-	private static type(entry: {
-		isFile(): boolean;
-		isDirectory(): boolean;
-		isSymbolicLink(): boolean;
-	}): string {
+	private static type(entry: NativeReadEntry): string {
 		if (entry.isFile()) return "file";
 		if (entry.isDirectory()) return "dir";
 		if (entry.isSymbolicLink()) return "symlink";

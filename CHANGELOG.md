@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.26.8
+
+### Changed
+
+- The suite's file-access cases name their answers instead of staging a link
+  on the host: `NativeReadFileSystem` (`src/native-read-fs.ts`) is the seam
+  the path validator and the read tools take, with the Node implementation as
+  the default, so a case can refuse an outward path, type an entry as a link,
+  or retarget the tree without creating one. `tests/link_guard.py` fails the
+  lint step if any test source creates a symlink or junction.
+
 ## 0.26.7
 
 ### Changed
