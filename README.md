@@ -11,8 +11,11 @@ roadblock.
 ## Install
 
 ```bash
-pi install git:github.com/ederevx/pi-consult@v0.26.2
+pi install git:github.com/ederevx/pi-consult
 ```
+
+Unpinned, it follows the default branch on `pi update --extensions`; append
+`@<tag>` to pin a release tag, and install another tag to move the pin.
 
 The package has no runtime dependencies; it uses the host-provided
 `@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`, and `typebox`. The
